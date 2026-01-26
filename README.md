@@ -286,7 +286,7 @@ print(f"Ratio: {ratio:.0f}x more likely in top 9 counties")
 
 1. **Media coverage bias** - Sanctuary jurisdictions may receive disproportionate media attention, inflating incident counts in those areas
 2. **ICE reporting gaps** - ICE stopped publishing death reports after October 2025
-3. **Selection bias** - Tier 3-4 data has higher selection bias risk and is not used in ratio calculations
+3. **Selection bias** - Tier 3-4 data has higher selection bias risk; all tiers are included in ratio calculations
 4. **Known undercounts:**
    - ProPublica found 170+ US citizen detentions; ~50 fully documented here
    - The Trace identified 26 shootings; 19 with full details here
