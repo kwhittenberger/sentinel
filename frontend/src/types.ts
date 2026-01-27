@@ -41,6 +41,47 @@ export interface Filters {
   states: string[];
   categories: string[];
   non_immigrant_only: boolean;
+  death_only?: boolean;
   date_start?: string;
   date_end?: string;
+}
+
+// Admin types
+export interface SourceInfo {
+  name: string;
+  enabled: boolean;
+  tier: number;
+  description: string;
+}
+
+export interface DataFileInfo {
+  filename: string;
+  tier: number;
+  size_bytes: number;
+  modified: string;
+}
+
+export interface AdminStatus {
+  total_incidents: number;
+  by_tier: Record<number, number>;
+  by_source: Record<string, number>;
+  available_sources: SourceInfo[];
+  data_files: DataFileInfo[];
+}
+
+export interface PipelineResult {
+  success: boolean;
+  operation?: string;
+  error?: string;
+  fetched?: Record<string, number>;
+  stats?: {
+    original_counts: Record<number, number>;
+    final_counts: Record<number, number>;
+    validation_errors: number;
+    duplicates_removed: number;
+    geocoded: number;
+    total: number;
+  };
+  processing_stats?: Record<string, unknown>;
+  summary?: Record<string, unknown>;
 }
