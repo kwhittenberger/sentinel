@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { Incident, IncidentCategory } from './types';
 import { SplitPane } from './SplitPane';
+import { IncidentDetailView } from './IncidentDetailView';
 
 const API_BASE = '/api';
 
@@ -424,118 +425,10 @@ export function IncidentBrowser({ onClose }: IncidentBrowserProps) {
                   </div>
                 </div>
               ) : (
-                <div className="detail-view">
-                  <div className="detail-row">
-                    <span className="label">ID:</span>
-                    <span className="value">{selectedIncident.id}</span>
-                  </div>
-                  <div className="detail-row">
-                    <span className="label">Date:</span>
-                    <span className="value">{selectedIncident.date?.substring(0, 10)}</span>
-                  </div>
-                  <div className="detail-row">
-                    <span className="label">Location:</span>
-                    <span className="value">{selectedIncident.city}, {selectedIncident.state}</span>
-                  </div>
-                  <div className="detail-row">
-                    <span className="label">Category:</span>
-                    <span className={`category-badge ${selectedIncident.category}`}>
-                      {selectedIncident.category}
-                    </span>
-                  </div>
-                  <div className="detail-row">
-                    <span className="label">Type:</span>
-                    <span className="value">{selectedIncident.incident_type}</span>
-                  </div>
-                  <div className="detail-row">
-                    <span className="label">Outcome:</span>
-                    <span className="value" style={{ color: getOutcomeColor(selectedIncident.outcome_category) }}>
-                      {selectedIncident.outcome_category || 'Unknown'}
-                    </span>
-                  </div>
-                  {selectedIncident.victim_name && (
-                    <div className="detail-row">
-                      <span className="label">Victim:</span>
-                      <span className="value">
-                        {selectedIncident.victim_name}
-                        {selectedIncident.victim_age && `, age ${selectedIncident.victim_age}`}
-                      </span>
-                    </div>
-                  )}
-                  {selectedIncident.description && (
-                    <div className="detail-row full">
-                      <span className="label">Description:</span>
-                      <p className="value">{selectedIncident.description}</p>
-                    </div>
-                  )}
-                  {selectedIncident.notes && (
-                    <div className="detail-row full">
-                      <span className="label">Notes:</span>
-                      <p className="value">{selectedIncident.notes}</p>
-                    </div>
-                  )}
-                  {selectedIncident.source_url && (
-                    <div className="detail-row">
-                      <span className="label">Source:</span>
-                      <a href={selectedIncident.source_url} target="_blank" rel="noopener noreferrer">
-                        View Source
-                      </a>
-                    </div>
-                  )}
-                  <div className="detail-row">
-                    <span className="label">Tier:</span>
-                    <span className={`tier-badge tier-${selectedIncident.tier}`}>
-                      Tier {selectedIncident.tier}
-                    </span>
-                  </div>
-                  {selectedIncident.extraction_confidence !== undefined && (
-                    <div className="detail-row">
-                      <span className="label">Confidence:</span>
-                      <span className="value">{(selectedIncident.extraction_confidence * 100).toFixed(0)}%</span>
-                    </div>
-                  )}
-                  {selectedIncident.linked_ids && selectedIncident.linked_ids.length > 0 && (
-                    <div className="detail-row full">
-                      <span className="label">Related Reports:</span>
-                      <div className="related-reports">
-                        {selectedIncident.linked_ids.map(id => (
-                          <button
-                            key={id}
-                            className="related-report-link"
-                            onClick={() => {
-                              const related = incidents.find(inc => inc.id === id);
-                              if (related) {
-                                handleSelectIncident(related);
-                              }
-                            }}
-                          >
-                            {id.substring(0, 8)}...
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  {(selectedIncident.lat || selectedIncident.latitude) && (selectedIncident.lon || selectedIncident.longitude) && (
-                    <div className="detail-actions map-actions">
-                      <a
-                        href={`https://www.google.com/maps/@${selectedIncident.lat || selectedIncident.latitude},${selectedIncident.lon || selectedIncident.longitude},17z`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="action-btn small"
-                      >
-                        View on Map
-                      </a>
-                      <a
-                        href={`https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${selectedIncident.lat || selectedIncident.latitude},${selectedIncident.lon || selectedIncident.longitude}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="action-btn small"
-                      >
-                        Street View
-                      </a>
-                    </div>
-                  )}
-                </div>
+                <IncidentDetailView
+                  incident={selectedIncident}
+                  showSource={true}
+                />
               )}
             </div>
           </div>

@@ -1,12 +1,13 @@
 """
 Duplicate detection service with multiple strategies.
-Ported from crime-tracker project.
+Supports cross-source deduplication where the same incident is reported by multiple outlets.
 """
 
 import hashlib
 import logging
 import re
-from typing import Optional, List, Dict, Any
+from datetime import date, datetime, timedelta
+from typing import Optional, List, Dict, Any, Tuple
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
@@ -18,11 +19,13 @@ class DuplicateConfig:
     title_similarity_threshold: float = 0.75
     content_similarity_threshold: float = 0.85
     entity_match_date_window: int = 30  # days
+    name_similarity_threshold: float = 0.7  # for fuzzy name matching
     shingle_size: int = 3
     enable_url_match: bool = True
     enable_title_match: bool = True
     enable_content_match: bool = True
     enable_entity_match: bool = True
+    enable_cross_source_match: bool = True  # match same incident across sources
 
 
 # Default configuration
@@ -97,6 +100,138 @@ def check_title_similarity(
     return similarity >= threshold, similarity
 
 
+def normalize_name(name: str) -> str:
+    """Normalize a person's name for comparison."""
+    if not name:
+        return ""
+    # Lowercase and remove punctuation
+    name = normalize_text(name)
+    # Remove common prefixes/suffixes
+    for prefix in ['mr ', 'mrs ', 'ms ', 'dr ', 'prof ']:
+        if name.startswith(prefix):
+            name = name[len(prefix):]
+    for suffix in [' jr', ' sr', ' ii', ' iii', ' iv']:
+        if name.endswith(suffix):
+            name = name[:-len(suffix)]
+    return name.strip()
+
+
+def get_name_parts(name: str) -> Tuple[str, str, str]:
+    """Extract first, middle, last name parts."""
+    parts = normalize_name(name).split()
+    if len(parts) == 0:
+        return '', '', ''
+    elif len(parts) == 1:
+        return parts[0], '', ''
+    elif len(parts) == 2:
+        return parts[0], '', parts[1]
+    else:
+        return parts[0], ' '.join(parts[1:-1]), parts[-1]
+
+
+def check_name_similarity(name1: str, name2: str, threshold: float = 0.7) -> Tuple[bool, float, str]:
+    """
+    Check if two names likely refer to the same person.
+    Handles variations like "John Doe" vs "John A. Doe" vs "J. Doe".
+    Returns (is_match, confidence, reason).
+    """
+    if not name1 or not name2:
+        return False, 0.0, 'missing_name'
+
+    n1 = normalize_name(name1)
+    n2 = normalize_name(name2)
+
+    # Exact match after normalization
+    if n1 == n2:
+        return True, 1.0, 'exact_match'
+
+    # One contains the other (handles middle name variations)
+    if n1 in n2 or n2 in n1:
+        return True, 0.95, 'substring_match'
+
+    # Parse name parts
+    first1, middle1, last1 = get_name_parts(name1)
+    first2, middle2, last2 = get_name_parts(name2)
+
+    # Same last name is required for a match
+    if last1 != last2:
+        # Check if last names are similar (typos, etc.)
+        last_sim = jaccard_similarity(set(last1), set(last2))
+        if last_sim < 0.8:
+            return False, 0.0, 'different_last_name'
+
+    # First name matching
+    first_match = False
+    first_confidence = 0.0
+
+    if first1 == first2:
+        first_match = True
+        first_confidence = 1.0
+    elif first1 and first2:
+        # Check for initial match (J vs John)
+        if len(first1) == 1 and first2.startswith(first1):
+            first_match = True
+            first_confidence = 0.8
+        elif len(first2) == 1 and first1.startswith(first2):
+            first_match = True
+            first_confidence = 0.8
+        else:
+            # Token similarity for first name
+            first_sim = jaccard_similarity(set(first1), set(first2))
+            if first_sim >= 0.7:
+                first_match = True
+                first_confidence = first_sim
+
+    if first_match and last1 == last2:
+        confidence = (first_confidence + 1.0) / 2  # Average of first and last match
+        return True, confidence, 'name_parts_match'
+
+    # Fallback to token similarity on full name
+    tokens1 = set(n1.split())
+    tokens2 = set(n2.split())
+    similarity = jaccard_similarity(tokens1, tokens2)
+
+    if similarity >= threshold:
+        return True, similarity, 'token_similarity'
+
+    return False, similarity, 'no_match'
+
+
+def parse_date(date_val: Any) -> Optional[date]:
+    """Parse various date formats into a date object."""
+    if not date_val:
+        return None
+    if isinstance(date_val, date):
+        return date_val
+    if isinstance(date_val, datetime):
+        return date_val.date()
+    if isinstance(date_val, str):
+        try:
+            return datetime.fromisoformat(date_val.replace('Z', '+00:00')).date()
+        except:
+            pass
+        try:
+            return datetime.strptime(date_val[:10], '%Y-%m-%d').date()
+        except:
+            pass
+    return None
+
+
+def check_date_proximity(date1: Any, date2: Any, window_days: int = 30) -> Tuple[bool, int]:
+    """
+    Check if two dates are within a window of each other.
+    Returns (is_close, days_apart).
+    """
+    d1 = parse_date(date1)
+    d2 = parse_date(date2)
+
+    if not d1 or not d2:
+        return False, -1
+
+    days_apart = abs((d1 - d2).days)
+    return days_apart <= window_days, days_apart
+
+
 def check_content_similarity(
     content1: str,
     content2: str,
@@ -116,28 +251,74 @@ def check_content_similarity(
 def extract_entities(article: dict) -> dict:
     """Extract key entities from an article for matching."""
     entities = {
-        'defendant_name': None,
-        'crime_type': None,
+        'offender_name': None,
+        'victim_name': None,
+        'incident_type': None,
         'date': None,
+        'state': None,
+        'city': None,
         'location': None,
     }
 
-    # Try to get from extracted data
+    # Try to get from extracted data (flat structure matching our schema)
     extracted = article.get('extracted_data') or article.get('llm_extraction_result') or {}
 
     if isinstance(extracted, dict):
-        if 'defendant' in extracted:
-            entities['defendant_name'] = extracted['defendant'].get('name')
-        if 'crime' in extracted:
-            entities['crime_type'] = extracted['crime'].get('type')
-            entities['date'] = extracted['crime'].get('date')
-            entities['location'] = f"{extracted['crime'].get('city', '')}, {extracted['crime'].get('state', '')}"
+        # Get incident data from extracted structure
+        incident = extracted.get('incident', extracted)  # Handle nested or flat
 
-    # Fallback to direct fields
+        # Offender info (for crime incidents)
+        entities['offender_name'] = (
+            incident.get('offender_name') or
+            extracted.get('offender_name')
+        )
+
+        # Victim info (for enforcement incidents)
+        entities['victim_name'] = (
+            incident.get('victim_name') or
+            extracted.get('victim_name')
+        )
+
+        # Incident type
+        entities['incident_type'] = (
+            incident.get('incident_type') or
+            extracted.get('incident_type')
+        )
+
+        # Date
+        entities['date'] = (
+            incident.get('date') or
+            extracted.get('date')
+        )
+
+        # Location components
+        entities['city'] = incident.get('city') or extracted.get('city')
+        entities['state'] = incident.get('state') or extracted.get('state')
+
+        # Combined location string
+        city = entities['city'] or ''
+        state = entities['state'] or ''
+        if city or state:
+            entities['location'] = f"{city}, {state}".strip(', ')
+
+    # Fallback to direct fields on article
     if not entities['date']:
         entities['date'] = article.get('date') or article.get('incident_date')
+    if not entities['state']:
+        entities['state'] = article.get('state')
+    if not entities['city']:
+        entities['city'] = article.get('city')
     if not entities['location']:
-        entities['location'] = f"{article.get('city', '')}, {article.get('state', '')}"
+        city = entities['city'] or ''
+        state = entities['state'] or ''
+        if city or state:
+            entities['location'] = f"{city}, {state}".strip(', ')
+    if not entities['offender_name']:
+        entities['offender_name'] = article.get('offender_name')
+    if not entities['victim_name']:
+        entities['victim_name'] = article.get('victim_name')
+    if not entities['incident_type']:
+        entities['incident_type'] = article.get('incident_type')
 
     return entities
 
@@ -145,10 +326,12 @@ def extract_entities(article: dict) -> dict:
 def check_entity_match(
     article1: dict,
     article2: dict,
-    date_window_days: int = 30
+    date_window_days: int = 30,
+    name_threshold: float = 0.7
 ) -> tuple[bool, float, str]:
     """
     Check if two articles describe the same incident based on entities.
+    Uses fuzzy name matching and date proximity.
     Returns (is_match, confidence, reason).
     """
     entities1 = extract_entities(article1)
@@ -157,42 +340,138 @@ def check_entity_match(
     matches = 0
     total = 0
     reasons = []
+    name_matched = False
+    confidence_sum = 0.0
 
-    # Check defendant name
-    if entities1['defendant_name'] and entities2['defendant_name']:
+    # Check offender name with fuzzy matching (for crime incidents)
+    if entities1['offender_name'] and entities2['offender_name']:
         total += 1
-        name1 = normalize_text(entities1['defendant_name'])
-        name2 = normalize_text(entities2['defendant_name'])
-        if name1 == name2 or name1 in name2 or name2 in name1:
+        name_match, name_conf, name_reason = check_name_similarity(
+            entities1['offender_name'],
+            entities2['offender_name'],
+            name_threshold
+        )
+        if name_match:
             matches += 1
-            reasons.append('defendant_match')
+            confidence_sum += name_conf
+            reasons.append(f'offender_match({name_reason}:{name_conf:.2f})')
+            name_matched = True
+        else:
+            confidence_sum += 0
 
-    # Check crime type
-    if entities1['crime_type'] and entities2['crime_type']:
+    # Check victim name with fuzzy matching (for enforcement incidents)
+    if entities1['victim_name'] and entities2['victim_name']:
         total += 1
-        if entities1['crime_type'].lower() == entities2['crime_type'].lower():
+        name_match, name_conf, name_reason = check_name_similarity(
+            entities1['victim_name'],
+            entities2['victim_name'],
+            name_threshold
+        )
+        if name_match:
             matches += 1
-            reasons.append('crime_type_match')
+            confidence_sum += name_conf
+            reasons.append(f'victim_match({name_reason}:{name_conf:.2f})')
+            name_matched = True
+        else:
+            confidence_sum += 0
 
-    # Check location
-    if entities1['location'] and entities2['location']:
+    # Check incident type
+    if entities1['incident_type'] and entities2['incident_type']:
         total += 1
-        loc1 = normalize_text(entities1['location'])
-        loc2 = normalize_text(entities2['location'])
-        if loc1 == loc2 or jaccard_similarity(tokenize(loc1), tokenize(loc2)) > 0.5:
+        type1 = entities1['incident_type'].lower().replace('_', ' ')
+        type2 = entities2['incident_type'].lower().replace('_', ' ')
+        if type1 == type2:
             matches += 1
-            reasons.append('location_match')
+            confidence_sum += 1.0
+            reasons.append('incident_type_match')
+        # Also check for related types
+        elif _are_related_types(type1, type2):
+            matches += 0.5
+            confidence_sum += 0.7
+            reasons.append('incident_type_related')
 
-    # Check date proximity
-    # (Would need date parsing - simplified for now)
+    # Check location (state match is more important)
+    state1 = entities1.get('state') or _extract_state(entities1.get('location', ''))
+    state2 = entities2.get('state') or _extract_state(entities2.get('location', ''))
+
+    if state1 and state2:
+        total += 1
+        if state1.upper() == state2.upper():
+            matches += 1
+            confidence_sum += 1.0
+            reasons.append('state_match')
+
+            # Bonus for city match
+            city1 = entities1.get('city') or ''
+            city2 = entities2.get('city') or ''
+            if city1 and city2 and normalize_text(city1) == normalize_text(city2):
+                confidence_sum += 0.2
+                reasons.append('city_match')
+
+    # Check date proximity (not just exact match)
+    if entities1['date'] and entities2['date']:
+        total += 1
+        is_close, days_apart = check_date_proximity(
+            entities1['date'],
+            entities2['date'],
+            date_window_days
+        )
+        if is_close:
+            matches += 1
+            # Higher confidence for closer dates
+            date_conf = 1.0 - (days_apart / date_window_days) * 0.5
+            confidence_sum += date_conf
+            reasons.append(f'date_proximity({days_apart}d)')
 
     if total == 0:
         return False, 0.0, 'no_entities'
 
-    confidence = matches / total
-    is_match = matches >= 2 and confidence >= 0.6
+    # Calculate weighted confidence
+    avg_confidence = confidence_sum / total if total > 0 else 0
 
-    return is_match, confidence, ','.join(reasons) if reasons else 'no_match'
+    # Strong match: name + (state OR date)
+    # A name match with either state or date is a likely duplicate
+    if name_matched and matches >= 2:
+        return True, avg_confidence, ','.join(reasons)
+
+    # Weaker match: 3+ matching fields at high confidence
+    if matches >= 3 and avg_confidence >= 0.7:
+        return True, avg_confidence, ','.join(reasons)
+
+    # Standard match threshold
+    is_match = matches >= 2 and avg_confidence >= 0.6
+
+    return is_match, avg_confidence, ','.join(reasons) if reasons else 'no_match'
+
+
+def _are_related_types(type1: str, type2: str) -> bool:
+    """Check if two incident types are related/similar."""
+    related_groups = [
+        {'homicide', 'murder', 'manslaughter', 'killing'},
+        {'assault', 'battery', 'attack', 'physical force'},
+        {'sexual assault', 'rape', 'sexual abuse'},
+        {'dui', 'dui fatality', 'drunk driving', 'intoxicated driving'},
+        {'shooting', 'gunfire', 'firearm'},
+        {'robbery', 'theft', 'burglary'},
+        {'death in custody', 'custody death', 'detention death'},
+    ]
+    for group in related_groups:
+        if type1 in group and type2 in group:
+            return True
+    return False
+
+
+def _extract_state(location: str) -> str:
+    """Extract state code from a location string."""
+    if not location:
+        return ''
+    # Common patterns: "City, ST" or "City, State"
+    parts = location.split(',')
+    if len(parts) >= 2:
+        state_part = parts[-1].strip().upper()
+        if len(state_part) == 2:
+            return state_part
+    return ''
 
 
 class DuplicateDetector:
@@ -281,12 +560,14 @@ class DuplicateDetector:
             'title_similarity_threshold': self.config.title_similarity_threshold,
             'content_similarity_threshold': self.config.content_similarity_threshold,
             'entity_match_date_window': self.config.entity_match_date_window,
+            'name_similarity_threshold': self.config.name_similarity_threshold,
             'shingle_size': self.config.shingle_size,
             'strategies_enabled': {
                 'url': self.config.enable_url_match,
                 'title': self.config.enable_title_match,
                 'content': self.config.enable_content_match,
                 'entity': self.config.enable_entity_match,
+                'cross_source': self.config.enable_cross_source_match,
             }
         }
 
@@ -301,3 +582,164 @@ def get_detector() -> DuplicateDetector:
     if _detector is None:
         _detector = DuplicateDetector()
     return _detector
+
+
+async def find_duplicate_incident(
+    extracted_data: dict,
+    source_url: str = None,
+    date_window_days: int = 30,
+    name_threshold: float = 0.7
+) -> Optional[Dict[str, Any]]:
+    """
+    Find a duplicate incident in the database based on extracted data.
+    This is used during approval to catch cross-source duplicates.
+
+    Returns dict with match info if duplicate found, None otherwise.
+    """
+    from backend.database import fetch
+
+    # Strategy 1: Check for same source URL
+    if source_url:
+        url_match = await fetch("""
+            SELECT id, date, state, city, source_url,
+                   victim_name, offender_immigration_status as offender_name
+            FROM incidents
+            WHERE source_url = $1
+            LIMIT 1
+        """, source_url)
+        if url_match:
+            inc = url_match[0]
+            return {
+                'match_type': 'url',
+                'matched_id': str(inc['id']),
+                'confidence': 1.0,
+                'reason': 'Same source URL',
+                'matched_incident': {
+                    'date': str(inc['date']) if inc['date'] else None,
+                    'location': f"{inc.get('city', '')}, {inc.get('state', '')}".strip(', '),
+                }
+            }
+
+    # Strategy 2: Check for exact description match (catches syndicated content)
+    description = extracted_data.get('description')
+    if description and len(description) > 50:
+        desc_match = await fetch("""
+            SELECT id, date, state, city, source_url, description
+            FROM incidents
+            WHERE description = $1
+            LIMIT 1
+        """, description)
+        if desc_match:
+            inc = desc_match[0]
+            return {
+                'match_type': 'description',
+                'matched_id': str(inc['id']),
+                'confidence': 1.0,
+                'reason': 'Identical description text',
+                'matched_incident': {
+                    'date': str(inc['date']) if inc['date'] else None,
+                    'location': f"{inc.get('city', '')}, {inc.get('state', '')}".strip(', '),
+                    'source_url': inc.get('source_url'),
+                }
+            }
+
+    # Extract entities for matching
+    entities = extract_entities({'extracted_data': extracted_data})
+
+    offender_name = entities.get('offender_name')
+    victim_name = entities.get('victim_name')
+    state = entities.get('state')
+    incident_date = entities.get('date')
+
+    # Strategy 2: Entity-based matching
+    # Find potential matches based on name + state + date range
+    potential_matches = []
+
+    if offender_name and state:
+        # Look for incidents with similar offender names in same state
+        matches = await fetch("""
+            SELECT i.id, i.date, i.state, i.city, i.source_url,
+                   a.canonical_name as matched_name,
+                   'offender' as match_role
+            FROM incidents i
+            JOIN incident_actors ia ON i.id = ia.incident_id
+            JOIN actors a ON ia.actor_id = a.id
+            WHERE ia.role = 'offender'
+              AND i.state = $1
+              AND ($2::date IS NULL OR ABS(i.date - $2::date) <= $3)
+            LIMIT 50
+        """, state, incident_date, date_window_days)
+        potential_matches.extend(matches)
+
+    if victim_name and state:
+        # Look for incidents with similar victim names in same state
+        matches = await fetch("""
+            SELECT i.id, i.date, i.state, i.city, i.source_url,
+                   a.canonical_name as matched_name,
+                   'victim' as match_role
+            FROM incidents i
+            JOIN incident_actors ia ON i.id = ia.incident_id
+            JOIN actors a ON ia.actor_id = a.id
+            WHERE ia.role = 'victim'
+              AND i.state = $1
+              AND ($2::date IS NULL OR ABS(i.date - $2::date) <= $3)
+            LIMIT 50
+        """, state, incident_date, date_window_days)
+        potential_matches.extend(matches)
+
+    # Also check incidents by victim_name column (legacy data)
+    if victim_name and state:
+        legacy_matches = await fetch("""
+            SELECT id, date, state, city, source_url,
+                   victim_name as matched_name,
+                   'victim' as match_role
+            FROM incidents
+            WHERE victim_name IS NOT NULL
+              AND state = $1
+              AND ($2::date IS NULL OR ABS(date - $2::date) <= $3)
+            LIMIT 50
+        """, state, incident_date, date_window_days)
+        potential_matches.extend(legacy_matches)
+
+    # Check each potential match for name similarity
+    best_match = None
+    best_confidence = 0.0
+
+    for match in potential_matches:
+        matched_name = match.get('matched_name')
+        match_role = match.get('match_role')
+
+        # Compare names using our fuzzy matching
+        if match_role == 'offender' and offender_name:
+            is_match, confidence, reason = check_name_similarity(
+                offender_name, matched_name, name_threshold
+            )
+            if is_match and confidence > best_confidence:
+                best_match = match
+                best_confidence = confidence
+                best_match['name_match_reason'] = reason
+
+        elif match_role == 'victim' and victim_name:
+            is_match, confidence, reason = check_name_similarity(
+                victim_name, matched_name, name_threshold
+            )
+            if is_match and confidence > best_confidence:
+                best_match = match
+                best_confidence = confidence
+                best_match['name_match_reason'] = reason
+
+    if best_match:
+        return {
+            'match_type': 'entity',
+            'matched_id': str(best_match['id']),
+            'confidence': best_confidence,
+            'reason': f"Name match ({best_match.get('match_role')}: {best_match.get('name_match_reason', 'similar')})",
+            'matched_incident': {
+                'date': str(best_match['date']) if best_match['date'] else None,
+                'location': f"{best_match.get('city', '')}, {best_match.get('state', '')}".strip(', '),
+                'matched_name': best_match.get('matched_name'),
+                'source_url': best_match.get('source_url'),
+            }
+        }
+
+    return None

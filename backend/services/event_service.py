@@ -280,7 +280,8 @@ class EventService:
         if include_details:
             query = """
                 SELECT ie.*, i.date, i.state, i.city, i.category, i.description,
-                       it.name as incident_type
+                       i.victim_name, i.outcome_category, i.notes,
+                       it.name as incident_type, it.display_name as incident_type_display
                 FROM incident_events ie
                 JOIN incidents i ON ie.incident_id = i.id
                 LEFT JOIN incident_types it ON i.incident_type_id = it.id
@@ -294,6 +295,26 @@ class EventService:
                 WHERE ie.event_id = $1
                 ORDER BY ie.sequence_number
             """
+
+        rows = await fetch(query, event_id)
+        return [dict(row) for row in rows]
+
+    async def get_event_actors(self, event_id: UUID) -> List[Dict]:
+        """Get all actors associated with incidents in an event."""
+        from backend.database import fetch
+
+        query = """
+            SELECT DISTINCT a.id, a.canonical_name, a.actor_type, a.aliases,
+                   a.is_law_enforcement, ia.role,
+                   COUNT(DISTINCT ia.incident_id) as incident_count
+            FROM actors a
+            JOIN incident_actors ia ON a.id = ia.actor_id
+            JOIN incident_events ie ON ia.incident_id = ie.incident_id
+            WHERE ie.event_id = $1
+            GROUP BY a.id, a.canonical_name, a.actor_type, a.aliases,
+                     a.is_law_enforcement, ia.role
+            ORDER BY incident_count DESC, a.canonical_name
+        """
 
         rows = await fetch(query, event_id)
         return [dict(row) for row in rows]

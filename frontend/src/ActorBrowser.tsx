@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import type { Actor, ActorType, ActorRole, ActorMergeSuggestion } from './types';
+import './ExtensibleSystem.css';
 
 const API_BASE = '';
 
@@ -22,12 +23,22 @@ const ACTOR_ROLE_LABELS: Record<ActorRole, string> = {
   participant: 'Participant',
 };
 
+interface SimilarActor {
+  id: string;
+  canonical_name: string;
+  similarity: number;
+}
+
 export const ActorBrowser: React.FC = () => {
   const [actors, setActors] = useState<Actor[]>([]);
   const [selectedActor, setSelectedActor] = useState<Actor | null>(null);
   const [mergeSuggestions, setMergeSuggestions] = useState<ActorMergeSuggestion[]>([]);
+  const [similarActors, setSimilarActors] = useState<SimilarActor[]>([]);
+  const [suggestionCount, setSuggestionCount] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [loadingSimilar, setLoadingSimilar] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [mergeSuccess, setMergeSuccess] = useState<string | null>(null);
 
   // Filters
   const [searchQuery, setSearchQuery] = useState('');
@@ -38,6 +49,7 @@ export const ActorBrowser: React.FC = () => {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showMergeSuggestionsModal, setShowMergeSuggestionsModal] = useState(false);
   const [showRelationModal, setShowRelationModal] = useState(false);
+  const [showSimilarModal, setShowSimilarModal] = useState(false);
 
   // Form states
   const [newActor, setNewActor] = useState<Partial<Actor>>({
@@ -86,13 +98,34 @@ export const ActorBrowser: React.FC = () => {
       if (!response.ok) throw new Error('Failed to fetch merge suggestions');
       const data = await response.json();
       setMergeSuggestions(data);
+      setSuggestionCount(data.length);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error');
     }
   }, []);
 
+  const fetchSimilarActors = useCallback(async (actorId: string) => {
+    try {
+      setLoadingSimilar(true);
+      const response = await fetch(`${API_BASE}/api/actors/${actorId}/similar`);
+      if (!response.ok) throw new Error('Failed to fetch similar actors');
+      const data = await response.json();
+      setSimilarActors(data);
+      setShowSimilarModal(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unknown error');
+    } finally {
+      setLoadingSimilar(false);
+    }
+  }, []);
+
   useEffect(() => {
     fetchActors();
+    // Load suggestion count on mount
+    fetch(`${API_BASE}/api/actors/merge-suggestions?limit=100`)
+      .then(res => res.json())
+      .then(data => setSuggestionCount(data.length))
+      .catch(() => {});
   }, [fetchActors]);
 
   const handleCreateActor = async () => {
@@ -118,26 +151,41 @@ export const ActorBrowser: React.FC = () => {
     }
   };
 
-  const handleMergeActors = async (actor1Id: string, actor2Id: string) => {
+  const handleMergeActors = async (actor1Id: string, actor2Id: string, keepFirst: boolean = true) => {
+    const primaryId = keepFirst ? actor1Id : actor2Id;
+    const secondaryId = keepFirst ? actor2Id : actor1Id;
+
     try {
       const response = await fetch(`${API_BASE}/api/actors/merge`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          primary_actor_id: actor1Id,
-          secondary_actor_id: actor2Id,
+          primary_actor_id: primaryId,
+          secondary_actor_id: secondaryId,
         }),
       });
       if (!response.ok) throw new Error('Failed to merge actors');
+
+      // Get the name of the merged actor for feedback
+      const result = await response.json();
+      setMergeSuccess(`Merged successfully into "${result.canonical_name}"`);
+      setTimeout(() => setMergeSuccess(null), 3000);
+
       setShowMergeSuggestionsModal(false);
+      setShowSimilarModal(false);
       fetchActors();
       fetchMergeSuggestions();
       if (selectedActor && (selectedActor.id === actor1Id || selectedActor.id === actor2Id)) {
-        fetchActorDetails(actor1Id);
+        fetchActorDetails(primaryId);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error');
     }
+  };
+
+  const handleQuickMerge = async (similarActorId: string) => {
+    if (!selectedActor) return;
+    await handleMergeActors(selectedActor.id, similarActorId, true);
   };
 
   const handleDeleteActor = async (actorId: string) => {
@@ -184,34 +232,38 @@ export const ActorBrowser: React.FC = () => {
   };
 
   const renderActorList = () => (
-    <div className="actor-list">
-      <div className="list-header">
+    <div className="ext-list">
+      <div className="ext-list-header">
         <h3>Actors ({actors.length})</h3>
-        <div className="header-actions">
-          <button className="btn btn-secondary" onClick={() => {
-            fetchMergeSuggestions();
-            setShowMergeSuggestionsModal(true);
-          }}>
+        <div className="ext-header-actions">
+          <button
+            className={`ext-btn ${suggestionCount > 0 ? 'ext-btn-warning' : 'ext-btn-secondary'}`}
+            onClick={() => {
+              fetchMergeSuggestions();
+              setShowMergeSuggestionsModal(true);
+            }}
+          >
             Merge Suggestions
+            {suggestionCount > 0 && <span className="ext-count-badge">{suggestionCount}</span>}
           </button>
-          <button className="btn btn-primary" onClick={() => setShowCreateModal(true)}>
+          <button className="ext-btn ext-btn-primary" onClick={() => setShowCreateModal(true)}>
             + New Actor
           </button>
         </div>
       </div>
 
-      <div className="filters">
+      <div className="ext-filters">
         <input
           type="text"
           placeholder="Search actors..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          className="search-input"
+          className="ext-search-input"
         />
         <select
           value={typeFilter}
           onChange={(e) => setTypeFilter(e.target.value as ActorType | '')}
-          className="filter-select"
+          className="ext-filter-select"
         >
           <option value="">All Types</option>
           {Object.entries(ACTOR_TYPE_LABELS).map(([value, label]) => (
@@ -221,7 +273,7 @@ export const ActorBrowser: React.FC = () => {
         <select
           value={roleFilter}
           onChange={(e) => setRoleFilter(e.target.value as ActorRole | '')}
-          className="filter-select"
+          className="ext-filter-select"
         >
           <option value="">All Roles</option>
           {Object.entries(ACTOR_ROLE_LABELS).map(([value, label]) => (
@@ -230,24 +282,24 @@ export const ActorBrowser: React.FC = () => {
         </select>
       </div>
 
-      <div className="actor-items">
+      <div className="ext-items">
         {actors.map((actor) => (
           <div
             key={actor.id}
-            className={`actor-item ${selectedActor?.id === actor.id ? 'selected' : ''}`}
+            className={`ext-item ${selectedActor?.id === actor.id ? 'selected' : ''}`}
             onClick={() => fetchActorDetails(actor.id)}
           >
-            <div className="actor-icon">{renderActorTypeIcon(actor.actor_type)}</div>
-            <div className="actor-info">
-              <div className="actor-name">{actor.canonical_name}</div>
-              <div className="actor-meta">
-                <span className="type-badge">{ACTOR_TYPE_LABELS[actor.actor_type]}</span>
-                {actor.is_law_enforcement && <span className="badge badge-blue">Law Enforcement</span>}
-                {actor.is_government_entity && <span className="badge badge-purple">Government</span>}
-                <span className="incident-count">{actor.incident_count} incidents</span>
+            <div className="ext-item-icon">{renderActorTypeIcon(actor.actor_type)}</div>
+            <div className="ext-item-info">
+              <div className="ext-item-name">{actor.canonical_name}</div>
+              <div className="ext-item-meta">
+                <span className="ext-type-badge">{ACTOR_TYPE_LABELS[actor.actor_type]}</span>
+                {actor.is_law_enforcement && <span className="ext-badge ext-badge-blue">Law Enforcement</span>}
+                {actor.is_government_entity && <span className="ext-badge ext-badge-purple">Government</span>}
+                <span className="ext-incident-count">{actor.incident_count} incidents</span>
               </div>
               {actor.aliases && actor.aliases.length > 0 && (
-                <div className="aliases">
+                <div className="ext-item-secondary">
                   AKA: {actor.aliases.slice(0, 3).join(', ')}
                   {actor.aliases.length > 3 && ` +${actor.aliases.length - 3} more`}
                 </div>
@@ -256,7 +308,7 @@ export const ActorBrowser: React.FC = () => {
           </div>
         ))}
         {actors.length === 0 && !loading && (
-          <div className="empty-state">No actors found</div>
+          <div className="ext-empty-state">No actors found</div>
         )}
       </div>
     </div>
@@ -265,93 +317,100 @@ export const ActorBrowser: React.FC = () => {
   const renderActorDetail = () => {
     if (!selectedActor) {
       return (
-        <div className="actor-detail empty">
+        <div className="ext-detail empty">
           <p>Select an actor to view details</p>
         </div>
       );
     }
 
     return (
-      <div className="actor-detail">
-        <div className="detail-header">
-          <div className="header-title">
-            <span className="detail-icon">{renderActorTypeIcon(selectedActor.actor_type)}</span>
+      <div className="ext-detail">
+        <div className="ext-detail-header">
+          <div className="ext-header-title">
+            <span className="ext-detail-icon">{renderActorTypeIcon(selectedActor.actor_type)}</span>
             <h2>{selectedActor.canonical_name}</h2>
           </div>
-          <div className="header-actions">
-            <button className="btn btn-danger" onClick={() => handleDeleteActor(selectedActor.id)}>
+          <div className="ext-header-actions">
+            <button
+              className="ext-btn ext-btn-secondary"
+              onClick={() => fetchSimilarActors(selectedActor.id)}
+              disabled={loadingSimilar}
+            >
+              {loadingSimilar ? 'Finding...' : 'Find Similar'}
+            </button>
+            <button className="ext-btn ext-btn-danger" onClick={() => handleDeleteActor(selectedActor.id)}>
               Delete
             </button>
           </div>
         </div>
 
-        <div className="detail-content">
+        <div className="ext-detail-content">
           {/* Basic Info */}
-          <section className="detail-section">
+          <section className="ext-section">
             <h3>Basic Information</h3>
-            <div className="info-grid">
-              <div className="info-item">
+            <div className="ext-info-grid">
+              <div className="ext-info-item">
                 <label>Type</label>
                 <span>{ACTOR_TYPE_LABELS[selectedActor.actor_type]}</span>
               </div>
               {selectedActor.gender && (
-                <div className="info-item">
+                <div className="ext-info-item">
                   <label>Gender</label>
                   <span>{selectedActor.gender}</span>
                 </div>
               )}
               {selectedActor.nationality && (
-                <div className="info-item">
+                <div className="ext-info-item">
                   <label>Nationality</label>
                   <span>{selectedActor.nationality}</span>
                 </div>
               )}
               {selectedActor.immigration_status && (
-                <div className="info-item">
+                <div className="ext-info-item">
                   <label>Immigration Status</label>
                   <span>{selectedActor.immigration_status}</span>
                 </div>
               )}
               {selectedActor.prior_deportations > 0 && (
-                <div className="info-item">
+                <div className="ext-info-item">
                   <label>Prior Deportations</label>
                   <span>{selectedActor.prior_deportations}</span>
                 </div>
               )}
               {selectedActor.date_of_birth && (
-                <div className="info-item">
+                <div className="ext-info-item">
                   <label>Date of Birth</label>
                   <span>{selectedActor.date_of_birth}</span>
                 </div>
               )}
               {selectedActor.date_of_death && (
-                <div className="info-item">
+                <div className="ext-info-item">
                   <label>Date of Death</label>
                   <span>{selectedActor.date_of_death}</span>
                 </div>
               )}
               {selectedActor.organization_type && (
-                <div className="info-item">
+                <div className="ext-info-item">
                   <label>Organization Type</label>
                   <span>{selectedActor.organization_type}</span>
                 </div>
               )}
               {selectedActor.jurisdiction && (
-                <div className="info-item">
+                <div className="ext-info-item">
                   <label>Jurisdiction</label>
                   <span>{selectedActor.jurisdiction}</span>
                 </div>
               )}
-              <div className="info-item">
+              <div className="ext-info-item">
                 <label>Government Entity</label>
                 <span>{selectedActor.is_government_entity ? 'Yes' : 'No'}</span>
               </div>
-              <div className="info-item">
+              <div className="ext-info-item">
                 <label>Law Enforcement</label>
                 <span>{selectedActor.is_law_enforcement ? 'Yes' : 'No'}</span>
               </div>
               {selectedActor.confidence_score && (
-                <div className="info-item">
+                <div className="ext-info-item">
                   <label>Confidence</label>
                   <span>{Math.round(selectedActor.confidence_score * 100)}%</span>
                 </div>
@@ -361,11 +420,11 @@ export const ActorBrowser: React.FC = () => {
 
           {/* Aliases */}
           {selectedActor.aliases && selectedActor.aliases.length > 0 && (
-            <section className="detail-section">
+            <section className="ext-section">
               <h3>Aliases</h3>
-              <div className="alias-list">
+              <div className="ext-tag-list">
                 {selectedActor.aliases.map((alias, idx) => (
-                  <span key={idx} className="alias-tag">{alias}</span>
+                  <span key={idx} className="ext-tag">{alias}</span>
                 ))}
               </div>
             </section>
@@ -373,7 +432,7 @@ export const ActorBrowser: React.FC = () => {
 
           {/* Description */}
           {selectedActor.description && (
-            <section className="detail-section">
+            <section className="ext-section">
               <h3>Description</h3>
               <p>{selectedActor.description}</p>
             </section>
@@ -381,11 +440,11 @@ export const ActorBrowser: React.FC = () => {
 
           {/* Roles Played */}
           {selectedActor.roles_played && selectedActor.roles_played.length > 0 && (
-            <section className="detail-section">
+            <section className="ext-section">
               <h3>Roles</h3>
-              <div className="role-list">
+              <div className="ext-tag-list">
                 {selectedActor.roles_played.map((role, idx) => (
-                  <span key={idx} className="role-tag">
+                  <span key={idx} className="ext-tag">
                     {ACTOR_ROLE_LABELS[role as ActorRole] || role}
                   </span>
                 ))}
@@ -395,20 +454,20 @@ export const ActorBrowser: React.FC = () => {
 
           {/* Relations */}
           {selectedActor.relations && selectedActor.relations.length > 0 && (
-            <section className="detail-section">
+            <section className="ext-section">
               <h3>Relationships</h3>
-              <div className="relations-list">
+              <div className="ext-relations-list">
                 {selectedActor.relations.map((relation) => (
-                  <div key={relation.id} className="relation-item">
-                    <span className="relation-type">{relation.relation_type.replace('_', ' ')}</span>
-                    <span className="related-actor">{relation.related_actor_id}</span>
+                  <div key={relation.id} className="ext-relation-item">
+                    <span className="ext-relation-type">{relation.relation_type.replace('_', ' ')}</span>
+                    <span className="ext-related-actor">{relation.related_actor_id}</span>
                     {relation.confidence && (
-                      <span className="confidence">{Math.round(relation.confidence * 100)}%</span>
+                      <span className="ext-confidence">{Math.round(relation.confidence * 100)}%</span>
                     )}
                   </div>
                 ))}
               </div>
-              <button className="btn btn-secondary btn-sm" onClick={() => setShowRelationModal(true)}>
+              <button className="ext-btn ext-btn-secondary ext-btn-sm" onClick={() => setShowRelationModal(true)}>
                 + Add Relationship
               </button>
             </section>
@@ -416,23 +475,23 @@ export const ActorBrowser: React.FC = () => {
 
           {/* Incidents */}
           {selectedActor.incidents && selectedActor.incidents.length > 0 && (
-            <section className="detail-section">
+            <section className="ext-section">
               <h3>Linked Incidents ({selectedActor.incident_count})</h3>
-              <div className="incident-list">
+              <div className="ext-linked-list">
                 {selectedActor.incidents.map((incident) => (
-                  <div key={incident.incident_id} className="incident-item">
-                    <div className="incident-header">
-                      <span className="incident-date">{incident.date || 'Unknown date'}</span>
-                      <span className="incident-role">{ACTOR_ROLE_LABELS[incident.role]}</span>
+                  <div key={incident.incident_id} className="ext-linked-item">
+                    <div className="ext-linked-header">
+                      <span className="ext-linked-date">{incident.date || 'Unknown date'}</span>
+                      <span className="ext-linked-role">{ACTOR_ROLE_LABELS[incident.role]}</span>
                     </div>
-                    <div className="incident-location">
+                    <div className="ext-linked-location">
                       {incident.city && `${incident.city}, `}{incident.state}
                     </div>
                     {incident.incident_type && (
-                      <div className="incident-type">{incident.incident_type}</div>
+                      <div className="ext-linked-type">{incident.incident_type}</div>
                     )}
                     {incident.description && (
-                      <div className="incident-description">{incident.description}</div>
+                      <div className="ext-linked-description">{incident.description}</div>
                     )}
                   </div>
                 ))}
@@ -445,14 +504,14 @@ export const ActorBrowser: React.FC = () => {
   };
 
   const renderCreateModal = () => (
-    <div className="modal-overlay" onClick={() => setShowCreateModal(false)}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-header">
+    <div className="ext-modal-overlay" onClick={() => setShowCreateModal(false)}>
+      <div className="ext-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="ext-modal-header">
           <h3>Create New Actor</h3>
-          <button className="close-btn" onClick={() => setShowCreateModal(false)}>×</button>
+          <button className="ext-close-btn" onClick={() => setShowCreateModal(false)}>×</button>
         </div>
-        <div className="modal-body">
-          <div className="form-group">
+        <div className="ext-modal-body">
+          <div className="ext-form-group">
             <label>Name *</label>
             <input
               type="text"
@@ -462,7 +521,7 @@ export const ActorBrowser: React.FC = () => {
             />
           </div>
 
-          <div className="form-group">
+          <div className="ext-form-group">
             <label>Type *</label>
             <select
               value={newActor.actor_type || 'person'}
@@ -474,9 +533,9 @@ export const ActorBrowser: React.FC = () => {
             </select>
           </div>
 
-          <div className="form-group">
+          <div className="ext-form-group">
             <label>Aliases</label>
-            <div className="alias-input">
+            <div className="ext-alias-input">
               <input
                 type="text"
                 value={newAlias}
@@ -486,9 +545,9 @@ export const ActorBrowser: React.FC = () => {
               />
               <button type="button" onClick={addAlias}>Add</button>
             </div>
-            <div className="alias-list">
+            <div className="ext-tag-list">
               {(newActor.aliases || []).map((alias, idx) => (
-                <span key={idx} className="alias-tag">
+                <span key={idx} className="ext-alias-tag">
                   {alias}
                   <button type="button" onClick={() => removeAlias(alias)}>×</button>
                 </span>
@@ -498,8 +557,8 @@ export const ActorBrowser: React.FC = () => {
 
           {newActor.actor_type === 'person' && (
             <>
-              <div className="form-row">
-                <div className="form-group">
+              <div className="ext-form-row">
+                <div className="ext-form-group">
                   <label>Gender</label>
                   <select
                     value={newActor.gender || ''}
@@ -511,7 +570,7 @@ export const ActorBrowser: React.FC = () => {
                     <option value="other">Other</option>
                   </select>
                 </div>
-                <div className="form-group">
+                <div className="ext-form-group">
                   <label>Nationality</label>
                   <input
                     type="text"
@@ -522,8 +581,8 @@ export const ActorBrowser: React.FC = () => {
                 </div>
               </div>
 
-              <div className="form-row">
-                <div className="form-group">
+              <div className="ext-form-row">
+                <div className="ext-form-group">
                   <label>Immigration Status</label>
                   <input
                     type="text"
@@ -532,7 +591,7 @@ export const ActorBrowser: React.FC = () => {
                     placeholder="Status"
                   />
                 </div>
-                <div className="form-group">
+                <div className="ext-form-group">
                   <label>Prior Deportations</label>
                   <input
                     type="number"
@@ -547,7 +606,7 @@ export const ActorBrowser: React.FC = () => {
 
           {(newActor.actor_type === 'organization' || newActor.actor_type === 'agency') && (
             <>
-              <div className="form-group">
+              <div className="ext-form-group">
                 <label>Organization Type</label>
                 <input
                   type="text"
@@ -557,7 +616,7 @@ export const ActorBrowser: React.FC = () => {
                 />
               </div>
 
-              <div className="form-group">
+              <div className="ext-form-group">
                 <label>Jurisdiction</label>
                 <input
                   type="text"
@@ -567,8 +626,8 @@ export const ActorBrowser: React.FC = () => {
                 />
               </div>
 
-              <div className="form-row checkbox-row">
-                <label className="checkbox-label">
+              <div className="ext-checkbox-row">
+                <label className="ext-checkbox-label">
                   <input
                     type="checkbox"
                     checked={newActor.is_government_entity || false}
@@ -576,7 +635,7 @@ export const ActorBrowser: React.FC = () => {
                   />
                   Government Entity
                 </label>
-                <label className="checkbox-label">
+                <label className="ext-checkbox-label">
                   <input
                     type="checkbox"
                     checked={newActor.is_law_enforcement || false}
@@ -588,7 +647,7 @@ export const ActorBrowser: React.FC = () => {
             </>
           )}
 
-          <div className="form-group">
+          <div className="ext-form-group">
             <label>Description</label>
             <textarea
               value={newActor.description || ''}
@@ -598,12 +657,12 @@ export const ActorBrowser: React.FC = () => {
             />
           </div>
         </div>
-        <div className="modal-footer">
-          <button className="btn btn-secondary" onClick={() => setShowCreateModal(false)}>
+        <div className="ext-modal-footer">
+          <button className="ext-btn ext-btn-secondary" onClick={() => setShowCreateModal(false)}>
             Cancel
           </button>
           <button
-            className="btn btn-primary"
+            className="ext-btn ext-btn-primary"
             onClick={handleCreateActor}
             disabled={!newActor.canonical_name}
           >
@@ -615,46 +674,53 @@ export const ActorBrowser: React.FC = () => {
   );
 
   const renderMergeSuggestionsModal = () => (
-    <div className="modal-overlay" onClick={() => setShowMergeSuggestionsModal(false)}>
-      <div className="modal modal-lg" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-header">
-          <h3>Merge Suggestions</h3>
-          <button className="close-btn" onClick={() => setShowMergeSuggestionsModal(false)}>×</button>
+    <div className="ext-modal-overlay" onClick={() => setShowMergeSuggestionsModal(false)}>
+      <div className="ext-modal ext-modal-lg" onClick={(e) => e.stopPropagation()}>
+        <div className="ext-modal-header">
+          <h3>Merge Suggestions ({mergeSuggestions.length})</h3>
+          <button className="ext-close-btn" onClick={() => setShowMergeSuggestionsModal(false)}>×</button>
         </div>
-        <div className="modal-body">
+        <div className="ext-modal-body">
+          <p className="ext-help-text">
+            These actors may be duplicates. Review and merge to normalize your data.
+          </p>
           {mergeSuggestions.length === 0 ? (
-            <div className="empty-state">No merge suggestions available</div>
+            <div className="ext-empty-state">No merge suggestions available</div>
           ) : (
-            <div className="merge-suggestions">
+            <div className="ext-merge-suggestions">
               {mergeSuggestions.map((suggestion, idx) => (
-                <div key={idx} className="merge-suggestion">
-                  <div className="suggestion-actors">
-                    <div className="actor-card">
+                <div key={idx} className="ext-merge-suggestion">
+                  <div className="ext-suggestion-actors">
+                    <div className="ext-actor-card">
                       <strong>{suggestion.actor1_name}</strong>
                     </div>
-                    <div className="merge-arrow">↔</div>
-                    <div className="actor-card">
+                    <div className="ext-merge-arrow">↔</div>
+                    <div className="ext-actor-card">
                       <strong>{suggestion.actor2_name}</strong>
                     </div>
                   </div>
-                  <div className="suggestion-meta">
-                    <span className="similarity">
-                      {Math.round(suggestion.similarity * 100)}% similar
+                  <div className="ext-suggestion-meta">
+                    <span className={`ext-match-type ext-match-type-${(suggestion as any).match_type || 'trigram'}`}>
+                      {(suggestion as any).match_type === 'first_last' ? 'Name Match' :
+                       (suggestion as any).match_type === 'containment' ? 'Contains' : 'Similar'}
                     </span>
-                    <span className="reason">{suggestion.reason}</span>
+                    <span className="ext-similarity">
+                      {Math.round(suggestion.similarity * 100)}%
+                    </span>
+                    <span className="ext-reason">{suggestion.reason}</span>
                   </div>
-                  <div className="suggestion-actions">
+                  <div className="ext-suggestion-actions">
                     <button
-                      className="btn btn-sm btn-primary"
-                      onClick={() => handleMergeActors(suggestion.actor1_id, suggestion.actor2_id)}
+                      className="ext-btn ext-btn-sm ext-btn-primary"
+                      onClick={() => handleMergeActors(suggestion.actor1_id, suggestion.actor2_id, true)}
                     >
-                      Merge (Keep First)
+                      Keep "{suggestion.actor1_name.split(' ')[0]}..."
                     </button>
                     <button
-                      className="btn btn-sm btn-secondary"
-                      onClick={() => handleMergeActors(suggestion.actor2_id, suggestion.actor1_id)}
+                      className="ext-btn ext-btn-sm ext-btn-secondary"
+                      onClick={() => handleMergeActors(suggestion.actor1_id, suggestion.actor2_id, false)}
                     >
-                      Merge (Keep Second)
+                      Keep "{suggestion.actor2_name.split(' ')[0]}..."
                     </button>
                   </div>
                 </div>
@@ -662,8 +728,50 @@ export const ActorBrowser: React.FC = () => {
             </div>
           )}
         </div>
-        <div className="modal-footer">
-          <button className="btn btn-secondary" onClick={() => setShowMergeSuggestionsModal(false)}>
+        <div className="ext-modal-footer">
+          <button className="ext-btn ext-btn-secondary" onClick={() => setShowMergeSuggestionsModal(false)}>
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
+  const renderSimilarActorsModal = () => (
+    <div className="ext-modal-overlay" onClick={() => setShowSimilarModal(false)}>
+      <div className="ext-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="ext-modal-header">
+          <h3>Similar to: {selectedActor?.canonical_name}</h3>
+          <button className="ext-close-btn" onClick={() => setShowSimilarModal(false)}>×</button>
+        </div>
+        <div className="ext-modal-body">
+          {similarActors.length === 0 ? (
+            <div className="ext-empty-state">No similar actors found</div>
+          ) : (
+            <div className="ext-similar-actors">
+              {similarActors.map((actor) => (
+                <div key={actor.id} className="ext-similar-item">
+                  <div className="ext-similar-info">
+                    <strong>{actor.canonical_name}</strong>
+                    <span className="ext-similarity-score">
+                      {Math.round(actor.similarity * 100)}% match
+                    </span>
+                  </div>
+                  <div className="ext-similar-actions">
+                    <button
+                      className="ext-btn ext-btn-sm ext-btn-primary"
+                      onClick={() => handleQuickMerge(actor.id)}
+                    >
+                      Merge into "{selectedActor?.canonical_name.split(' ')[0]}..."
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="ext-modal-footer">
+          <button className="ext-btn ext-btn-secondary" onClick={() => setShowSimilarModal(false)}>
             Close
           </button>
         </div>
@@ -672,556 +780,32 @@ export const ActorBrowser: React.FC = () => {
   );
 
   return (
-    <div className="actor-browser">
-      <style>{`
-        .actor-browser {
-          display: flex;
-          height: 100%;
-          gap: 1rem;
-        }
-
-        .actor-list {
-          width: 400px;
-          min-width: 350px;
-          display: flex;
-          flex-direction: column;
-          border-right: 1px solid #e2e8f0;
-          padding-right: 1rem;
-        }
-
-        .list-header {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          margin-bottom: 1rem;
-        }
-
-        .list-header h3 {
-          margin: 0;
-          font-size: 1.1rem;
-        }
-
-        .header-actions {
-          display: flex;
-          gap: 0.5rem;
-        }
-
-        .filters {
-          display: flex;
-          flex-direction: column;
-          gap: 0.5rem;
-          margin-bottom: 1rem;
-        }
-
-        .search-input, .filter-select {
-          padding: 0.5rem;
-          border: 1px solid #e2e8f0;
-          border-radius: 4px;
-          font-size: 0.875rem;
-        }
-
-        .actor-items {
-          flex: 1;
-          overflow-y: auto;
-        }
-
-        .actor-item {
-          display: flex;
-          gap: 0.75rem;
-          padding: 0.75rem;
-          border: 1px solid #e2e8f0;
-          border-radius: 6px;
-          margin-bottom: 0.5rem;
-          cursor: pointer;
-          transition: all 0.15s;
-        }
-
-        .actor-item:hover {
-          border-color: #3b82f6;
-          background: #f8fafc;
-        }
-
-        .actor-item.selected {
-          border-color: #3b82f6;
-          background: #eff6ff;
-        }
-
-        .actor-icon {
-          font-size: 1.5rem;
-        }
-
-        .actor-info {
-          flex: 1;
-          min-width: 0;
-        }
-
-        .actor-name {
-          font-weight: 600;
-          margin-bottom: 0.25rem;
-          white-space: nowrap;
-          overflow: hidden;
-          text-overflow: ellipsis;
-        }
-
-        .actor-meta {
-          display: flex;
-          gap: 0.5rem;
-          flex-wrap: wrap;
-          font-size: 0.75rem;
-        }
-
-        .type-badge {
-          background: #e2e8f0;
-          padding: 0.125rem 0.5rem;
-          border-radius: 4px;
-        }
-
-        .badge {
-          padding: 0.125rem 0.5rem;
-          border-radius: 4px;
-          font-size: 0.7rem;
-        }
-
-        .badge-blue {
-          background: #dbeafe;
-          color: #1e40af;
-        }
-
-        .badge-purple {
-          background: #ede9fe;
-          color: #6b21a8;
-        }
-
-        .incident-count {
-          color: #64748b;
-        }
-
-        .aliases {
-          font-size: 0.75rem;
-          color: #64748b;
-          margin-top: 0.25rem;
-          font-style: italic;
-        }
-
-        .actor-detail {
-          flex: 1;
-          overflow-y: auto;
-          padding: 0 1rem;
-        }
-
-        .actor-detail.empty {
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          color: #64748b;
-        }
-
-        .detail-header {
-          display: flex;
-          justify-content: space-between;
-          align-items: flex-start;
-          margin-bottom: 1.5rem;
-          padding-bottom: 1rem;
-          border-bottom: 1px solid #e2e8f0;
-        }
-
-        .header-title {
-          display: flex;
-          align-items: center;
-          gap: 0.75rem;
-        }
-
-        .detail-icon {
-          font-size: 2rem;
-        }
-
-        .detail-header h2 {
-          margin: 0;
-          font-size: 1.5rem;
-        }
-
-        .detail-section {
-          margin-bottom: 1.5rem;
-        }
-
-        .detail-section h3 {
-          font-size: 0.9rem;
-          text-transform: uppercase;
-          letter-spacing: 0.05em;
-          color: #64748b;
-          margin-bottom: 0.75rem;
-          padding-bottom: 0.5rem;
-          border-bottom: 1px solid #e2e8f0;
-        }
-
-        .info-grid {
-          display: grid;
-          grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-          gap: 1rem;
-        }
-
-        .info-item {
-          display: flex;
-          flex-direction: column;
-          gap: 0.25rem;
-        }
-
-        .info-item label {
-          font-size: 0.75rem;
-          color: #64748b;
-          text-transform: uppercase;
-        }
-
-        .info-item span {
-          font-weight: 500;
-        }
-
-        .alias-list, .role-list {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 0.5rem;
-        }
-
-        .alias-tag, .role-tag {
-          background: #e2e8f0;
-          padding: 0.25rem 0.75rem;
-          border-radius: 999px;
-          font-size: 0.875rem;
-        }
-
-        .relations-list {
-          display: flex;
-          flex-direction: column;
-          gap: 0.5rem;
-          margin-bottom: 0.75rem;
-        }
-
-        .relation-item {
-          display: flex;
-          align-items: center;
-          gap: 0.75rem;
-          padding: 0.5rem;
-          background: #f8fafc;
-          border-radius: 4px;
-        }
-
-        .relation-type {
-          text-transform: capitalize;
-          font-weight: 500;
-        }
-
-        .related-actor {
-          color: #3b82f6;
-        }
-
-        .confidence {
-          margin-left: auto;
-          color: #64748b;
-          font-size: 0.875rem;
-        }
-
-        .incident-list {
-          display: flex;
-          flex-direction: column;
-          gap: 0.75rem;
-        }
-
-        .incident-item {
-          padding: 0.75rem;
-          background: #f8fafc;
-          border-radius: 6px;
-          border-left: 3px solid #3b82f6;
-        }
-
-        .incident-header {
-          display: flex;
-          justify-content: space-between;
-          margin-bottom: 0.25rem;
-        }
-
-        .incident-date {
-          font-weight: 500;
-        }
-
-        .incident-role {
-          background: #dbeafe;
-          color: #1e40af;
-          padding: 0.125rem 0.5rem;
-          border-radius: 4px;
-          font-size: 0.75rem;
-        }
-
-        .incident-location {
-          color: #64748b;
-          font-size: 0.875rem;
-        }
-
-        .incident-type {
-          margin-top: 0.25rem;
-          font-size: 0.875rem;
-        }
-
-        .incident-description {
-          margin-top: 0.5rem;
-          font-size: 0.875rem;
-          color: #475569;
-        }
-
-        /* Modals */
-        .modal-overlay {
-          position: fixed;
-          top: 0;
-          left: 0;
-          right: 0;
-          bottom: 0;
-          background: rgba(0, 0, 0, 0.5);
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          z-index: 1000;
-        }
-
-        .modal {
-          background: white;
-          border-radius: 8px;
-          width: 90%;
-          max-width: 500px;
-          max-height: 90vh;
-          overflow: hidden;
-          display: flex;
-          flex-direction: column;
-        }
-
-        .modal-lg {
-          max-width: 700px;
-        }
-
-        .modal-header {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          padding: 1rem;
-          border-bottom: 1px solid #e2e8f0;
-        }
-
-        .modal-header h3 {
-          margin: 0;
-        }
-
-        .close-btn {
-          background: none;
-          border: none;
-          font-size: 1.5rem;
-          cursor: pointer;
-          color: #64748b;
-        }
-
-        .modal-body {
-          padding: 1rem;
-          overflow-y: auto;
-          flex: 1;
-        }
-
-        .modal-footer {
-          display: flex;
-          justify-content: flex-end;
-          gap: 0.5rem;
-          padding: 1rem;
-          border-top: 1px solid #e2e8f0;
-        }
-
-        .form-group {
-          margin-bottom: 1rem;
-        }
-
-        .form-group label {
-          display: block;
-          margin-bottom: 0.25rem;
-          font-weight: 500;
-          font-size: 0.875rem;
-        }
-
-        .form-group input,
-        .form-group select,
-        .form-group textarea {
-          width: 100%;
-          padding: 0.5rem;
-          border: 1px solid #e2e8f0;
-          border-radius: 4px;
-          font-size: 0.875rem;
-        }
-
-        .form-row {
-          display: flex;
-          gap: 1rem;
-        }
-
-        .form-row .form-group {
-          flex: 1;
-        }
-
-        .checkbox-row {
-          margin-bottom: 1rem;
-        }
-
-        .checkbox-label {
-          display: flex;
-          align-items: center;
-          gap: 0.5rem;
-          cursor: pointer;
-        }
-
-        .checkbox-label input[type="checkbox"] {
-          width: auto;
-        }
-
-        .alias-input {
-          display: flex;
-          gap: 0.5rem;
-        }
-
-        .alias-input input {
-          flex: 1;
-        }
-
-        .alias-tag button {
-          background: none;
-          border: none;
-          margin-left: 0.25rem;
-          cursor: pointer;
-          color: #64748b;
-        }
-
-        /* Merge suggestions */
-        .merge-suggestions {
-          display: flex;
-          flex-direction: column;
-          gap: 1rem;
-        }
-
-        .merge-suggestion {
-          padding: 1rem;
-          border: 1px solid #e2e8f0;
-          border-radius: 8px;
-        }
-
-        .suggestion-actors {
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          gap: 1rem;
-          margin-bottom: 0.75rem;
-        }
-
-        .actor-card {
-          padding: 0.5rem 1rem;
-          background: #f8fafc;
-          border-radius: 6px;
-        }
-
-        .merge-arrow {
-          font-size: 1.25rem;
-          color: #64748b;
-        }
-
-        .suggestion-meta {
-          display: flex;
-          justify-content: center;
-          gap: 1rem;
-          margin-bottom: 0.75rem;
-          font-size: 0.875rem;
-        }
-
-        .similarity {
-          font-weight: 500;
-          color: #059669;
-        }
-
-        .reason {
-          color: #64748b;
-        }
-
-        .suggestion-actions {
-          display: flex;
-          justify-content: center;
-          gap: 0.5rem;
-        }
-
-        /* Buttons */
-        .btn {
-          padding: 0.5rem 1rem;
-          border: none;
-          border-radius: 4px;
-          cursor: pointer;
-          font-size: 0.875rem;
-          font-weight: 500;
-          transition: all 0.15s;
-        }
-
-        .btn-sm {
-          padding: 0.25rem 0.75rem;
-          font-size: 0.8rem;
-        }
-
-        .btn-primary {
-          background: #3b82f6;
-          color: white;
-        }
-
-        .btn-primary:hover {
-          background: #2563eb;
-        }
-
-        .btn-primary:disabled {
-          background: #93c5fd;
-          cursor: not-allowed;
-        }
-
-        .btn-secondary {
-          background: #e2e8f0;
-          color: #475569;
-        }
-
-        .btn-secondary:hover {
-          background: #cbd5e1;
-        }
-
-        .btn-danger {
-          background: #ef4444;
-          color: white;
-        }
-
-        .btn-danger:hover {
-          background: #dc2626;
-        }
-
-        .empty-state {
-          text-align: center;
-          padding: 2rem;
-          color: #64748b;
-        }
-      `}</style>
-
-      {loading && <div className="loading">Loading...</div>}
-      {error && <div className="error">{error}</div>}
+    <div className="ext-browser">
+      {loading && <div className="ext-loading">Loading...</div>}
+      {error && <div className="ext-error">{error}</div>}
 
       {renderActorList()}
       {renderActorDetail()}
 
+      {mergeSuccess && (
+        <div className="ext-success-toast">{mergeSuccess}</div>
+      )}
+
       {showCreateModal && renderCreateModal()}
       {showMergeSuggestionsModal && renderMergeSuggestionsModal()}
+      {showSimilarModal && renderSimilarActorsModal()}
       {showRelationModal && (
-        <div className="modal-overlay" onClick={() => setShowRelationModal(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
+        <div className="ext-modal-overlay" onClick={() => setShowRelationModal(false)}>
+          <div className="ext-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="ext-modal-header">
               <h3>Add Relationship</h3>
-              <button className="close-btn" onClick={() => setShowRelationModal(false)}>×</button>
+              <button className="ext-close-btn" onClick={() => setShowRelationModal(false)}>×</button>
             </div>
-            <div className="modal-body">
+            <div className="ext-modal-body">
               <p>Relationship management coming soon.</p>
             </div>
-            <div className="modal-footer">
-              <button className="btn btn-secondary" onClick={() => setShowRelationModal(false)}>
+            <div className="ext-modal-footer">
+              <button className="ext-btn ext-btn-secondary" onClick={() => setShowRelationModal(false)}>
                 Close
               </button>
             </div>

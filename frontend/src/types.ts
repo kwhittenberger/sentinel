@@ -23,6 +23,17 @@ export type OutcomeCategory =
   | 'no_injury'
   | 'unknown';
 
+// Source/article linked to an incident
+export interface IncidentSource {
+  id: string;
+  url: string;
+  title?: string;
+  source_name?: string;
+  published_date?: string;
+  is_primary: boolean;
+  created_at?: string;
+}
+
 export interface Incident {
   id: string;
   legacy_id?: string;
@@ -50,6 +61,9 @@ export interface Incident {
   is_death: boolean;
   linked_ids?: string[];
   severity_score?: number;
+
+  // Multiple sources for this incident
+  sources?: IncidentSource[];
 
   // Sanctuary policy context
   state_sanctuary_status?: string;
@@ -183,6 +197,7 @@ export interface CurationQueueItem {
 }
 
 export interface ExtractedIncidentData {
+  category?: IncidentCategory;
   date?: string;
   date_confidence?: number;
   state?: string;
@@ -198,13 +213,36 @@ export interface ExtractedIncidentData {
   victim_category_confidence?: number;
   outcome_category?: OutcomeCategory;
   outcome_category_confidence?: number;
+  // Offender details for crime incidents
   offender_name?: string;
+  offender_name_confidence?: number;
+  offender_age?: number;
+  offender_gender?: string;
+  offender_nationality?: string;
+  offender_country_of_origin?: string;
+  immigration_status?: string;
+  entry_method?: string;
+  prior_deportations?: number;
+  prior_arrests?: number;
+  prior_convictions?: number;
+  gang_affiliated?: boolean;
+  gang_name?: string;
+  cartel_connection?: string;
+  ice_detainer_ignored?: boolean;
+  was_released_sanctuary?: boolean;
+  was_released_bail?: boolean;
+  // Crime victim details
+  crime_victim_count?: number;
+  crime_victim_names?: string[];
+  involves_fatality?: boolean;
+  // Legal details
+  charges?: string[];
+  sentence?: string;
+  // Common fields
   description?: string;
   outcome?: string;
-  immigration_status?: string;
-  prior_deportations?: number;
-  gang_affiliated?: boolean;
   overall_confidence?: number;
+  extraction_notes?: string;
 }
 
 export interface CurationDecision {
@@ -287,10 +325,24 @@ export interface PipelineSettings {
   default_source_tier: number;
 }
 
+export interface EventClusteringSettings {
+  max_distance_km: number;
+  require_coordinates: boolean;
+  max_time_window_days: number;
+  require_same_incident_type: boolean;
+  require_same_category: boolean;
+  min_cluster_size: number;
+  min_confidence_threshold: number;
+  enable_ai_similarity: boolean;
+  ai_similarity_threshold: number;
+  enable_actor_matching: boolean;
+}
+
 export interface AllSettings {
   auto_approval: AutoApprovalSettings;
   duplicate_detection: DuplicateDetectionSettings;
   pipeline: PipelineSettings;
+  event_clustering: EventClusteringSettings;
 }
 
 // Feed types
@@ -485,6 +537,7 @@ export interface Event {
   tags: string[];
   incident_count: number;
   incidents?: EventIncident[];
+  actors?: EventActor[];
 }
 
 export interface EventIncident {
@@ -494,19 +547,40 @@ export interface EventIncident {
   city?: string;
   category?: string;
   incident_type?: string;
+  incident_type_display?: string;
   description?: string;
+  victim_name?: string;
+  outcome_category?: string;
+  notes?: string;
   is_primary_event?: boolean;
   sequence_number?: number;
 }
 
-export interface EventSuggestion {
-  type: string;
-  date?: string;
-  state?: string;
+export interface EventActor {
+  id: string;
+  canonical_name: string;
+  actor_type: ActorType;
+  aliases?: string[];
+  is_law_enforcement?: boolean;
+  role: ActorRole;
   incident_count: number;
+}
+
+export interface EventSuggestion {
   incident_ids: string[];
   suggested_name: string;
+  event_type: string;
+  start_date: string;
+  end_date: string;
+  primary_state: string;
+  primary_city?: string;
+  incident_type: string;
+  category: string;
+  incident_count: number;
   confidence: number;
+  reasoning: string[];
+  center_lat?: number;
+  center_lon?: number;
 }
 
 // Actors

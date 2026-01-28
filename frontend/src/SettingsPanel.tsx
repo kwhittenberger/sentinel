@@ -37,6 +37,19 @@ interface PipelineSettings {
   default_source_tier: number;
 }
 
+interface EventClusteringSettings {
+  max_distance_km: number;
+  require_coordinates: boolean;
+  max_time_window_days: number;
+  require_same_incident_type: boolean;
+  require_same_category: boolean;
+  min_cluster_size: number;
+  min_confidence_threshold: number;
+  enable_ai_similarity: boolean;
+  ai_similarity_threshold: number;
+  enable_actor_matching: boolean;
+}
+
 interface Feed {
   id: string;
   name: string;
@@ -52,7 +65,7 @@ interface SettingsPanelProps {
 }
 
 export function SettingsPanel({ onClose }: SettingsPanelProps) {
-  const [activeTab, setActiveTab] = useState<'auto-approval' | 'duplicate' | 'pipeline' | 'feeds'>('auto-approval');
+  const [activeTab, setActiveTab] = useState<'auto-approval' | 'duplicate' | 'pipeline' | 'clustering' | 'feeds'>('auto-approval');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -60,6 +73,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
   const [autoApproval, setAutoApproval] = useState<AutoApprovalSettings | null>(null);
   const [duplicate, setDuplicate] = useState<DuplicateSettings | null>(null);
   const [pipeline, setPipeline] = useState<PipelineSettings | null>(null);
+  const [clustering, setClustering] = useState<EventClusteringSettings | null>(null);
   const [feeds, setFeeds] = useState<Feed[]>([]);
   const [showAddFeed, setShowAddFeed] = useState(false);
   const [newFeed, setNewFeed] = useState({ name: '', url: '', interval_minutes: 60 });
@@ -73,6 +87,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
         setAutoApproval(data.auto_approval);
         setDuplicate(data.duplicate_detection);
         setPipeline(data.pipeline);
+        setClustering(data.event_clustering);
       }
 
       const feedsResponse = await fetch(`${API_BASE}/admin/feeds`);
@@ -157,6 +172,28 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
     }
   };
 
+  const saveClustering = async () => {
+    if (!clustering) return;
+    setSaving(true);
+    setMessage(null);
+    try {
+      const response = await fetch(`${API_BASE}/admin/settings/event-clustering`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(clustering),
+      });
+      if (response.ok) {
+        setMessage({ type: 'success', text: 'Event clustering settings saved' });
+      } else {
+        setMessage({ type: 'error', text: 'Failed to save settings' });
+      }
+    } catch {
+      setMessage({ type: 'error', text: 'Failed to save settings' });
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const addFeed = async () => {
     setSaving(true);
     try {
@@ -221,7 +258,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
       )}
 
       <div className="settings-tabs">
-        {(['auto-approval', 'duplicate', 'pipeline', 'feeds'] as const).map(tab => (
+        {(['auto-approval', 'duplicate', 'pipeline', 'clustering', 'feeds'] as const).map(tab => (
           <button
             key={tab}
             className={`settings-tab ${activeTab === tab ? 'active' : ''}`}
@@ -230,6 +267,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
             {tab === 'auto-approval' && 'Auto-Approval'}
             {tab === 'duplicate' && 'Duplicate Detection'}
             {tab === 'pipeline' && 'Pipeline'}
+            {tab === 'clustering' && 'Event Clustering'}
             {tab === 'feeds' && 'RSS Feeds'}
           </button>
         ))}
@@ -583,6 +621,179 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
             <div className="settings-actions">
               <button className="action-btn primary" onClick={savePipeline} disabled={saving}>
                 {saving ? 'Saving...' : 'Save Pipeline Settings'}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'clustering' && clustering && (
+          <div className="settings-section">
+            <h3>Geographic Clustering</h3>
+
+            <div className="settings-group">
+              <label>Maximum Distance (km)</label>
+              <div className="slider-row">
+                <input
+                  type="range"
+                  min="1"
+                  max="200"
+                  value={clustering.max_distance_km}
+                  onChange={e => setClustering({
+                    ...clustering,
+                    max_distance_km: parseFloat(e.target.value)
+                  })}
+                />
+                <span>{clustering.max_distance_km} km</span>
+              </div>
+              <p className="settings-hint">Max distance between incidents to consider them related</p>
+            </div>
+
+            <label className="toggle-label">
+              <input
+                type="checkbox"
+                checked={clustering.require_coordinates}
+                onChange={e => setClustering({
+                  ...clustering,
+                  require_coordinates: e.target.checked
+                })}
+              />
+              <span>Require Coordinates (if unchecked, falls back to city/state matching)</span>
+            </label>
+
+            <h3>Temporal Clustering</h3>
+
+            <div className="settings-group">
+              <label>Maximum Time Window (days)</label>
+              <div className="slider-row">
+                <input
+                  type="range"
+                  min="1"
+                  max="30"
+                  value={clustering.max_time_window_days}
+                  onChange={e => setClustering({
+                    ...clustering,
+                    max_time_window_days: parseInt(e.target.value)
+                  })}
+                />
+                <span>{clustering.max_time_window_days} days</span>
+              </div>
+              <p className="settings-hint">Max days apart for incidents to be considered related</p>
+            </div>
+
+            <h3>Matching Criteria</h3>
+
+            <div className="settings-toggle-group">
+              <label className="toggle-label">
+                <input
+                  type="checkbox"
+                  checked={clustering.require_same_incident_type}
+                  onChange={e => setClustering({
+                    ...clustering,
+                    require_same_incident_type: e.target.checked
+                  })}
+                />
+                <span>Require Same Incident Type</span>
+              </label>
+
+              <label className="toggle-label">
+                <input
+                  type="checkbox"
+                  checked={clustering.require_same_category}
+                  onChange={e => setClustering({
+                    ...clustering,
+                    require_same_category: e.target.checked
+                  })}
+                />
+                <span>Require Same Category (enforcement/crime)</span>
+              </label>
+
+              <label className="toggle-label">
+                <input
+                  type="checkbox"
+                  checked={clustering.enable_actor_matching}
+                  onChange={e => setClustering({
+                    ...clustering,
+                    enable_actor_matching: e.target.checked
+                  })}
+                />
+                <span>Consider Shared Actors</span>
+              </label>
+            </div>
+
+            <h3>Cluster Settings</h3>
+
+            <div className="settings-group">
+              <label>Minimum Cluster Size</label>
+              <input
+                type="number"
+                min="2"
+                max="10"
+                value={clustering.min_cluster_size}
+                onChange={e => setClustering({
+                  ...clustering,
+                  min_cluster_size: parseInt(e.target.value) || 2
+                })}
+                className="settings-input"
+              />
+              <p className="settings-hint">Minimum incidents needed to form an event</p>
+            </div>
+
+            <div className="settings-group">
+              <label>Minimum Confidence Threshold</label>
+              <div className="slider-row">
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  value={clustering.min_confidence_threshold * 100}
+                  onChange={e => setClustering({
+                    ...clustering,
+                    min_confidence_threshold: parseInt(e.target.value) / 100
+                  })}
+                />
+                <span>{(clustering.min_confidence_threshold * 100).toFixed(0)}%</span>
+              </div>
+            </div>
+
+            <h3>AI-Assisted Clustering (Future)</h3>
+
+            <div className="settings-toggle-group">
+              <label className="toggle-label">
+                <input
+                  type="checkbox"
+                  checked={clustering.enable_ai_similarity}
+                  onChange={e => setClustering({
+                    ...clustering,
+                    enable_ai_similarity: e.target.checked
+                  })}
+                  disabled
+                />
+                <span>Enable AI Similarity Analysis (coming soon)</span>
+              </label>
+            </div>
+
+            {clustering.enable_ai_similarity && (
+              <div className="settings-group">
+                <label>AI Similarity Threshold</label>
+                <div className="slider-row">
+                  <input
+                    type="range"
+                    min="0"
+                    max="100"
+                    value={clustering.ai_similarity_threshold * 100}
+                    onChange={e => setClustering({
+                      ...clustering,
+                      ai_similarity_threshold: parseInt(e.target.value) / 100
+                    })}
+                  />
+                  <span>{(clustering.ai_similarity_threshold * 100).toFixed(0)}%</span>
+                </div>
+              </div>
+            )}
+
+            <div className="settings-actions">
+              <button className="action-btn primary" onClick={saveClustering} disabled={saving}>
+                {saving ? 'Saving...' : 'Save Clustering Settings'}
               </button>
             </div>
           </div>

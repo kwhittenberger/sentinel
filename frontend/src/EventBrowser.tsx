@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
-import type { Event, EventSuggestion } from './types';
+import type { Event, EventSuggestion, EventActor, Incident } from './types';
+import { IncidentDetailView } from './IncidentDetailView';
+import './ExtensibleSystem.css';
 
 interface EventBrowserProps {
   onRefresh?: () => void;
@@ -11,11 +13,13 @@ export function EventBrowser({ onRefresh }: EventBrowserProps) {
   const [events, setEvents] = useState<Event[]>([]);
   const [suggestions, setSuggestions] = useState<EventSuggestion[]>([]);
   const [selectedEvent, setSelectedEvent] = useState<Event | null>(null);
+  const [selectedIncident, setSelectedIncident] = useState<Incident | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(false);
+  const [showIncidentDetail, setShowIncidentDetail] = useState(false);
   const [filterState, setFilterState] = useState('');
   const [filterOngoing, setFilterOngoing] = useState(false);
 
@@ -131,9 +135,11 @@ export function EventBrowser({ onRefresh }: EventBrowserProps) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: suggestion.suggested_name,
-          start_date: suggestion.date,
-          event_type: suggestion.type,
-          primary_state: suggestion.state,
+          start_date: suggestion.start_date,
+          end_date: suggestion.end_date !== suggestion.start_date ? suggestion.end_date : undefined,
+          event_type: suggestion.event_type,
+          primary_state: suggestion.primary_state,
+          primary_city: suggestion.primary_city,
         }),
       });
 
@@ -142,11 +148,16 @@ export function EventBrowser({ onRefresh }: EventBrowserProps) {
       const eventData = await res.json();
 
       // Link incidents
-      for (const incidentId of suggestion.incident_ids) {
+      for (let i = 0; i < suggestion.incident_ids.length; i++) {
         await fetch(`${API_BASE}/api/events/${eventData.id}/incidents`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ incident_id: incidentId, assigned_by: 'ai' }),
+          body: JSON.stringify({
+            incident_id: suggestion.incident_ids[i],
+            assigned_by: 'ai',
+            is_primary: i === 0,
+            sequence_number: i + 1,
+          }),
         });
       }
 
@@ -173,25 +184,37 @@ export function EventBrowser({ onRefresh }: EventBrowserProps) {
     }
   };
 
+  const handleViewIncident = async (incidentId: string) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/incidents/${incidentId}`);
+      if (!res.ok) throw new Error('Failed to load incident');
+      const data = await res.json();
+      setSelectedIncident(data);
+      setShowIncidentDetail(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load incident details');
+    }
+  };
+
   if (loading && events.length === 0) {
-    return <div className="admin-loading">Loading events...</div>;
+    return <div className="ext-loading">Loading events...</div>;
   }
 
   return (
-    <div className="admin-page">
-      <div className="page-header">
+    <div className="ext-browser" style={{ flexDirection: 'column' }}>
+      <div className="ext-page-header">
         <h2>Events</h2>
-        <div className="page-actions">
+        <div className="ext-page-actions">
           {suggestions.length > 0 && (
             <button
-              className="action-btn"
+              className="ext-btn ext-btn-warning"
               onClick={() => setShowSuggestions(true)}
             >
               AI Suggestions ({suggestions.length})
             </button>
           )}
           <button
-            className="action-btn primary"
+            className="ext-btn ext-btn-primary"
             onClick={() => setShowCreateForm(true)}
           >
             + Create Event
@@ -199,17 +222,17 @@ export function EventBrowser({ onRefresh }: EventBrowserProps) {
         </div>
       </div>
 
-      {error && <div className="error-banner">{error}</div>}
+      {error && <div className="ext-error">{error}</div>}
 
       {/* Filters */}
-      <div className="filter-bar">
+      <div className="ext-filter-bar">
         <input
           type="text"
           placeholder="Filter by state..."
           value={filterState}
           onChange={(e) => setFilterState(e.target.value)}
         />
-        <label className="checkbox-label">
+        <label className="ext-checkbox-label">
           <input
             type="checkbox"
             checked={filterOngoing}
@@ -219,53 +242,51 @@ export function EventBrowser({ onRefresh }: EventBrowserProps) {
         </label>
       </div>
 
-      <div className="split-view">
+      <div className="ext-split-view">
         {/* Events List */}
-        <div className="list-panel">
-          <div className="list-header">
+        <div className="ext-list-panel">
+          <div className="ext-list-panel-header">
             <h3>Events ({events.length})</h3>
           </div>
-          <div className="list-items">
+          <div className="ext-list-panel-items">
             {events.map((event) => (
               <div
                 key={event.id}
-                className={`list-item ${selectedEvent?.id === event.id ? 'selected' : ''}`}
+                className={`ext-list-panel-item ${selectedEvent?.id === event.id ? 'selected' : ''}`}
                 onClick={() => loadEventDetails(event.id)}
               >
-                <div className="item-content">
-                  <div className="item-title">{event.name}</div>
-                  <div className="item-meta">
-                    {event.event_type && <span className="badge type">{event.event_type}</span>}
-                    {event.ongoing && <span className="badge ongoing">Ongoing</span>}
-                    <span>{event.primary_state}</span>
-                    <span className="incident-count">{event.incident_count} incidents</span>
-                  </div>
-                  <div className="item-date">
-                    {event.start_date}
-                    {event.end_date && ` - ${event.end_date}`}
-                  </div>
+                <div className="ext-item-title">{event.name}</div>
+                <div className="ext-item-meta">
+                  {event.event_type && <span className="ext-badge ext-badge-type">{event.event_type}</span>}
+                  {event.ongoing && <span className="ext-badge ext-badge-ongoing">Ongoing</span>}
+                  <span>{event.primary_state}</span>
+                  <span className="ext-incident-count">{event.incident_count} incidents</span>
+                </div>
+                <div className="ext-item-date">
+                  {event.start_date}
+                  {event.end_date && ` - ${event.end_date}`}
                 </div>
               </div>
             ))}
             {events.length === 0 && (
-              <div className="empty-list">No events found</div>
+              <div className="ext-empty-state">No events found</div>
             )}
           </div>
         </div>
 
         {/* Event Details */}
-        <div className="detail-panel">
+        <div className="ext-detail-panel">
           {selectedEvent ? (
             <>
-              <div className="detail-header">
+              <div className="ext-detail-header">
                 <div>
                   <h3>{selectedEvent.name}</h3>
-                  <div className="event-meta">
+                  <div className="ext-item-meta" style={{ marginTop: '0.5rem' }}>
                     {selectedEvent.event_type && (
-                      <span className="badge type">{selectedEvent.event_type}</span>
+                      <span className="ext-badge ext-badge-type">{selectedEvent.event_type}</span>
                     )}
-                    {selectedEvent.ongoing && <span className="badge ongoing">Ongoing</span>}
-                    <span className="location">
+                    {selectedEvent.ongoing && <span className="ext-badge ext-badge-ongoing">Ongoing</span>}
+                    <span style={{ color: 'var(--text-muted)' }}>
                       {selectedEvent.primary_city && `${selectedEvent.primary_city}, `}
                       {selectedEvent.primary_state}
                     </span>
@@ -273,8 +294,8 @@ export function EventBrowser({ onRefresh }: EventBrowserProps) {
                 </div>
               </div>
 
-              <div className="event-info">
-                <div className="info-row">
+              <div className="ext-event-info">
+                <div className="ext-info-row">
                   <span className="label">Date Range:</span>
                   <span>
                     {selectedEvent.start_date}
@@ -282,71 +303,133 @@ export function EventBrowser({ onRefresh }: EventBrowserProps) {
                   </span>
                 </div>
                 {selectedEvent.geographic_scope && (
-                  <div className="info-row">
+                  <div className="ext-info-row">
                     <span className="label">Scope:</span>
                     <span>{selectedEvent.geographic_scope}</span>
                   </div>
                 )}
                 {selectedEvent.description && (
-                  <div className="info-row full">
+                  <div className="ext-info-row full">
                     <span className="label">Description:</span>
                     <p>{selectedEvent.description}</p>
                   </div>
                 )}
                 {selectedEvent.ai_summary && (
-                  <div className="info-row full">
+                  <div className="ext-info-row full">
                     <span className="label">AI Summary:</span>
-                    <p className="ai-summary">{selectedEvent.ai_summary}</p>
+                    <p className="ext-ai-summary">{selectedEvent.ai_summary}</p>
                   </div>
                 )}
                 {selectedEvent.tags && selectedEvent.tags.length > 0 && (
-                  <div className="info-row">
+                  <div className="ext-info-row">
                     <span className="label">Tags:</span>
-                    <div className="tags">
+                    <div className="ext-tag-list">
                       {selectedEvent.tags.map((tag) => (
-                        <span key={tag} className="tag">{tag}</span>
+                        <span key={tag} className="ext-tag">{tag}</span>
                       ))}
                     </div>
                   </div>
                 )}
               </div>
 
-              <div className="incidents-section">
+              <div className="ext-incidents-section">
                 <h4>Linked Incidents ({selectedEvent.incident_count})</h4>
-                <div className="incidents-list">
+                <div className="ext-incidents-list">
                   {selectedEvent.incidents?.map((incident) => (
-                    <div key={incident.incident_id} className="incident-card">
-                      <div className="incident-header">
-                        <span className="incident-date">{incident.date}</span>
-                        <span className="incident-location">
-                          {incident.city && `${incident.city}, `}{incident.state}
-                        </span>
-                        {incident.is_primary_event && (
-                          <span className="badge primary">Primary</span>
+                    <div
+                      key={incident.incident_id}
+                      className="ext-event-incident-card"
+                      onClick={() => handleViewIncident(incident.incident_id)}
+                    >
+                      <div className="ext-event-incident-header">
+                        <div className="ext-event-incident-main">
+                          <span className="ext-incident-date">{incident.date}</span>
+                          <span className="ext-incident-location">
+                            {incident.city && `${incident.city}, `}{incident.state}
+                          </span>
+                          {incident.category && (
+                            <span className={`ext-badge ext-badge-category-${incident.category}`}>
+                              {incident.category}
+                            </span>
+                          )}
+                          {incident.is_primary_event && (
+                            <span className="ext-badge ext-badge-primary">Primary</span>
+                          )}
+                        </div>
+                        <button
+                          className="ext-unlink-btn"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleUnlinkIncident(selectedEvent.id, incident.incident_id);
+                          }}
+                        >
+                          Unlink
+                        </button>
+                      </div>
+                      <div className="ext-incident-details">
+                        {incident.incident_type && (
+                          <div className="ext-incident-type">
+                            {incident.incident_type_display ||
+                             incident.incident_type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
+                          </div>
+                        )}
+                        {incident.victim_name && (
+                          <div className="ext-incident-victim">
+                            <strong>Victim:</strong> {incident.victim_name}
+                          </div>
+                        )}
+                        {incident.outcome_category && (
+                          <div className="ext-incident-outcome">
+                            <strong>Outcome:</strong> {incident.outcome_category.replace(/_/g, ' ')}
+                          </div>
                         )}
                       </div>
-                      {incident.incident_type && (
-                        <div className="incident-type">{incident.incident_type}</div>
+                      {(incident.description || incident.notes) && (
+                        <p className="ext-incident-desc">
+                          {(incident.description || incident.notes || '').slice(0, 200)}
+                          {(incident.description || incident.notes || '').length > 200 ? '...' : ''}
+                        </p>
                       )}
-                      {incident.description && (
-                        <p className="incident-desc">{incident.description.slice(0, 150)}...</p>
-                      )}
-                      <button
-                        className="unlink-btn"
-                        onClick={() => handleUnlinkIncident(selectedEvent.id, incident.incident_id)}
-                      >
-                        Unlink
-                      </button>
                     </div>
                   ))}
                   {(!selectedEvent.incidents || selectedEvent.incidents.length === 0) && (
-                    <p className="no-data">No incidents linked to this event</p>
+                    <p className="ext-empty-state">No incidents linked to this event</p>
                   )}
                 </div>
               </div>
+
+              {/* Actors Section */}
+              {selectedEvent.actors && selectedEvent.actors.length > 0 && (
+                <div className="ext-actors-section">
+                  <h4>Associated Actors ({selectedEvent.actors.length})</h4>
+                  <div className="ext-actors-list">
+                    {selectedEvent.actors.map((actor: EventActor) => (
+                      <div key={`${actor.id}-${actor.role}`} className="ext-actor-item">
+                        <div>
+                          <span className="ext-actor-item-name">{actor.canonical_name}</span>
+                          <div className="ext-actor-item-meta">
+                            <span className={`ext-badge ext-badge-actor-${actor.actor_type}`}>
+                              {actor.actor_type}
+                            </span>
+                            <span className={`ext-badge ext-badge-role-${actor.role}`}>
+                              {actor.role.replace(/_/g, ' ')}
+                            </span>
+                            {actor.is_law_enforcement && (
+                              <span className="ext-badge ext-badge-law-enforcement">Law Enforcement</span>
+                            )}
+                          </div>
+                        </div>
+                        <span className="ext-actor-item-count">
+                          {actor.incident_count} incident{actor.incident_count !== 1 ? 's' : ''}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </>
           ) : (
-            <div className="empty-state">
+            <div className="ext-empty-state">
               <p>Select an event to view details</p>
             </div>
           )}
@@ -355,15 +438,15 @@ export function EventBrowser({ onRefresh }: EventBrowserProps) {
 
       {/* Create Event Modal */}
       {showCreateForm && (
-        <div className="modal-overlay" onClick={() => setShowCreateForm(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
+        <div className="ext-modal-overlay" onClick={() => setShowCreateForm(false)}>
+          <div className="ext-modal ext-modal-lg" onClick={(e) => e.stopPropagation()}>
+            <div className="ext-modal-header">
               <h3>Create Event</h3>
-              <button className="close-btn" onClick={() => setShowCreateForm(false)}>&times;</button>
+              <button className="ext-close-btn" onClick={() => setShowCreateForm(false)}>&times;</button>
             </div>
             <form onSubmit={handleCreateEvent}>
-              <div className="modal-body">
-                <div className="form-group">
+              <div className="ext-modal-body">
+                <div className="ext-form-group">
                   <label>Name *</label>
                   <input
                     type="text"
@@ -374,8 +457,8 @@ export function EventBrowser({ onRefresh }: EventBrowserProps) {
                   />
                 </div>
 
-                <div className="form-row">
-                  <div className="form-group">
+                <div className="ext-form-row">
+                  <div className="ext-form-group">
                     <label>Event Type</label>
                     <select
                       value={formData.event_type}
@@ -390,7 +473,7 @@ export function EventBrowser({ onRefresh }: EventBrowserProps) {
                       <option value="cluster">Incident Cluster</option>
                     </select>
                   </div>
-                  <div className="form-group">
+                  <div className="ext-form-group">
                     <label>Geographic Scope</label>
                     <select
                       value={formData.geographic_scope}
@@ -404,8 +487,8 @@ export function EventBrowser({ onRefresh }: EventBrowserProps) {
                   </div>
                 </div>
 
-                <div className="form-row">
-                  <div className="form-group">
+                <div className="ext-form-row">
+                  <div className="ext-form-group">
                     <label>Start Date *</label>
                     <input
                       type="date"
@@ -414,7 +497,7 @@ export function EventBrowser({ onRefresh }: EventBrowserProps) {
                       required
                     />
                   </div>
-                  <div className="form-group">
+                  <div className="ext-form-group">
                     <label>End Date</label>
                     <input
                       type="date"
@@ -424,8 +507,8 @@ export function EventBrowser({ onRefresh }: EventBrowserProps) {
                   </div>
                 </div>
 
-                <div className="form-group">
-                  <label className="checkbox-label">
+                <div className="ext-form-group">
+                  <label className="ext-checkbox-label">
                     <input
                       type="checkbox"
                       checked={formData.ongoing}
@@ -435,8 +518,8 @@ export function EventBrowser({ onRefresh }: EventBrowserProps) {
                   </label>
                 </div>
 
-                <div className="form-row">
-                  <div className="form-group">
+                <div className="ext-form-row">
+                  <div className="ext-form-group">
                     <label>Primary State</label>
                     <input
                       type="text"
@@ -445,7 +528,7 @@ export function EventBrowser({ onRefresh }: EventBrowserProps) {
                       placeholder="e.g. CO"
                     />
                   </div>
-                  <div className="form-group">
+                  <div className="ext-form-group">
                     <label>Primary City</label>
                     <input
                       type="text"
@@ -456,7 +539,7 @@ export function EventBrowser({ onRefresh }: EventBrowserProps) {
                   </div>
                 </div>
 
-                <div className="form-group">
+                <div className="ext-form-group">
                   <label>Description</label>
                   <textarea
                     value={formData.description}
@@ -465,7 +548,7 @@ export function EventBrowser({ onRefresh }: EventBrowserProps) {
                   />
                 </div>
 
-                <div className="form-group">
+                <div className="ext-form-group">
                   <label>Tags (comma-separated)</label>
                   <input
                     type="text"
@@ -475,11 +558,11 @@ export function EventBrowser({ onRefresh }: EventBrowserProps) {
                   />
                 </div>
               </div>
-              <div className="modal-footer">
-                <button type="button" className="action-btn" onClick={() => setShowCreateForm(false)}>
+              <div className="ext-modal-footer">
+                <button type="button" className="ext-btn ext-btn-secondary" onClick={() => setShowCreateForm(false)}>
                   Cancel
                 </button>
-                <button type="submit" className="action-btn primary" disabled={saving}>
+                <button type="submit" className="ext-btn ext-btn-primary" disabled={saving}>
                   {saving ? 'Creating...' : 'Create Event'}
                 </button>
               </div>
@@ -490,330 +573,89 @@ export function EventBrowser({ onRefresh }: EventBrowserProps) {
 
       {/* AI Suggestions Modal */}
       {showSuggestions && (
-        <div className="modal-overlay" onClick={() => setShowSuggestions(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h3>AI-Suggested Event Groupings</h3>
-              <button className="close-btn" onClick={() => setShowSuggestions(false)}>&times;</button>
+        <div className="ext-modal-overlay" onClick={() => setShowSuggestions(false)}>
+          <div className="ext-modal ext-modal-wide" onClick={(e) => e.stopPropagation()}>
+            <div className="ext-modal-header">
+              <h3>Event Cluster Suggestions</h3>
+              <button className="ext-close-btn" onClick={() => setShowSuggestions(false)}>&times;</button>
             </div>
-            <div className="modal-body">
+            <div className="ext-modal-body ext-suggestions-modal-list">
               {suggestions.map((suggestion, idx) => (
-                <div key={idx} className="suggestion-card">
-                  <div className="suggestion-header">
-                    <span className="suggestion-name">{suggestion.suggested_name}</span>
-                    <span className="suggestion-confidence">
-                      {(suggestion.confidence * 100).toFixed(0)}% confidence
+                <div key={idx} className="ext-suggestion-card-enhanced">
+                  <div className="ext-suggestion-header-enhanced">
+                    <div className="ext-suggestion-title-group">
+                      <span className="ext-suggestion-title-text">{suggestion.suggested_name}</span>
+                      <div className="ext-suggestion-badges-group">
+                        <span className={`ext-badge ext-badge-category-${suggestion.category}`}>
+                          {suggestion.category}
+                        </span>
+                        <span className="ext-badge ext-badge-type">
+                          {suggestion.incident_type.replace(/_/g, ' ')}
+                        </span>
+                      </div>
+                    </div>
+                    <span className={`ext-suggestion-confidence-enhanced ${suggestion.confidence >= 0.8 ? 'high' : suggestion.confidence >= 0.6 ? 'medium' : 'low'}`}>
+                      {(suggestion.confidence * 100).toFixed(0)}%
                     </span>
                   </div>
-                  <div className="suggestion-meta">
-                    <span>{suggestion.incident_count} incidents</span>
-                    {suggestion.state && <span>{suggestion.state}</span>}
-                    {suggestion.date && <span>{suggestion.date}</span>}
+                  <div className="ext-suggestion-meta-row">
+                    <span>
+                      <strong>{suggestion.incident_count}</strong> incidents
+                    </span>
+                    <span>
+                      {suggestion.primary_city ? `${suggestion.primary_city}, ` : ''}{suggestion.primary_state}
+                    </span>
+                    <span>
+                      {suggestion.start_date === suggestion.end_date
+                        ? suggestion.start_date
+                        : `${suggestion.start_date} → ${suggestion.end_date}`}
+                    </span>
                   </div>
-                  <button
-                    className="action-btn primary small"
-                    onClick={() => handleApplySuggestion(suggestion)}
-                    disabled={saving}
-                  >
-                    Create Event
-                  </button>
+                  {suggestion.reasoning && suggestion.reasoning.length > 0 && (
+                    <div className="ext-suggestion-reasoning-list">
+                      {suggestion.reasoning.map((reason, i) => (
+                        <span key={i} className="ext-reason-chip">{reason}</span>
+                      ))}
+                    </div>
+                  )}
+                  <div className="ext-suggestion-action-row">
+                    <button
+                      className="ext-btn ext-btn-primary"
+                      onClick={() => handleApplySuggestion(suggestion)}
+                      disabled={saving}
+                    >
+                      Create Event
+                    </button>
+                  </div>
                 </div>
               ))}
               {suggestions.length === 0 && (
-                <p className="no-data">No suggestions available</p>
+                <p className="ext-empty-state">No cluster suggestions found. Try adjusting the clustering settings or check that there are unlinked incidents.</p>
               )}
             </div>
           </div>
         </div>
       )}
 
-      <style>{`
-        .filter-bar {
-          display: flex;
-          gap: 1rem;
-          margin-bottom: 1rem;
-          align-items: center;
-        }
+      {/* Incident Detail Modal */}
+      {showIncidentDetail && selectedIncident && (
+        <div className="ext-modal-overlay" onClick={() => setShowIncidentDetail(false)}>
+          <div className="ext-modal ext-modal-wide" onClick={(e) => e.stopPropagation()}>
+            <div className="ext-modal-header">
+              <h3>Incident Details</h3>
+              <button className="ext-close-btn" onClick={() => setShowIncidentDetail(false)}>&times;</button>
+            </div>
+            <div className="ext-modal-body">
+              <IncidentDetailView
+                incident={selectedIncident}
+                showSource={true}
+                onClose={() => setShowIncidentDetail(false)}
+              />
+            </div>
+          </div>
+        </div>
+      )}
 
-        .filter-bar input[type="text"] {
-          padding: 0.5rem 1rem;
-          border-radius: 4px;
-          border: 1px solid var(--border-color);
-          background: var(--bg-secondary);
-          width: 200px;
-        }
-
-        .checkbox-label {
-          display: flex;
-          align-items: center;
-          gap: 0.5rem;
-          cursor: pointer;
-        }
-
-        .split-view {
-          display: grid;
-          grid-template-columns: 320px 1fr;
-          gap: 1rem;
-        }
-
-        .list-panel {
-          background: var(--bg-secondary);
-          border-radius: 8px;
-          overflow: hidden;
-        }
-
-        .list-header {
-          padding: 0.75rem 1rem;
-          border-bottom: 1px solid var(--border-color);
-        }
-
-        .list-items {
-          max-height: calc(100vh - 350px);
-          overflow-y: auto;
-        }
-
-        .list-item {
-          padding: 0.75rem 1rem;
-          cursor: pointer;
-          border-bottom: 1px solid var(--border-color);
-        }
-
-        .list-item:hover {
-          background: var(--bg-hover);
-        }
-
-        .list-item.selected {
-          background: var(--bg-active);
-          border-left: 3px solid var(--primary-color);
-        }
-
-        .item-title {
-          font-weight: 500;
-          margin-bottom: 0.25rem;
-        }
-
-        .item-meta {
-          display: flex;
-          gap: 0.5rem;
-          font-size: 0.75rem;
-          align-items: center;
-          flex-wrap: wrap;
-        }
-
-        .item-date {
-          font-size: 0.75rem;
-          color: var(--text-secondary);
-          margin-top: 0.25rem;
-        }
-
-        .incident-count {
-          color: var(--text-secondary);
-        }
-
-        .detail-panel {
-          background: var(--bg-secondary);
-          border-radius: 8px;
-          padding: 1rem;
-        }
-
-        .detail-header {
-          margin-bottom: 1rem;
-          padding-bottom: 1rem;
-          border-bottom: 1px solid var(--border-color);
-        }
-
-        .event-meta {
-          display: flex;
-          gap: 0.5rem;
-          align-items: center;
-          margin-top: 0.5rem;
-        }
-
-        .location {
-          color: var(--text-secondary);
-        }
-
-        .event-info {
-          margin-bottom: 1.5rem;
-        }
-
-        .info-row {
-          display: flex;
-          gap: 1rem;
-          margin-bottom: 0.5rem;
-        }
-
-        .info-row.full {
-          flex-direction: column;
-          gap: 0.25rem;
-        }
-
-        .info-row .label {
-          font-weight: 500;
-          min-width: 100px;
-        }
-
-        .ai-summary {
-          font-style: italic;
-          background: var(--bg-primary);
-          padding: 0.75rem;
-          border-radius: 6px;
-        }
-
-        .tags {
-          display: flex;
-          gap: 0.5rem;
-          flex-wrap: wrap;
-        }
-
-        .tag {
-          background: var(--bg-primary);
-          padding: 0.25rem 0.5rem;
-          border-radius: 4px;
-          font-size: 0.75rem;
-        }
-
-        .incidents-section h4 {
-          margin-bottom: 1rem;
-        }
-
-        .incidents-list {
-          display: flex;
-          flex-direction: column;
-          gap: 0.75rem;
-          max-height: 400px;
-          overflow-y: auto;
-        }
-
-        .incident-card {
-          background: var(--bg-primary);
-          padding: 0.75rem;
-          border-radius: 6px;
-          position: relative;
-        }
-
-        .incident-header {
-          display: flex;
-          gap: 0.75rem;
-          margin-bottom: 0.25rem;
-          align-items: center;
-        }
-
-        .incident-date {
-          font-weight: 500;
-        }
-
-        .incident-location {
-          color: var(--text-secondary);
-          font-size: 0.85rem;
-        }
-
-        .incident-type {
-          font-size: 0.85rem;
-          color: var(--text-secondary);
-        }
-
-        .incident-desc {
-          font-size: 0.8rem;
-          margin-top: 0.5rem;
-          color: var(--text-secondary);
-        }
-
-        .unlink-btn {
-          position: absolute;
-          top: 0.5rem;
-          right: 0.5rem;
-          font-size: 0.7rem;
-          padding: 0.25rem 0.5rem;
-          background: none;
-          border: 1px solid var(--border-color);
-          border-radius: 4px;
-          cursor: pointer;
-          color: var(--text-secondary);
-        }
-
-        .unlink-btn:hover {
-          background: var(--bg-hover);
-          color: #ef4444;
-          border-color: #ef4444;
-        }
-
-        .badge {
-          display: inline-block;
-          padding: 0.125rem 0.5rem;
-          border-radius: 4px;
-          font-size: 0.7rem;
-          text-transform: uppercase;
-        }
-
-        .badge.type {
-          background: #3b82f6;
-          color: white;
-        }
-
-        .badge.ongoing {
-          background: #22c55e;
-          color: white;
-        }
-
-        .badge.primary {
-          background: #f59e0b;
-          color: white;
-        }
-
-        .form-row {
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 1rem;
-        }
-
-        .suggestion-card {
-          background: var(--bg-primary);
-          padding: 1rem;
-          border-radius: 8px;
-          margin-bottom: 0.75rem;
-        }
-
-        .suggestion-header {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          margin-bottom: 0.5rem;
-        }
-
-        .suggestion-name {
-          font-weight: 500;
-        }
-
-        .suggestion-confidence {
-          font-size: 0.8rem;
-          color: var(--text-secondary);
-        }
-
-        .suggestion-meta {
-          display: flex;
-          gap: 1rem;
-          font-size: 0.85rem;
-          color: var(--text-secondary);
-          margin-bottom: 0.75rem;
-        }
-
-        .empty-state, .empty-list, .no-data {
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          height: 100px;
-          color: var(--text-secondary);
-        }
-
-        .error-banner {
-          background: #fee2e2;
-          color: #dc2626;
-          padding: 0.75rem 1rem;
-          border-radius: 6px;
-          margin-bottom: 1rem;
-        }
-      `}</style>
     </div>
   );
 }

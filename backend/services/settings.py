@@ -52,11 +52,36 @@ class PipelineSettings:
 
 
 @dataclass
+class EventClusteringSettings:
+    """Event clustering configuration settings."""
+    # Geographic settings
+    max_distance_km: float = 50.0  # Max km between incidents to cluster
+    require_coordinates: bool = False  # If false, falls back to city/state matching
+
+    # Temporal settings
+    max_time_window_days: int = 7  # Max days apart for incidents
+
+    # Matching criteria
+    require_same_incident_type: bool = True  # Must be same type (shooting, protest, etc.)
+    require_same_category: bool = True  # Must be same category (enforcement/crime)
+
+    # Cluster settings
+    min_cluster_size: int = 2  # Minimum incidents to form an event
+    min_confidence_threshold: float = 0.6  # Minimum confidence to suggest
+
+    # AI-assisted settings (for future)
+    enable_ai_similarity: bool = False  # Use LLM to compare descriptions
+    ai_similarity_threshold: float = 0.7  # Min similarity score from AI
+    enable_actor_matching: bool = True  # Consider shared actors
+
+
+@dataclass
 class AllSettings:
     """All application settings combined."""
     auto_approval: AutoApprovalSettings = field(default_factory=AutoApprovalSettings)
     duplicate_detection: DuplicateDetectionSettings = field(default_factory=DuplicateDetectionSettings)
     pipeline: PipelineSettings = field(default_factory=PipelineSettings)
+    event_clustering: EventClusteringSettings = field(default_factory=EventClusteringSettings)
 
 
 class SettingsService:
@@ -71,6 +96,7 @@ class SettingsService:
             'auto_approval': asdict(self._settings.auto_approval),
             'duplicate_detection': asdict(self._settings.duplicate_detection),
             'pipeline': asdict(self._settings.pipeline),
+            'event_clustering': asdict(self._settings.event_clustering),
         }
 
     def get_auto_approval(self) -> dict:
@@ -123,6 +149,19 @@ class SettingsService:
                 logger.info(f"Updated pipeline.{key} = {value}")
 
         return self.get_pipeline()
+
+    def get_event_clustering(self) -> dict:
+        """Get event clustering settings."""
+        return asdict(self._settings.event_clustering)
+
+    def update_event_clustering(self, config: dict) -> dict:
+        """Update event clustering settings."""
+        for key, value in config.items():
+            if hasattr(self._settings.event_clustering, key):
+                setattr(self._settings.event_clustering, key, value)
+                logger.info(f"Updated event_clustering.{key} = {value}")
+
+        return self.get_event_clustering()
 
 
 # Singleton instance

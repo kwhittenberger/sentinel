@@ -587,13 +587,64 @@ async def get_incidents(
 
 
 @app.get("/api/incidents/{incident_id}")
-def get_incident(incident_id: str):
+async def get_incident(incident_id: str):
     """Get a single incident by ID."""
+    if USE_DATABASE:
+        from backend.database import fetch
+        import uuid
+        try:
+            incident_uuid = uuid.UUID(incident_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid incident ID format")
+
+        query = """
+            SELECT i.*, it.name as incident_type, it.display_name as incident_type_display,
+                   sc.name as state_name
+            FROM incidents i
+            LEFT JOIN incident_types it ON i.incident_type_id = it.id
+            LEFT JOIN state_codes sc ON i.state = sc.code
+            WHERE i.id = $1
+        """
+        rows = await fetch(query, incident_uuid)
+        if not rows:
+            raise HTTPException(status_code=404, detail="Incident not found")
+
+        row = dict(rows[0])
+        # Convert UUID and date fields
+        row['id'] = str(row['id'])
+        if row.get('incident_type_id'):
+            row['incident_type_id'] = str(row['incident_type_id'])
+        if row.get('date'):
+            row['date'] = row['date'].isoformat()
+
+        # Fetch sources for this incident
+        sources_query = """
+            SELECT id, url, title, published_date, is_primary, created_at
+            FROM incident_sources
+            WHERE incident_id = $1
+            ORDER BY is_primary DESC, created_at ASC
+        """
+        source_rows = await fetch(sources_query, incident_uuid)
+        row['sources'] = [
+            {
+                'id': str(s['id']),
+                'url': s['url'],
+                'title': s.get('title'),
+                'published_date': s['published_date'].isoformat() if s.get('published_date') else None,
+                'is_primary': s.get('is_primary', False),
+                'created_at': s['created_at'].isoformat() if s.get('created_at') else None,
+            }
+            for s in source_rows
+        ]
+
+        return row
+
+    # Fallback to file-based
     incidents = load_incidents()
     for inc in incidents:
         if inc.get('id') == incident_id:
             return inc
-    return {"error": "Not found"}, 404
+    raise HTTPException(status_code=404, detail="Incident not found")
 
 
 @app.get("/api/stats")
@@ -1174,8 +1225,14 @@ async def get_queue_item(article_id: str):
 async def approve_article(
     article_id: str,
     overrides: Optional[dict] = Body(None),
+    force_create: bool = Body(False),
+    link_to_existing_id: Optional[str] = Body(None),
 ):
-    """Approve an article and create an incident."""
+    """Approve an article and create an incident with linked actors.
+
+    If link_to_existing_id is provided, links the article as an additional source
+    to the existing incident instead of creating a new one.
+    """
     import uuid
     from datetime import datetime
 
@@ -1183,6 +1240,7 @@ async def approve_article(
         return {"success": False, "error": "Database not enabled"}
 
     from backend.database import fetch, execute
+    from backend.services.duplicate_detection import find_duplicate_incident
 
     # Get the article
     query = "SELECT * FROM ingested_articles WHERE id = $1"
@@ -1191,6 +1249,7 @@ async def approve_article(
         return {"success": False, "error": "Article not found"}
 
     article = rows[0]
+
     extracted_data_raw = article.get("extracted_data") or {}
     # extracted_data might be the full result with nested extracted_data, or just the data
     if isinstance(extracted_data_raw, dict) and "extracted_data" in extracted_data_raw:
@@ -1201,6 +1260,70 @@ async def approve_article(
     # Apply overrides
     if overrides:
         extracted_data.update(overrides)
+
+    # Determine category from extraction
+    category = extracted_data_raw.get("category") or extracted_data.get("category") or "crime"
+
+    # If linking to existing incident, add as additional source
+    if link_to_existing_id:
+        existing_id = uuid.UUID(link_to_existing_id)
+
+        # Verify the incident exists
+        check_query = "SELECT id FROM incidents WHERE id = $1"
+        check_rows = await fetch(check_query, existing_id)
+        if not check_rows:
+            return {"success": False, "error": "Existing incident not found"}
+
+        # Add article as additional source
+        source_query = """
+            INSERT INTO incident_sources (incident_id, url, title, published_date, is_primary)
+            VALUES ($1, $2, $3, $4, false)
+            ON CONFLICT (incident_id, url) DO NOTHING
+        """
+        await execute(
+            source_query,
+            existing_id,
+            article.get("source_url"),
+            article.get("title"),
+            article.get("published_date")
+        )
+
+        # Mark article as processed
+        await execute(
+            "UPDATE ingested_articles SET status = 'linked', processed_at = NOW() WHERE id = $1",
+            uuid.UUID(article_id)
+        )
+
+        return {
+            "success": True,
+            "action": "linked_to_existing",
+            "incident_id": str(existing_id),
+            "message": "Article linked as additional source to existing incident"
+        }
+
+    # Check for duplicates using smart cross-source detection
+    if not force_create:
+        duplicate = await find_duplicate_incident(
+            extracted_data,
+            source_url=article.get("source_url"),
+            date_window_days=30,
+            name_threshold=0.7
+        )
+
+        if duplicate:
+            matched = duplicate.get('matched_incident', {})
+            return {
+                "success": False,
+                "error": "duplicate_detected",
+                "match_type": duplicate.get('match_type'),
+                "message": f"Duplicate detected: {duplicate.get('reason')}",
+                "confidence": duplicate.get('confidence'),
+                "existing_incident_id": duplicate.get('matched_id'),
+                "existing_date": matched.get('date'),
+                "existing_location": matched.get('location'),
+                "existing_name": matched.get('matched_name'),
+                "existing_source": matched.get('source_url'),
+            }
 
     # Create incident from extracted data
     incident_id = str(uuid.uuid4())
@@ -1229,23 +1352,29 @@ async def approve_article(
         incident_type_id = uuid_mod.uuid4()
         await execute(
             "INSERT INTO incident_types (id, name, category) VALUES ($1, $2, $3)",
-            incident_type_id, incident_type_name, "crime"
+            incident_type_id, incident_type_name, category
         )
+
+    # Determine outcome category
+    outcome_category = extracted_data.get("outcome_category")
+    if not outcome_category and extracted_data.get("involves_fatality"):
+        outcome_category = "death"
 
     insert_query = """
         INSERT INTO incidents (
             id, category, date, state, city, incident_type_id,
             description, source_url, source_tier, curation_status,
-            extraction_confidence, victim_name, victim_age,
+            extraction_confidence, victim_name, victim_age, victim_category,
+            outcome_category, offender_immigration_status,
             prior_deportations, gang_affiliated, created_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
         RETURNING id
     """
 
     await execute(
         insert_query,
         uuid.UUID(incident_id),
-        "crime",  # Default to crime category for new articles
+        category,
         incident_date,
         normalize_state(extracted_data.get("state")),
         extracted_data.get("city"),
@@ -1257,10 +1386,117 @@ async def approve_article(
         float(article["extraction_confidence"]) if article.get("extraction_confidence") else None,
         extracted_data.get("victim_name"),
         extracted_data.get("victim_age"),
+        extracted_data.get("victim_category"),
+        outcome_category,
+        extracted_data.get("offender_immigration_status"),
         extracted_data.get("prior_deportations", 0),
         extracted_data.get("gang_affiliated", False),
         datetime.utcnow()
     )
+
+    # Create actors from extracted data and link to incident
+    created_actors = []
+
+    # Helper function to create or find actor
+    async def create_or_find_actor(name: str, actor_type: str, role: str, **kwargs) -> Optional[str]:
+        """Create a new actor or find existing one, return actor_id."""
+        if not name or len(name.strip()) < 2:
+            return None
+
+        name = name.strip()
+
+        # Check for existing actor with similar name
+        search_query = """
+            SELECT id, canonical_name FROM actors
+            WHERE LOWER(canonical_name) = LOWER($1)
+               OR $1 = ANY(aliases)
+            LIMIT 1
+        """
+        existing = await fetch(search_query, name)
+
+        if existing:
+            actor_id = str(existing[0]["id"])
+        else:
+            # Create new actor
+            actor_id = str(uuid.uuid4())
+            insert_actor = """
+                INSERT INTO actors (
+                    id, canonical_name, actor_type, aliases,
+                    nationality, immigration_status, prior_deportations,
+                    is_law_enforcement, is_government_entity, confidence_score,
+                    created_at, updated_at
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
+            """
+            await execute(
+                insert_actor,
+                uuid.UUID(actor_id),
+                name,
+                actor_type,
+                [],  # aliases
+                kwargs.get("nationality"),
+                kwargs.get("immigration_status"),
+                kwargs.get("prior_deportations", 0),
+                kwargs.get("is_law_enforcement", False),
+                kwargs.get("is_government_entity", False),
+                0.7  # default confidence
+            )
+            created_actors.append({"id": actor_id, "name": name, "type": actor_type, "role": role})
+
+        # Link actor to incident
+        link_query = """
+            INSERT INTO incident_actors (id, incident_id, actor_id, role, created_at)
+            VALUES ($1, $2, $3, $4, NOW())
+            ON CONFLICT (incident_id, actor_id, role) DO NOTHING
+        """
+        await execute(
+            link_query,
+            uuid.uuid4(),
+            uuid.UUID(incident_id),
+            uuid.UUID(actor_id),
+            role
+        )
+
+        return actor_id
+
+    # Create offender actor (for crime incidents)
+    offender_name = extracted_data.get("offender_name")
+    if offender_name:
+        await create_or_find_actor(
+            offender_name,
+            "person",
+            "offender",
+            nationality=extracted_data.get("offender_nationality") or extracted_data.get("offender_country_of_origin"),
+            immigration_status=extracted_data.get("offender_immigration_status"),
+            prior_deportations=extracted_data.get("prior_deportations", 0),
+        )
+
+    # Create victim actor (for enforcement incidents)
+    victim_name = extracted_data.get("victim_name")
+    if victim_name and category == "enforcement":
+        await create_or_find_actor(
+            victim_name,
+            "person",
+            "victim",
+        )
+
+    # Create agency actor if mentioned
+    agency_name = extracted_data.get("agency")
+    if agency_name:
+        # Normalize common agency names
+        agency_map = {
+            "ICE": "U.S. Immigration and Customs Enforcement",
+            "CBP": "U.S. Customs and Border Protection",
+            "USCIS": "U.S. Citizenship and Immigration Services",
+        }
+        normalized_agency = agency_map.get(agency_name.upper(), agency_name)
+
+        await create_or_find_actor(
+            normalized_agency,
+            "agency",
+            "arresting_agency" if category == "crime" else "reporting_agency",
+            is_law_enforcement=True,
+            is_government_entity=True,
+        )
 
     # Update article status
     update_query = """
@@ -1270,7 +1506,26 @@ async def approve_article(
     """
     await execute(update_query, uuid.UUID(incident_id), datetime.utcnow(), uuid.UUID(article_id))
 
-    return {"success": True, "incident_id": incident_id}
+    # Add article as primary source in incident_sources
+    source_query = """
+        INSERT INTO incident_sources (incident_id, url, title, published_date, is_primary)
+        VALUES ($1, $2, $3, $4, true)
+        ON CONFLICT (incident_id, url) DO NOTHING
+    """
+    await execute(
+        source_query,
+        uuid.UUID(incident_id),
+        article.get("source_url"),
+        article.get("title"),
+        article.get("published_date")
+    )
+
+    return {
+        "success": True,
+        "incident_id": incident_id,
+        "actors_created": created_actors,
+        "category": category
+    }
 
 
 @app.post("/api/admin/queue/{article_id}/reject")
@@ -1614,6 +1869,20 @@ def update_settings_pipeline(config: dict = Body(...)):
     return get_settings_service().update_pipeline(config)
 
 
+@app.get("/api/admin/settings/event-clustering")
+def get_settings_event_clustering():
+    """Get event clustering settings."""
+    from backend.services import get_settings_service
+    return get_settings_service().get_event_clustering()
+
+
+@app.put("/api/admin/settings/event-clustering")
+def update_settings_event_clustering(config: dict = Body(...)):
+    """Update event clustering settings."""
+    from backend.services import get_settings_service
+    return get_settings_service().update_event_clustering(config)
+
+
 # =====================
 # Incident Browser Endpoints
 # =====================
@@ -1694,6 +1963,27 @@ async def admin_get_incident(incident_id: str):
         row = dict(rows[0])
         if row.get('date'):
             row['date'] = row['date'].isoformat()
+
+        # Fetch sources for this incident
+        sources_query = """
+            SELECT id, url, title, published_date, is_primary, created_at
+            FROM incident_sources
+            WHERE incident_id = $1
+            ORDER BY is_primary DESC, created_at ASC
+        """
+        source_rows = await fetch(sources_query, incident_uuid)
+        row['sources'] = [
+            {
+                'id': str(s['id']),
+                'url': s['url'],
+                'title': s.get('title'),
+                'published_date': s['published_date'].isoformat() if s.get('published_date') else None,
+                'is_primary': s.get('is_primary', False),
+                'created_at': s['created_at'].isoformat() if s.get('created_at') else None,
+            }
+            for s in source_rows
+        ]
+
         return row
     else:
         incidents = load_incidents()
@@ -2728,15 +3018,35 @@ async def list_events(
 
 
 @app.get("/api/events/suggestions")
-async def get_event_suggestions(limit: int = 10):
-    """Get AI-suggested event groupings."""
+async def get_event_suggestions(
+    limit: int = 20,
+    category: Optional[str] = Query(None, description="Filter by category (enforcement/crime)"),
+    state: Optional[str] = Query(None, description="Filter by state"),
+    date_start: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
+    date_end: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    exclude_linked: bool = Query(True, description="Exclude already-linked incidents"),
+):
+    """Get AI-suggested event groupings using smart clustering."""
     if not USE_DATABASE:
         raise HTTPException(status_code=501, detail="Database not enabled")
 
-    from backend.services.event_service import get_event_service
+    from backend.services.event_clustering import get_clustering_service
+    from datetime import date as date_type
 
-    event_service = get_event_service()
-    suggestions = await event_service.get_event_suggestions(limit=limit)
+    clustering_service = get_clustering_service()
+
+    # Parse dates if provided
+    start = date_type.fromisoformat(date_start) if date_start else None
+    end = date_type.fromisoformat(date_end) if date_end else None
+
+    suggestions = await clustering_service.generate_suggestions(
+        category=category,
+        state=state,
+        date_start=start,
+        date_end=end,
+        exclude_linked=exclude_linked,
+        limit=limit
+    )
     return suggestions
 
 
@@ -2782,6 +3092,9 @@ async def get_event(event_id: str, include_incidents: bool = True):
     if include_incidents:
         incidents = await event_service.get_event_incidents(event.id)
         result["incidents"] = incidents
+        # Also include actors for all incidents in this event
+        actors = await event_service.get_event_actors(event.id)
+        result["actors"] = actors
 
     return result
 
@@ -2900,8 +3213,15 @@ async def list_actors(
 
 
 @app.get("/api/actors/merge-suggestions")
-async def get_merge_suggestions(similarity_threshold: float = 0.7, limit: int = 20):
-    """Get suggestions for actors that might be duplicates."""
+async def get_merge_suggestions(similarity_threshold: float = 0.5, limit: int = 50):
+    """
+    Get suggestions for actors that might be duplicates.
+
+    Uses multiple matching strategies:
+    - Trigram similarity (pg_trgm)
+    - Name containment (e.g., "Alex Pretti" contained in "Alex Jeffrey Pretti")
+    - First/last name matching (handles middle name differences)
+    """
     if not USE_DATABASE:
         raise HTTPException(status_code=501, detail="Database not enabled")
 
@@ -2913,6 +3233,78 @@ async def get_merge_suggestions(similarity_threshold: float = 0.7, limit: int = 
         limit=limit,
     )
     return suggestions
+
+
+@app.get("/api/actors/{actor_id}/similar")
+async def get_similar_actors(actor_id: str, threshold: float = 0.4, limit: int = 10):
+    """Find actors similar to a specific actor."""
+    if not USE_DATABASE:
+        raise HTTPException(status_code=501, detail="Database not enabled")
+
+    from backend.database import fetch
+    import uuid
+
+    try:
+        actor_uuid = uuid.UUID(actor_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid actor ID")
+
+    # Get the actor's name
+    actor_row = await fetch("SELECT canonical_name, actor_type FROM actors WHERE id = $1", actor_uuid)
+    if not actor_row:
+        raise HTTPException(status_code=404, detail="Actor not found")
+
+    actor_name = actor_row[0]["canonical_name"]
+    actor_type = actor_row[0]["actor_type"]
+
+    # Find similar actors using multiple strategies
+    query = """
+        WITH target AS (
+            SELECT
+                $1::uuid as id,
+                $2::text as name,
+                split_part(lower($2), ' ', 1) as first_name,
+                split_part(lower($2), ' ', -1) as last_name
+        )
+        SELECT DISTINCT a.id, a.canonical_name,
+               GREATEST(
+                   similarity(a.canonical_name, t.name),
+                   CASE WHEN lower(a.canonical_name) LIKE '%' || lower(t.name) || '%'
+                        OR lower(t.name) LIKE '%' || lower(a.canonical_name) || '%'
+                   THEN 0.85 ELSE 0 END,
+                   CASE WHEN split_part(lower(a.canonical_name), ' ', 1) = t.first_name
+                        AND split_part(lower(a.canonical_name), ' ', -1) = t.last_name
+                        AND t.first_name != '' AND t.last_name != ''
+                   THEN 0.9 ELSE 0 END
+               ) as best_similarity
+        FROM actors a, target t
+        WHERE a.id != t.id
+          AND NOT a.is_merged
+          AND a.actor_type = $3
+          AND (
+              similarity(a.canonical_name, t.name) > $4
+              OR lower(a.canonical_name) LIKE '%' || lower(t.name) || '%'
+              OR lower(t.name) LIKE '%' || lower(a.canonical_name) || '%'
+              OR (
+                  split_part(lower(a.canonical_name), ' ', 1) = t.first_name
+                  AND split_part(lower(a.canonical_name), ' ', -1) = t.last_name
+                  AND length(t.first_name) > 2 AND length(t.last_name) > 2
+              )
+          )
+        ORDER BY best_similarity DESC
+        LIMIT $5
+    """
+
+    rows = await fetch(query, actor_uuid, actor_name, actor_type, threshold, limit)
+
+    return [
+        {
+            "id": str(row["id"]),
+            "canonical_name": row["canonical_name"],
+            "similarity": float(row["best_similarity"])
+        }
+        for row in rows
+    ]
 
 
 @app.post("/api/actors/merge")

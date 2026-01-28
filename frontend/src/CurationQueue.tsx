@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
-import type { CurationQueueItem, ExtractedIncidentData } from './types';
+import type { CurationQueueItem } from './types';
 import { SplitPane } from './SplitPane';
+import { IncidentDetailView } from './IncidentDetailView';
 
 const API_BASE = '/api';
 
@@ -77,16 +78,69 @@ export function CurationQueue({ onRefresh }: CurationQueueProps) {
     }
   };
 
-  const handleApprove = async (item: CurationQueueItem) => {
+  const handleApprove = async (
+    item: CurationQueueItem,
+    forceCreate: boolean = false,
+    linkToExistingId?: string
+  ) => {
     setProcessing(true);
+    setError(null);
     try {
       const overrides = editMode ? editData : undefined;
       const response = await fetch(`${API_BASE}/admin/queue/${item.id}/approve`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ overrides }),
+        body: JSON.stringify({
+          overrides,
+          force_create: forceCreate,
+          link_to_existing_id: linkToExistingId
+        }),
       });
-      if (!response.ok) throw new Error('Failed to approve');
+      const data = await response.json();
+
+      // Handle duplicate detection
+      if (data.error === 'duplicate_detected') {
+        const existingInfo = data.existing_location
+          ? `${data.existing_date || 'Unknown date'} in ${data.existing_location}`
+          : data.existing_date || 'Unknown';
+
+        const personInfo = data.existing_name
+          ? `\nMatched person: ${data.existing_name}`
+          : '';
+
+        const sourceInfo = data.existing_source
+          ? `\nOriginal source: ${data.existing_source.substring(0, 60)}...`
+          : '';
+
+        const confidenceInfo = data.confidence
+          ? `\nMatch confidence: ${(data.confidence * 100).toFixed(0)}%`
+          : '';
+
+        // Ask user what to do with duplicate
+        const choice = window.prompt(
+          `${data.message}${confidenceInfo}\n\n` +
+          `Existing incident: ${existingInfo}${personInfo}${sourceInfo}\n\n` +
+          `Choose action:\n` +
+          `1 = Link this article as additional source to existing incident (recommended)\n` +
+          `2 = Create new incident anyway\n` +
+          `(Cancel to do nothing)\n\n` +
+          `Enter 1 or 2:`
+        );
+
+        if (choice === '1' && data.existing_incident_id) {
+          // Link to existing incident
+          await handleApprove(item, false, data.existing_incident_id);
+        } else if (choice === '2') {
+          // Create new incident
+          await handleApprove(item, true);
+        }
+        return;
+      }
+
+      if (!data.success) {
+        throw new Error(data.error || 'Failed to approve');
+      }
+
       setItems(items.filter(i => i.id !== item.id));
       setSelectedItem(null);
       setEditMode(false);
@@ -366,21 +420,24 @@ export function CurationQueue({ onRefresh }: CurationQueueProps) {
                       </div>
                     </div>
                   </div>
-                ) : selectedItem.extracted_data && (
-                  <div className="detail-section">
-                    <h4>Extracted Data</h4>
-                    <ExtractionTable data={selectedItem.extracted_data} />
-                  </div>
-                )}
-
-                {selectedItem.content && (
-                  <div className="detail-section">
-                    <h4>Article Content</h4>
-                    <div className="article-content">
-                      {selectedItem.content.substring(0, 1000)}
-                      {selectedItem.content.length > 1000 && '...'}
-                    </div>
-                  </div>
+                ) : (
+                  <IncidentDetailView
+                    incident={{
+                      id: selectedItem.id,
+                      category: selectedItem.extracted_data?.category || 'crime',
+                      incident_type: selectedItem.extracted_data?.incident_type || 'unknown',
+                      date: selectedItem.extracted_data?.date || '',
+                      state: selectedItem.extracted_data?.state || '',
+                      source_url: selectedItem.source_url,
+                      source_name: selectedItem.source_name,
+                      tier: 3,
+                      is_non_immigrant: false,
+                      is_death: selectedItem.extracted_data?.involves_fatality || false,
+                    }}
+                    extractedData={selectedItem.extracted_data}
+                    articleContent={selectedItem.content}
+                    showSource={true}
+                  />
                 )}
 
                 <div className="detail-actions">
@@ -412,55 +469,6 @@ export function CurationQueue({ onRefresh }: CurationQueueProps) {
         )}
       </div>
     </div>
-  );
-}
-
-function ExtractionTable({ data }: { data: ExtractedIncidentData }) {
-  const getConfidenceColor = (confidence?: number): string => {
-    if (!confidence) return 'var(--text-muted, #888)';
-    if (confidence >= 0.8) return '#22c55e';
-    if (confidence >= 0.5) return '#eab308';
-    return '#ef4444';
-  };
-
-  const fields = [
-    { key: 'date', label: 'Date', confidence: data.date_confidence },
-    { key: 'state', label: 'State', confidence: data.state_confidence },
-    { key: 'city', label: 'City', confidence: data.city_confidence },
-    { key: 'incident_type', label: 'Incident Type', confidence: data.incident_type_confidence },
-    { key: 'victim_name', label: 'Victim Name', confidence: data.victim_name_confidence },
-    { key: 'victim_age', label: 'Victim Age' },
-    { key: 'offender_name', label: 'Offender Name' },
-    { key: 'description', label: 'Description' },
-    { key: 'outcome', label: 'Outcome' },
-    { key: 'immigration_status', label: 'Immigration Status' },
-    { key: 'prior_deportations', label: 'Prior Deportations' },
-    { key: 'gang_affiliated', label: 'Gang Affiliated' },
-  ];
-
-  return (
-    <table className="extraction-table">
-      <tbody>
-        {fields.map(field => {
-          const value = data[field.key as keyof ExtractedIncidentData];
-          if (value === undefined || value === null || value === '') return null;
-
-          return (
-            <tr key={field.key}>
-              <td className="field-label">{field.label}</td>
-              <td className="field-value">
-                {typeof value === 'boolean' ? (value ? 'Yes' : 'No') : String(value)}
-              </td>
-              {'confidence' in field && field.confidence !== undefined && (
-                <td className="field-confidence" style={{ color: getConfidenceColor(field.confidence) }}>
-                  {(field.confidence * 100).toFixed(0)}%
-                </td>
-              )}
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
   );
 }
 

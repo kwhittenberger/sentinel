@@ -552,40 +552,132 @@ class ActorService:
 
     async def get_merge_suggestions(
         self,
-        similarity_threshold: float = 0.7,
-        limit: int = 20
+        similarity_threshold: float = 0.5,
+        limit: int = 50
     ) -> List[Dict]:
-        """Get suggestions for actors that might be the same entity."""
+        """
+        Get suggestions for actors that might be the same entity.
+
+        Uses multiple matching strategies:
+        1. Trigram similarity (pg_trgm)
+        2. Name containment (one name contains the other)
+        3. First/last name matching
+        """
         from backend.database import fetch
 
-        # Find actors with similar names
-        query = """
+        # Strategy 1: Trigram similarity
+        query_similarity = """
             SELECT a1.id as actor1_id, a1.canonical_name as actor1_name,
                    a2.id as actor2_id, a2.canonical_name as actor2_name,
-                   similarity(a1.canonical_name, a2.canonical_name) as similarity
+                   similarity(a1.canonical_name, a2.canonical_name) as similarity,
+                   'trigram' as match_type
             FROM actors a1
-            JOIN actors a2 ON a1.id < a2.id  -- Avoid duplicates
+            JOIN actors a2 ON a1.id < a2.id
             WHERE NOT a1.is_merged AND NOT a2.is_merged
               AND a1.actor_type = a2.actor_type
               AND similarity(a1.canonical_name, a2.canonical_name) > $1
-            ORDER BY similarity DESC
-            LIMIT $2
         """
 
-        rows = await fetch(query, similarity_threshold, limit)
+        # Strategy 2: Name containment (short name contained in long name)
+        query_containment = """
+            SELECT a1.id as actor1_id, a1.canonical_name as actor1_name,
+                   a2.id as actor2_id, a2.canonical_name as actor2_name,
+                   CASE
+                       WHEN length(a1.canonical_name) <= length(a2.canonical_name)
+                       THEN length(a1.canonical_name)::float / length(a2.canonical_name)
+                       ELSE length(a2.canonical_name)::float / length(a1.canonical_name)
+                   END as similarity,
+                   'containment' as match_type
+            FROM actors a1
+            JOIN actors a2 ON a1.id < a2.id
+            WHERE NOT a1.is_merged AND NOT a2.is_merged
+              AND a1.actor_type = a2.actor_type
+              AND a1.actor_type = 'person'
+              AND (
+                  lower(a2.canonical_name) LIKE '%' || lower(a1.canonical_name) || '%'
+                  OR lower(a1.canonical_name) LIKE '%' || lower(a2.canonical_name) || '%'
+              )
+              AND length(a1.canonical_name) >= 5  -- Avoid very short matches
+              AND length(a2.canonical_name) >= 5
+        """
 
+        # Strategy 3: First and last name match (handles middle name differences)
+        query_first_last = """
+            WITH name_parts AS (
+                SELECT
+                    id,
+                    canonical_name,
+                    actor_type,
+                    split_part(lower(canonical_name), ' ', 1) as first_name,
+                    split_part(lower(canonical_name), ' ', -1) as last_name,
+                    array_length(string_to_array(canonical_name, ' '), 1) as name_parts
+                FROM actors
+                WHERE NOT is_merged AND actor_type = 'person'
+            )
+            SELECT
+                n1.id as actor1_id, n1.canonical_name as actor1_name,
+                n2.id as actor2_id, n2.canonical_name as actor2_name,
+                0.85 as similarity,
+                'first_last' as match_type
+            FROM name_parts n1
+            JOIN name_parts n2 ON n1.id < n2.id
+            WHERE n1.first_name = n2.first_name
+              AND n1.last_name = n2.last_name
+              AND n1.first_name != ''
+              AND n1.last_name != ''
+              AND n1.name_parts != n2.name_parts  -- Different number of parts
+              AND length(n1.first_name) > 2
+              AND length(n1.last_name) > 2
+        """
+
+        # Execute all queries
+        rows_similarity = await fetch(query_similarity, similarity_threshold)
+        rows_containment = await fetch(query_containment)
+        rows_first_last = await fetch(query_first_last)
+
+        # Combine and deduplicate
+        seen_pairs = set()
         suggestions = []
-        for row in rows:
+
+        def add_suggestion(row, reason_prefix):
+            pair_key = tuple(sorted([str(row["actor1_id"]), str(row["actor2_id"])]))
+            if pair_key in seen_pairs:
+                return
+            seen_pairs.add(pair_key)
+
+            match_type = row.get("match_type", "trigram")
+            if match_type == "containment":
+                reason = f"Name containment match"
+            elif match_type == "first_last":
+                reason = f"First/last name match (possible middle name difference)"
+            else:
+                reason = f"Name similarity: {row['similarity']:.0%}"
+
             suggestions.append({
                 "actor1_id": str(row["actor1_id"]),
                 "actor1_name": row["actor1_name"],
                 "actor2_id": str(row["actor2_id"]),
                 "actor2_name": row["actor2_name"],
                 "similarity": float(row["similarity"]),
-                "reason": f"Name similarity: {row['similarity']:.0%}"
+                "reason": reason,
+                "match_type": match_type
             })
 
-        return suggestions
+        # First/last name matches are highest confidence for this use case
+        for row in rows_first_last:
+            add_suggestion(row, "first_last")
+
+        # Then containment matches
+        for row in rows_containment:
+            add_suggestion(row, "containment")
+
+        # Then trigram similarity
+        for row in rows_similarity:
+            add_suggestion(row, "trigram")
+
+        # Sort by similarity descending and limit
+        suggestions.sort(key=lambda x: (-x["similarity"], x["actor1_name"]))
+        return suggestions[:limit]
 
     async def merge_actors(
         self,
