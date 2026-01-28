@@ -1,15 +1,25 @@
 """
 Auto-approval service for evaluating articles.
 Supports category-specific approval thresholds for enforcement vs crime incidents.
+Now integrates with IncidentTypeService for database-backed thresholds when available.
 """
 
 import logging
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, List, Literal
+from uuid import UUID
 
 logger = logging.getLogger(__name__)
 
 IncidentCategory = Literal['enforcement', 'crime']
+
+# Import IncidentTypeService for database-backed thresholds (optional)
+try:
+    from .incident_type_service import get_incident_type_service, IncidentTypeService
+    INCIDENT_TYPE_SERVICE_AVAILABLE = True
+except ImportError:
+    INCIDENT_TYPE_SERVICE_AVAILABLE = False
+    IncidentTypeService = None
 
 
 @dataclass
@@ -105,18 +115,111 @@ def get_crime_severity(incident_type: str) -> int:
 class AutoApprovalService:
     """Service for evaluating articles for auto-approval."""
 
-    def __init__(self, config: ApprovalConfig = None):
+    def __init__(self, config: ApprovalConfig = None, use_db_thresholds: bool = True):
         self.config = config or DEFAULT_CONFIG
+        self.use_db_thresholds = use_db_thresholds and INCIDENT_TYPE_SERVICE_AVAILABLE
         self._category_configs: Dict[str, ApprovalConfig] = {
             'enforcement': ENFORCEMENT_CONFIG,
             'crime': CRIME_CONFIG,
         }
+        self._db_pool = None
+        self._type_service: Optional[IncidentTypeService] = None
+        self._type_threshold_cache: Dict[str, ApprovalConfig] = {}
+
+    def set_db_pool(self, pool):
+        """Set database pool for IncidentTypeService integration."""
+        self._db_pool = pool
+        if self.use_db_thresholds and INCIDENT_TYPE_SERVICE_AVAILABLE:
+            self._type_service = get_incident_type_service(pool)
+
+    async def _get_db_config_for_type(self, incident_type_id: UUID) -> Optional[ApprovalConfig]:
+        """Get approval config from database for a specific incident type."""
+        if not self._type_service:
+            return None
+
+        cache_key = str(incident_type_id)
+        if cache_key in self._type_threshold_cache:
+            return self._type_threshold_cache[cache_key]
+
+        try:
+            thresholds = await self._type_service.get_approval_thresholds(incident_type_id)
+            if thresholds:
+                config = ApprovalConfig(
+                    min_confidence_auto_approve=thresholds.get('min_confidence_auto_approve', 0.85),
+                    min_confidence_review=thresholds.get('min_confidence_review', 0.5),
+                    auto_reject_below=thresholds.get('auto_reject_below', 0.3),
+                    required_fields=thresholds.get('required_fields', ['date', 'state', 'incident_type']),
+                    field_confidence_threshold=thresholds.get('field_confidence_threshold', 0.7),
+                    min_severity_auto_approve=thresholds.get('min_severity_auto_approve', 5),
+                    max_severity_auto_reject=thresholds.get('max_severity_auto_reject', 2),
+                    enable_auto_approve=thresholds.get('enable_auto_approve', True),
+                    enable_auto_reject=thresholds.get('enable_auto_reject', True),
+                )
+                self._type_threshold_cache[cache_key] = config
+                return config
+        except Exception as e:
+            logger.warning(f"Failed to get thresholds from database: {e}")
+
+        return None
 
     def get_config_for_category(self, category: Optional[str]) -> ApprovalConfig:
         """Get the appropriate config for a category."""
         if category and category in self._category_configs:
             return self._category_configs[category]
         return self.config
+
+    async def get_config_for_type_async(
+        self,
+        incident_type_id: Optional[UUID] = None,
+        category: Optional[str] = None
+    ) -> ApprovalConfig:
+        """Get config, preferring database-backed thresholds if available."""
+        # First try database config for specific type
+        if incident_type_id and self._type_service:
+            db_config = await self._get_db_config_for_type(incident_type_id)
+            if db_config:
+                return db_config
+
+        # Fall back to category-based config
+        return self.get_config_for_category(category)
+
+    async def evaluate_async(
+        self,
+        article: dict,
+        extraction_result: Optional[dict] = None,
+        category: Optional[str] = None,
+        incident_type_id: Optional[UUID] = None,
+    ) -> ApprovalDecision:
+        """
+        Async version that can use database-backed thresholds.
+
+        Args:
+            article: The article/incident data
+            extraction_result: LLM extraction result if available
+            category: Optional incident category
+            incident_type_id: Optional incident type ID for type-specific thresholds
+
+        Returns:
+            ApprovalDecision with decision and reasoning
+        """
+        details = {}
+
+        # Get extraction data
+        extracted = extraction_result or article.get('extracted_data') or {}
+        confidence = extracted.get('overall_confidence', 0.0)
+        details['extraction_confidence'] = confidence
+
+        # Determine category
+        detected_category = category or extracted.get('category') or article.get('category')
+        details['category'] = detected_category
+
+        # Get config (prefer database-backed if available)
+        config = await self.get_config_for_type_async(incident_type_id, detected_category)
+        details['config_source'] = 'database' if incident_type_id and self._type_service else 'static'
+        details['config_used'] = str(incident_type_id) if incident_type_id else (detected_category or 'default')
+
+        # Delegate to common evaluation logic
+        return self._evaluate_with_config(article, extracted, confidence, config, details)
 
     def evaluate(
         self,
@@ -147,6 +250,20 @@ class AutoApprovalService:
         config = self.get_config_for_category(detected_category)
         details['category'] = detected_category
         details['config_used'] = detected_category or 'default'
+        details['config_source'] = 'static'
+
+        return self._evaluate_with_config(article, extracted, confidence, config, details)
+
+    def _evaluate_with_config(
+        self,
+        article: dict,
+        extracted: dict,
+        confidence: float,
+        config: ApprovalConfig,
+        details: dict,
+    ) -> ApprovalDecision:
+        """Common evaluation logic used by both sync and async methods."""
+        detected_category = details.get('category')
 
         # Check if below reject threshold
         if confidence < config.auto_reject_below:

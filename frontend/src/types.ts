@@ -29,6 +29,7 @@ export interface Incident {
   category: IncidentCategory;
   date: string;
   state: string;
+  state_name?: string;
   city?: string;
   incident_type: string;
   victim_category?: VictimCategory;
@@ -364,4 +365,237 @@ export interface AISuggestion {
   confidence: number;
   suggestion: unknown;
   reason: string;
+}
+
+// =====================
+// Extensible System Types
+// =====================
+
+// Incident Types
+export type FieldType = 'string' | 'text' | 'integer' | 'decimal' | 'boolean' | 'date' | 'datetime' | 'enum' | 'array' | 'reference';
+
+export interface FieldDefinition {
+  id: string;
+  name: string;
+  display_name: string;
+  field_type: FieldType;
+  description?: string;
+  required: boolean;
+  enum_values?: string[];
+  extraction_hint?: string;
+  display_order: number;
+  show_in_list: boolean;
+  show_in_detail: boolean;
+}
+
+export interface IncidentType {
+  id: string;
+  name: string;
+  slug: string;
+  display_name: string;
+  description?: string;
+  category: IncidentCategory;
+  icon?: string;
+  color?: string;
+  is_active: boolean;
+  severity_weight: number;
+  approval_thresholds?: Record<string, number>;
+  validation_rules?: unknown[];
+  fields?: FieldDefinition[];
+  pipeline_config?: PipelineStageConfig[];
+}
+
+export interface PipelineStageConfig {
+  id: string;
+  stage_id: string;
+  enabled: boolean;
+  execution_order?: number;
+  stage_config: Record<string, unknown>;
+}
+
+export interface PipelineStage {
+  id: string;
+  name: string;
+  slug: string;
+  description?: string;
+  default_order: number;
+  is_active: boolean;
+}
+
+// Prompts
+export type PromptType = 'extraction' | 'classification' | 'entity_resolution' | 'pattern_detection' | 'summarization' | 'analysis';
+export type PromptStatus = 'draft' | 'active' | 'testing' | 'deprecated' | 'archived';
+
+export interface Prompt {
+  id: string;
+  name: string;
+  slug: string;
+  description?: string;
+  prompt_type: PromptType;
+  incident_type_id?: string;
+  system_prompt: string;
+  user_prompt_template: string;
+  output_schema?: Record<string, unknown>;
+  version: number;
+  status: PromptStatus;
+  model_name: string;
+  max_tokens: number;
+  temperature: number;
+  traffic_percentage: number;
+  ab_test_group?: string;
+  created_at: string;
+  activated_at?: string;
+  version_history?: PromptVersion[];
+}
+
+export interface PromptVersion {
+  id: string;
+  version: number;
+  status: PromptStatus;
+  created_at: string;
+}
+
+export interface PromptExecutionStats {
+  total_executions: number;
+  successful: number;
+  failed: number;
+  success_rate: number;
+  avg_latency_ms?: number;
+  avg_input_tokens?: number;
+  avg_output_tokens?: number;
+  avg_confidence?: number;
+}
+
+// Events
+export interface Event {
+  id: string;
+  name: string;
+  slug?: string;
+  description?: string;
+  event_type?: string;
+  start_date: string;
+  end_date?: string;
+  ongoing: boolean;
+  primary_state?: string;
+  primary_city?: string;
+  geographic_scope?: string;
+  latitude?: number;
+  longitude?: number;
+  ai_summary?: string;
+  tags: string[];
+  incident_count: number;
+  incidents?: EventIncident[];
+}
+
+export interface EventIncident {
+  incident_id: string;
+  date?: string;
+  state?: string;
+  city?: string;
+  category?: string;
+  incident_type?: string;
+  description?: string;
+  is_primary_event?: boolean;
+  sequence_number?: number;
+}
+
+export interface EventSuggestion {
+  type: string;
+  date?: string;
+  state?: string;
+  incident_count: number;
+  incident_ids: string[];
+  suggested_name: string;
+  confidence: number;
+}
+
+// Actors
+export type ActorType = 'person' | 'organization' | 'agency' | 'group';
+export type ActorRole = 'victim' | 'offender' | 'witness' | 'officer' | 'arresting_agency' | 'reporting_agency' | 'bystander' | 'organizer' | 'participant';
+export type ActorRelationType = 'alias_of' | 'member_of' | 'affiliated_with' | 'employed_by' | 'family_of' | 'associated_with';
+
+export interface Actor {
+  id: string;
+  canonical_name: string;
+  actor_type: ActorType;
+  aliases: string[];
+  date_of_birth?: string;
+  date_of_death?: string;
+  gender?: string;
+  nationality?: string;
+  immigration_status?: string;
+  prior_deportations: number;
+  organization_type?: string;
+  is_government_entity: boolean;
+  is_law_enforcement: boolean;
+  jurisdiction?: string;
+  description?: string;
+  confidence_score?: number;
+  incident_count: number;
+  roles_played: string[];
+  incidents?: ActorIncident[];
+  relations?: ActorRelation[];
+}
+
+export interface ActorIncident {
+  incident_id: string;
+  date?: string;
+  state?: string;
+  city?: string;
+  category?: string;
+  incident_type?: string;
+  description?: string;
+  role: ActorRole;
+}
+
+export interface ActorRelation {
+  id: string;
+  related_actor_id: string;
+  relation_type: ActorRelationType;
+  confidence?: number;
+}
+
+export interface ActorMergeSuggestion {
+  actor1_id: string;
+  actor1_name: string;
+  actor2_id: string;
+  actor2_name: string;
+  similarity: number;
+  reason: string;
+}
+
+// Pipeline Execution
+export interface PipelineExecutionResult {
+  success: boolean;
+  article_id?: string;
+  stages_completed: string[];
+  final_decision?: string;
+  decision_reason?: string;
+  total_duration_ms: number;
+  error?: string;
+  context?: {
+    detected_category?: string;
+    detected_actors: DetectedActor[];
+    detected_relations: DetectedRelation[];
+    validation_errors: string[];
+  };
+}
+
+export interface DetectedActor {
+  actor_id?: string;
+  canonical_name?: string;
+  extracted_name: string;
+  role: ActorRole;
+  match_type: 'existing' | 'created' | 'pending';
+  similarity?: number;
+  confidence?: number;
+}
+
+export interface DetectedRelation {
+  type: string;
+  incident_id?: string;
+  event_id?: string;
+  relation_type?: string;
+  reason?: string;
+  match_score?: number;
 }

@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { MapContainer, TileLayer, CircleMarker, Tooltip, useMap } from 'react-leaflet';
 import MarkerClusterGroup from 'react-leaflet-cluster';
 import 'leaflet/dist/leaflet.css';
-import type { Incident, Stats, Filters } from './types';
+import type { Incident, Stats, Filters, IncidentType } from './types';
 import { fetchIncidents, fetchStats, fetchQueueStats } from './api';
 import { Charts } from './Charts';
 import { HeatmapLayer } from './HeatmapLayer';
@@ -75,6 +75,7 @@ function App() {
   const [queueStats, setQueueStats] = useState<QueueStats | null>(null);
   const [searchText, setSearchText] = useState('');
   const [incidentTypeFilter, setIncidentTypeFilter] = useState('');
+  const [incidentTypes, setIncidentTypes] = useState<IncidentType[]>([]);
   const [sortBy, setSortBy] = useState<'date-desc' | 'date-asc' | 'state' | 'type' | 'deaths-first'>('date-desc');
   const [timelineEnabled, setTimelineEnabled] = useState(false);
   const [timelineDate, setTimelineDate] = useState<string | null>(null);
@@ -144,6 +145,33 @@ function App() {
   useEffect(() => {
     fetchQueueStats().then(setQueueStats).catch(() => {});
   }, []);
+
+  // Load incident types for display names
+  useEffect(() => {
+    fetch('/api/admin/types')
+      .then(res => res.json())
+      .then(setIncidentTypes)
+      .catch(() => {});
+  }, []);
+
+  // Helper to get display name for incident type
+  const getTypeDisplayName = useCallback((typeName: string | undefined): string => {
+    if (!typeName) return '';
+    const typeInfo = incidentTypes.find(t => t.name === typeName || t.slug === typeName);
+    return typeInfo?.display_name || typeName.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  }, [incidentTypes]);
+
+  // Helper to get color for incident type
+  const getTypeColor = useCallback((typeName: string | undefined): string | undefined => {
+    if (!typeName) return undefined;
+    const typeInfo = incidentTypes.find(t => t.name === typeName || t.slug === typeName);
+    return typeInfo?.color || undefined;
+  }, [incidentTypes]);
+
+  // Helper to get display state name (full name if available, otherwise abbreviation)
+  const getStateDisplayName = (incident: Incident): string => {
+    return incident.state_name || incident.state || 'Unknown';
+  };
 
   // Keyboard navigation
   useEffect(() => {
@@ -361,9 +389,9 @@ function App() {
     const rows = incidentsToExport.map(i => [
       i.id,
       i.date || '',
-      i.state || '',
+      getStateDisplayName(i),
       i.city || '',
-      i.incident_type || '',
+      getTypeDisplayName(i.incident_type),
       i.victim_name || '',
       i.victim_category || '',
       i.outcome_category || '',
@@ -482,21 +510,21 @@ function App() {
         </div>
 
         {/* Date range filter */}
-        <div className="filter-group">
-          <label>Date Range</label>
-          <div className="date-range">
+        <div style={{ marginBottom: '16px', width: '100%' }}>
+          <div style={{ fontSize: '12px', fontWeight: 500, color: 'var(--text-secondary)', marginBottom: '6px' }}>Date Range</div>
+          <div style={{ display: 'flex', gap: '6px', alignItems: 'center', width: '100%', paddingRight: '8px', boxSizing: 'border-box' }}>
             <input
               type="date"
               value={filters.date_start || ''}
               onChange={(e) => setFilters({ ...filters, date_start: e.target.value || undefined })}
-              className="date-input"
+              style={{ flex: 1, padding: '6px 8px', fontSize: '12px', border: '1px solid var(--border-color)', borderRadius: '4px', background: 'var(--bg-input)', color: 'var(--text-primary)', minWidth: 0 }}
             />
-            <span className="date-separator">to</span>
+            <span style={{ color: 'var(--text-secondary)', fontSize: '12px' }}>to</span>
             <input
               type="date"
               value={filters.date_end || ''}
               onChange={(e) => setFilters({ ...filters, date_end: e.target.value || undefined })}
-              className="date-input"
+              style={{ flex: 1, padding: '6px 8px', fontSize: '12px', border: '1px solid var(--border-color)', borderRadius: '4px', background: 'var(--bg-input)', color: 'var(--text-primary)', minWidth: 0 }}
             />
           </div>
         </div>
@@ -505,6 +533,13 @@ function App() {
         {(() => {
           // Get states from current incidents (respects tier/other filters)
           const availableStates = [...new Set(incidents.map(i => i.state).filter(Boolean))].sort();
+          // Build state code -> name lookup from incidents
+          const stateNameMap: Record<string, string> = {};
+          incidents.forEach(i => {
+            if (i.state && i.state_name) {
+              stateNameMap[i.state] = i.state_name;
+            }
+          });
           return (
             <div className="filter-group">
               <label>State ({availableStates.length})</label>
@@ -514,8 +549,8 @@ function App() {
                   const state = e.target.value;
                   setFilters({ ...filters, states: state ? [state] : [] });
                   // Zoom to state if we have coordinates for it
-                  if (state && STATE_CENTERS[state]) {
-                    setCustomView(STATE_CENTERS[state]);
+                  if (state && STATE_CENTERS[stateNameMap[state] || state]) {
+                    setCustomView(STATE_CENTERS[stateNameMap[state] || state]);
                   } else if (state) {
                     // Zoom to state center based on incidents
                     const stateIncidents = incidents.filter(i => i.state === state && i.lat && i.lon);
@@ -533,7 +568,7 @@ function App() {
                 <option value="">All States</option>
                 {availableStates.map((state) => (
                   <option key={state} value={state}>
-                    {state}
+                    {stateNameMap[state] || state}
                   </option>
                 ))}
               </select>
@@ -544,7 +579,7 @@ function App() {
         {/* City breakdown for selected state */}
         {filters.states.length === 1 && (
           <div className="filter-group">
-            <label>Cities in {filters.states[0]}</label>
+            <label>Cities in {incidents.find(i => i.state === filters.states[0])?.state_name || filters.states[0]}</label>
             <div className="city-list">
               {(() => {
                 const cities = incidents
@@ -585,8 +620,8 @@ function App() {
 
         {/* Incident List */}
         {(() => {
-          // Get unique incident types
-          const incidentTypes = [...new Set(incidents.map(i => i.incident_type).filter(Boolean))].sort();
+          // Get unique incident type names from data
+          const uniqueTypeNames = [...new Set(incidents.map(i => i.incident_type).filter(Boolean))].sort();
 
           // Filter incidents by search and type
           let filteredIncidents = incidents.filter(incident => {
@@ -655,8 +690,8 @@ function App() {
                     className="type-filter"
                   >
                     <option value="">All Types</option>
-                    {incidentTypes.map(type => (
-                      <option key={type} value={type}>{type}</option>
+                    {uniqueTypeNames.map(type => (
+                      <option key={type} value={type}>{getTypeDisplayName(type)}</option>
                     ))}
                   </select>
                   <select
@@ -687,13 +722,13 @@ function App() {
                     }}
                   >
                     <div className="incident-list-location">
-                      {incident.city}, {incident.state}
+                      {incident.city}, {getStateDisplayName(incident)}
                     </div>
                     {incident.victim_name && (
                       <div className="incident-list-name">{incident.victim_name}</div>
                     )}
                     <div className="incident-list-meta">
-                      {formatDate(incident.date)} · {incident.incident_type}
+                      {formatDate(incident.date)} · {getTypeDisplayName(incident.incident_type)}
                       {incident.linked_ids && incident.linked_ids.length > 0 && (
                         <span className="linked-badge" title={`${incident.linked_ids.length} related report(s)`}>
                           +{incident.linked_ids.length}
@@ -714,7 +749,7 @@ function App() {
         {selectedIncident ? (
           <div className="incident-detail">
             <h3>
-              {selectedIncident.city}, {selectedIncident.state}
+              {selectedIncident.city}, {getStateDisplayName(selectedIncident)}
             </h3>
             {selectedIncident.victim_name && <p className="victim-name">{selectedIncident.victim_name}</p>}
 
@@ -724,7 +759,9 @@ function App() {
             </div>
             <div className="detail-row">
               <span className="label">Type:</span>
-              <span>{selectedIncident.incident_type}</span>
+              <span style={{ color: getTypeColor(selectedIncident.incident_type) }}>
+                {getTypeDisplayName(selectedIncident.incident_type)}
+              </span>
             </div>
             <div className="detail-row">
               <span className="label">Category:</span>
@@ -965,7 +1002,7 @@ function App() {
                         }}
                       >
                         <Tooltip>
-                          <strong>{incident.city}, {incident.state}</strong>
+                          <strong>{incident.city}, {getStateDisplayName(incident)}</strong>
                           {incident.victim_name && (
                             <>
                               <br />
@@ -973,7 +1010,7 @@ function App() {
                             </>
                           )}
                           <br />
-                          {incident.incident_type}
+                          {getTypeDisplayName(incident.incident_type)}
                           <br />
                           {formatDate(incident.date)}
                         </Tooltip>
@@ -994,7 +1031,7 @@ function App() {
         {viewTab === 'streetview' && adminPanel === 'none' && selectedIncident?.lat && selectedIncident?.lon && (
           <div className="street-view-container">
             <div className="street-view-info">
-              <span>{selectedIncident.city}, {selectedIncident.state}</span>
+              <span>{selectedIncident.city}, {getStateDisplayName(selectedIncident)}</span>
               <a
                 href={`https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${selectedIncident.lat},${selectedIncident.lon}`}
                 target="_blank"

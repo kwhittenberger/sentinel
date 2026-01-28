@@ -47,6 +47,18 @@
 .admin-nav-items {
   padding: 8px;
   flex: 1;
+  overflow-y: auto;
+}
+
+.admin-nav-divider {
+  padding: 16px 12px 8px 12px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  font-weight: 600;
+  border-top: 1px solid var(--border-color);
+  margin-top: 8px;
 }
 
 .admin-nav-item {

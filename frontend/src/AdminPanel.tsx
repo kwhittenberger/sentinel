@@ -15,9 +15,13 @@ import { JobManager } from './JobManager';
 import { AnalyticsDashboard } from './AnalyticsDashboard';
 import { BatchProcessing } from './BatchProcessing';
 import { CurationQueue } from './CurationQueue';
+import { IncidentTypeManager } from './IncidentTypeManager';
+import { PromptManager } from './PromptManager';
+import { EventBrowser } from './EventBrowser';
+import { ActorBrowser } from './ActorBrowser';
 import './AdminPanel.css';
 
-type AdminView = 'dashboard' | 'queue' | 'batch' | 'pipeline' | 'sources' | 'incidents' | 'jobs' | 'analytics' | 'settings';
+type AdminView = 'dashboard' | 'queue' | 'batch' | 'pipeline' | 'sources' | 'incidents' | 'jobs' | 'analytics' | 'settings' | 'types' | 'prompts' | 'events' | 'actors';
 
 interface QueueStats {
   pending: number;
@@ -183,6 +187,39 @@ export function AdminPanel({ onClose, onRefresh }: AdminPanelProps) {
           >
             <span className="nav-icon">🔧</span>
             Settings
+          </button>
+
+          {/* Extensible System Section */}
+          <div className="admin-nav-divider">
+            <span>Extensible System</span>
+          </div>
+          <button
+            className={`admin-nav-item ${view === 'types' ? 'active' : ''}`}
+            onClick={() => setView('types')}
+          >
+            <span className="nav-icon">📝</span>
+            Incident Types
+          </button>
+          <button
+            className={`admin-nav-item ${view === 'prompts' ? 'active' : ''}`}
+            onClick={() => setView('prompts')}
+          >
+            <span className="nav-icon">💬</span>
+            Prompts
+          </button>
+          <button
+            className={`admin-nav-item ${view === 'events' ? 'active' : ''}`}
+            onClick={() => setView('events')}
+          >
+            <span className="nav-icon">📅</span>
+            Events
+          </button>
+          <button
+            className={`admin-nav-item ${view === 'actors' ? 'active' : ''}`}
+            onClick={() => setView('actors')}
+          >
+            <span className="nav-icon">👥</span>
+            Actors
           </button>
         </div>
 
@@ -527,6 +564,26 @@ export function AdminPanel({ onClose, onRefresh }: AdminPanelProps) {
         {/* Settings View */}
         {view === 'settings' && (
           <SettingsPanel />
+        )}
+
+        {/* Incident Types View */}
+        {view === 'types' && (
+          <IncidentTypeManager />
+        )}
+
+        {/* Prompts View */}
+        {view === 'prompts' && (
+          <PromptManager />
+        )}
+
+        {/* Events View */}
+        {view === 'events' && (
+          <EventBrowser />
+        )}
+
+        {/* Actors View */}
+        {view === 'actors' && (
+          <ActorBrowser />
         )}
       </main>
     </div>

@@ -2,17 +2,30 @@
 Unified pipeline service for processing articles.
 Orchestrates: duplicate detection -> LLM extraction -> auto-approval.
 Ported from crime-tracker project.
+
+Now supports optional integration with PipelineOrchestrator for
+configurable, database-backed pipeline stages.
 """
 
 import logging
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, List
+from uuid import UUID
 
 from .duplicate_detection import get_detector, DuplicateDetector
 from .auto_approval import get_auto_approval_service, AutoApprovalService, ApprovalDecision
 from .llm_extraction import get_extractor, LLMExtractor
+from ..utils.state_normalizer import normalize_state
 
 logger = logging.getLogger(__name__)
+
+# Optional import of PipelineOrchestrator
+try:
+    from .pipeline_orchestrator import get_pipeline_orchestrator, PipelineOrchestrator
+    ORCHESTRATOR_AVAILABLE = True
+except ImportError:
+    ORCHESTRATOR_AVAILABLE = False
+    PipelineOrchestrator = None
 
 
 @dataclass
@@ -47,11 +60,66 @@ class UnifiedPipeline:
         self,
         detector: DuplicateDetector = None,
         extractor: LLMExtractor = None,
-        approver: AutoApprovalService = None
+        approver: AutoApprovalService = None,
+        use_orchestrator: bool = False
     ):
         self.detector = detector or get_detector()
         self.extractor = extractor or get_extractor()
         self.approver = approver or get_auto_approval_service()
+        self.use_orchestrator = use_orchestrator and ORCHESTRATOR_AVAILABLE
+        self._db_pool = None
+        self._orchestrator: Optional[PipelineOrchestrator] = None
+
+    def set_db_pool(self, pool):
+        """Set database pool for orchestrator and services."""
+        self._db_pool = pool
+        if self.use_orchestrator and ORCHESTRATOR_AVAILABLE:
+            self._orchestrator = get_pipeline_orchestrator(pool)
+        # Pass pool to services for database integration
+        if hasattr(self.extractor, 'set_db_pool'):
+            self.extractor.set_db_pool(pool)
+        if hasattr(self.approver, 'set_db_pool'):
+            self.approver.set_db_pool(pool)
+
+    async def process_with_orchestrator(
+        self,
+        article: dict,
+        incident_type_id: Optional[UUID] = None,
+    ) -> PipelineResult:
+        """
+        Process article using the configurable PipelineOrchestrator.
+
+        This uses the database-backed stage configuration for the incident type.
+        """
+        if not self._orchestrator:
+            return PipelineResult(
+                success=False,
+                article_id=str(article.get('id', 'unknown')),
+                error="Pipeline orchestrator not available"
+            )
+
+        try:
+            orch_result = await self._orchestrator.execute(article, incident_type_id)
+
+            return PipelineResult(
+                success=orch_result.success,
+                article_id=str(article.get('id', 'unknown')),
+                steps_completed=orch_result.stages_completed,
+                final_decision=orch_result.final_decision,
+                error=orch_result.error,
+                extraction_result=orch_result.context.get('extraction_result') if orch_result.context else None,
+                approval_result={
+                    'decision': orch_result.final_decision,
+                    'reason': orch_result.decision_reason,
+                } if orch_result.final_decision else None,
+            )
+        except Exception as e:
+            logger.exception(f"Error in orchestrator pipeline: {e}")
+            return PipelineResult(
+                success=False,
+                article_id=str(article.get('id', 'unknown')),
+                error=str(e)
+            )
 
     async def process_single(
         self,
@@ -59,7 +127,9 @@ class UnifiedPipeline:
         existing_articles: List[dict] = None,
         skip_duplicate_check: bool = False,
         skip_extraction: bool = False,
-        skip_approval: bool = False
+        skip_approval: bool = False,
+        incident_type_id: Optional[UUID] = None,
+        use_orchestrator: bool = None,
     ) -> PipelineResult:
         """
         Process a single article through the pipeline.
@@ -70,10 +140,19 @@ class UnifiedPipeline:
             skip_duplicate_check: Skip duplicate detection
             skip_extraction: Skip LLM extraction
             skip_approval: Skip auto-approval evaluation
+            incident_type_id: Optional incident type ID for type-specific processing
+            use_orchestrator: Override instance setting for orchestrator use
 
         Returns:
             PipelineResult with all step results
         """
+        # Determine if we should use orchestrator
+        should_use_orchestrator = use_orchestrator if use_orchestrator is not None else self.use_orchestrator
+
+        # Use orchestrator if available and requested
+        if should_use_orchestrator and self._orchestrator and incident_type_id:
+            return await self.process_with_orchestrator(article, incident_type_id)
+
         result = PipelineResult(
             success=True,
             article_id=str(article.get('id', 'unknown'))
@@ -102,6 +181,9 @@ class UnifiedPipeline:
                     result.extraction_result = ext_result
                     if ext_result.get('success') and ext_result.get('extracted_data'):
                         extraction_data = ext_result['extracted_data']
+                        # Normalize state field
+                        if 'state' in extraction_data:
+                            extraction_data['state'] = normalize_state(extraction_data['state'])
                         article['extracted_data'] = extraction_data
                 result.steps_completed.append('llm_extraction')
 

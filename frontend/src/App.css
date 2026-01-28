@@ -47,7 +47,7 @@ body {
   width: 280px;
   background: var(--bg-card);
   border-right: 1px solid var(--border-color);
-  padding: 16px;
+  padding: 16px 20px 16px 16px;
   overflow-y: auto;
   flex-shrink: 0;
 }
@@ -167,6 +167,7 @@ body {
 
 .filter-group {
   margin-bottom: 16px;
+  margin-right: 4px;
 }
 
 .filter-group > label {
@@ -226,12 +227,14 @@ body {
 
 .date-input {
   flex: 1;
+  min-width: 0;
   padding: 6px 8px;
   font-size: 12px;
   border: 1px solid var(--border-color);
   border-radius: 4px;
   background: var(--bg-input);
   color: var(--text-primary);
+  box-sizing: border-box;
 }
 
 .date-separator {
