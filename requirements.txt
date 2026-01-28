@@ -3,3 +3,33 @@ numpy>=1.24.0
 geopandas>=0.14.0
 matplotlib>=3.7.0
 shapely>=2.0.0
+
+# Web app
+streamlit>=1.30.0
+folium>=0.15.0
+streamlit-folium>=0.15.0
+
+# FastAPI backend
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+python-multipart>=0.0.6
+
+# Database
+asyncpg>=0.29.0
+psycopg2-binary>=2.9.9
+sqlalchemy>=2.0.25
+alembic>=1.13.0
+
+# Authentication
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+
+# LLM extraction
+anthropic>=0.18.0
+
+# Utilities
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+httpx>=0.26.0
+python-dotenv>=1.0.0
+feedparser

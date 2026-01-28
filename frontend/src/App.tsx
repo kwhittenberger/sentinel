@@ -3,11 +3,18 @@ import { MapContainer, TileLayer, CircleMarker, Tooltip, useMap } from 'react-le
 import MarkerClusterGroup from 'react-leaflet-cluster';
 import 'leaflet/dist/leaflet.css';
 import type { Incident, Stats, Filters } from './types';
-import { fetchIncidents, fetchStats } from './api';
+import { fetchIncidents, fetchStats, fetchQueueStats } from './api';
 import { Charts } from './Charts';
 import { HeatmapLayer } from './HeatmapLayer';
 import { AdminPanel } from './AdminPanel';
 import './App.css';
+
+interface QueueStats {
+  pending: number;
+  in_review: number;
+  approved: number;
+  rejected: number;
+}
 
 // Map center changer component - only updates when center/zoom actually change
 function ChangeView({ center, zoom }: { center: [number, number]; zoom: number }) {
@@ -63,7 +70,9 @@ function App() {
     document.documentElement.classList.toggle('dark', darkMode);
     localStorage.setItem('darkMode', String(darkMode));
   }, [darkMode]);
-  const [viewTab, setViewTab] = useState<'map' | 'streetview' | 'charts' | 'admin'>('map');
+  const [viewTab, setViewTab] = useState<'map' | 'streetview' | 'charts'>('map');
+  const [adminPanel, setAdminPanel] = useState<'none' | 'admin'>('none');
+  const [queueStats, setQueueStats] = useState<QueueStats | null>(null);
   const [searchText, setSearchText] = useState('');
   const [incidentTypeFilter, setIncidentTypeFilter] = useState('');
   const [sortBy, setSortBy] = useState<'date-desc' | 'date-asc' | 'state' | 'type' | 'deaths-first'>('date-desc');
@@ -130,6 +139,11 @@ function App() {
       setLoading(false);
     });
   }, [filters]);
+
+  // Load queue stats for sidebar badge
+  useEffect(() => {
+    fetchQueueStats().then(setQueueStats).catch(() => {});
+  }, []);
 
   // Keyboard navigation
   useEffect(() => {
@@ -374,8 +388,33 @@ function App() {
 
   return (
     <div className="app">
+      {/* Full-screen Admin Panel */}
+      {adminPanel === 'admin' ? (
+        <AdminPanel
+          onClose={() => setAdminPanel('none')}
+          onRefresh={() => {
+            fetchIncidents(filters).then(data => setIncidents(data.incidents));
+            fetchStats(filters).then(setStats);
+            fetchQueueStats().then(setQueueStats);
+          }}
+        />
+      ) : (
+      <>
       {/* Sidebar */}
       <aside className="sidebar">
+        {/* Admin Quick Access */}
+        <div className="sidebar-admin-bar">
+          <button
+            className={`sidebar-admin-btn ${adminPanel !== 'none' ? 'active' : ''}`}
+            onClick={() => setAdminPanel(adminPanel === 'none' ? 'admin' : 'none')}
+          >
+            Admin Panel
+            {queueStats && queueStats.pending > 0 && (
+              <span className="admin-badge">{queueStats.pending}</span>
+            )}
+          </button>
+        </div>
+
         <h2>Filters</h2>
 
         {/* Tier filter */}
@@ -399,6 +438,23 @@ function App() {
               </label>
             ))}
           </div>
+        </div>
+
+        {/* Incident category filter */}
+        <div className="filter-group">
+          <label>Incident Category</label>
+          <select
+            value={filters.incident_category || ''}
+            onChange={(e) => setFilters({
+              ...filters,
+              incident_category: e.target.value as 'enforcement' | 'crime' | undefined || undefined
+            })}
+            className="state-select"
+          >
+            <option value="">All Categories</option>
+            <option value="enforcement">Enforcement</option>
+            <option value="crime">Crime</option>
+          </select>
         </div>
 
         {/* Non-immigrant filter */}
@@ -653,7 +709,7 @@ function App() {
 
         <hr />
 
-        {/* Incident Detail Panel */}
+        {/* Incident Details */}
         <h2>Incident Details</h2>
         {selectedIncident ? (
           <div className="incident-detail">
@@ -749,7 +805,7 @@ function App() {
       {/* Main Content */}
       <main className="main-content">
         <div className="header-row">
-          <h1>ICE Enforcement Incidents Dashboard</h1>
+          <h1>Immigration Incidents Dashboard</h1>
           <button
             className="dark-mode-btn"
             onClick={() => setDarkMode(!darkMode)}
@@ -758,7 +814,7 @@ function App() {
             {darkMode ? 'Light' : 'Dark'}
           </button>
         </div>
-        <p className="subtitle">Interactive analysis of violent confrontations during immigration enforcement (Jan 2025 - Jan 2026)</p>
+        <p className="subtitle">Tracking enforcement incidents and immigration-related crimes (Jan 2025 - Jan 2026)</p>
 
         {/* Stats */}
         {stats && (
@@ -785,33 +841,27 @@ function App() {
         {/* View Tabs */}
         <div className="view-tabs">
           <button
-            className={`view-tab ${viewTab === 'map' ? 'active' : ''}`}
-            onClick={() => setViewTab('map')}
+            className={`view-tab ${viewTab === 'map' && adminPanel === 'none' ? 'active' : ''}`}
+            onClick={() => { setViewTab('map'); setAdminPanel('none'); }}
           >
             Map
           </button>
           <button
-            className={`view-tab ${viewTab === 'charts' ? 'active' : ''}`}
-            onClick={() => setViewTab('charts')}
+            className={`view-tab ${viewTab === 'charts' && adminPanel === 'none' ? 'active' : ''}`}
+            onClick={() => { setViewTab('charts'); setAdminPanel('none'); }}
           >
             Charts
           </button>
           <button
-            className={`view-tab ${viewTab === 'streetview' ? 'active' : ''}`}
-            onClick={() => setViewTab('streetview')}
+            className={`view-tab ${viewTab === 'streetview' && adminPanel === 'none' ? 'active' : ''}`}
+            onClick={() => { setViewTab('streetview'); setAdminPanel('none'); }}
             disabled={!selectedIncident?.lat || !selectedIncident?.lon}
           >
             Street View {!selectedIncident?.lat && '(select incident)'}
           </button>
-          <button
-            className={`view-tab ${viewTab === 'admin' ? 'active' : ''}`}
-            onClick={() => setViewTab('admin')}
-          >
-            Admin
-          </button>
 
           {/* Map style toggle - only show on map tab */}
-          {viewTab === 'map' && (
+          {viewTab === 'map' && adminPanel === 'none' && (
             <div className="map-controls-inline">
               {customView && (
                 <button className="reset-view-btn" onClick={() => setCustomView(null)}>
@@ -842,7 +892,7 @@ function App() {
 
         {/* Map View */}
         {/* Timeline Controls */}
-        {viewTab === 'map' && timelineEnabled && (
+        {viewTab === 'map' && adminPanel === 'none' && timelineEnabled && (
           <div className="timeline-controls">
             <button className="timeline-btn" onClick={handlePlayPause}>
               {isPlaying ? 'Pause' : 'Play'}
@@ -866,7 +916,7 @@ function App() {
           </div>
         )}
 
-        {viewTab === 'map' && (
+        {viewTab === 'map' && adminPanel === 'none' && (
           <div className="map-container">
             {loading && <div className="loading-overlay">Loading...</div>}
             <MapContainer center={mapCenter} zoom={mapZoom} maxZoom={20} style={{ height: '100%', width: '100%' }}>
@@ -936,12 +986,12 @@ function App() {
         )}
 
         {/* Charts View */}
-        {viewTab === 'charts' && (
+        {viewTab === 'charts' && adminPanel === 'none' && (
           <Charts stats={stats} incidents={incidents} />
         )}
 
         {/* Street View */}
-        {viewTab === 'streetview' && selectedIncident?.lat && selectedIncident?.lon && (
+        {viewTab === 'streetview' && adminPanel === 'none' && selectedIncident?.lat && selectedIncident?.lon && (
           <div className="street-view-container">
             <div className="street-view-info">
               <span>{selectedIncident.city}, {selectedIncident.state}</span>
@@ -962,9 +1012,6 @@ function App() {
           </div>
         )}
 
-        {/* Admin Panel */}
-        {viewTab === 'admin' && <AdminPanel />}
-
         {/* Legend */}
         <div className="legend">
           <span className="legend-item">
@@ -981,6 +1028,8 @@ function App() {
           </span>
         </div>
       </main>
+      </>
+      )}
     </div>
   );
 }
