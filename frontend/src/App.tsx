@@ -864,6 +864,20 @@ function App() {
               <div className="stat-value">{stats.total_deaths}</div>
               <div className="stat-label">Deaths</div>
             </div>
+            <div className="stat-card enforcement">
+              <div className="stat-value">{stats.by_category?.enforcement || 0}</div>
+              <div className="stat-label">Enforcement</div>
+              {stats.category_deaths?.enforcement > 0 && (
+                <div className="stat-sub">{stats.category_deaths.enforcement} deaths</div>
+              )}
+            </div>
+            <div className="stat-card crime">
+              <div className="stat-value">{stats.by_category?.crime || 0}</div>
+              <div className="stat-label">Crime</div>
+              {stats.category_deaths?.crime > 0 && (
+                <div className="stat-sub">{stats.category_deaths.crime} deaths</div>
+              )}
+            </div>
             <div className="stat-card">
               <div className="stat-value">{stats.states_affected}</div>
               <div className="stat-label">States Affected</div>

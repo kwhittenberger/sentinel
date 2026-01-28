@@ -651,6 +651,7 @@ async def get_incident(incident_id: str):
 async def get_stats(
     tiers: Optional[str] = Query(None),
     states: Optional[str] = Query(None),
+    category: Optional[str] = Query(None, description="Incident category: enforcement or crime"),
     non_immigrant_only: bool = Query(False),
     death_only: bool = Query(False),
     date_start: Optional[str] = Query(None),
@@ -662,11 +663,24 @@ async def get_stats(
     else:
         incidents = filter_incidents(tiers=tiers, states=states, non_immigrant_only=non_immigrant_only, death_only=death_only, date_start=date_start, date_end=date_end)
 
+    # Apply category filter if specified
+    if category:
+        incidents = [i for i in incidents if i.get('category', 'enforcement') == category]
+
     # Calculate stats
     total = len(incidents)
     deaths = sum(1 for i in incidents if i.get('is_death'))
     states_affected = len(set(i.get('state') for i in incidents if i.get('state')))
     non_immigrant = sum(1 for i in incidents if i.get('is_non_immigrant'))
+
+    # By category
+    by_category = {'enforcement': 0, 'crime': 0}
+    category_deaths = {'enforcement': 0, 'crime': 0}
+    for i in incidents:
+        cat = i.get('category', 'enforcement')
+        by_category[cat] = by_category.get(cat, 0) + 1
+        if i.get('is_death'):
+            category_deaths[cat] = category_deaths.get(cat, 0) + 1
 
     # By tier
     by_tier = {}
@@ -694,6 +708,8 @@ async def get_stats(
         "total_deaths": deaths,
         "states_affected": states_affected,
         "non_immigrant_incidents": non_immigrant,
+        "by_category": by_category,
+        "category_deaths": category_deaths,
         "by_tier": by_tier,
         "by_state": by_state,
         "by_incident_type": by_type,

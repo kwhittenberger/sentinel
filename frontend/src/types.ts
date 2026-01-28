@@ -85,6 +85,8 @@ export interface Stats {
   total_deaths: number;
   states_affected: number;
   non_immigrant_incidents: number;
+  by_category: Record<string, number>;
+  category_deaths: Record<string, number>;
   by_tier: Record<number, number>;
   by_state: Record<string, number>;
   by_incident_type: Record<string, number>;

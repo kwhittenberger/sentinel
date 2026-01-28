@@ -78,6 +78,10 @@ export async function fetchStats(filters: Filters): Promise<Stats> {
   if (filters.date_end) {
     params.set('date_end', filters.date_end);
   }
+  // Category filter
+  if (filters.incident_category) {
+    params.set('category', filters.incident_category);
+  }
 
   const response = await fetch(`${API_BASE}/stats?${params}`);
   return response.json();

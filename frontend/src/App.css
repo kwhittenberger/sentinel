@@ -679,6 +679,20 @@ body {
   margin-top: 4px;
 }
 
+.stat-sub {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.stat-card.enforcement {
+  border-left: 3px solid #dc2626;
+}
+
+.stat-card.crime {
+  border-left: 3px solid #7c3aed;
+}
+
 /* View Tabs */
 .view-tabs {
   display: flex;
