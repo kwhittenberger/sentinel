@@ -4,97 +4,141 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Data analysis project documenting violent confrontations between ICE/CBP agents and non-immigrants (protesters, journalists, bystanders, US citizens, officers) during immigration enforcement operations from January 2025 to January 2026. The analysis correlates incident geographic concentration with sanctuary jurisdiction policies.
+Data tracking system for violent confrontations involving ICE/CBP and immigrant-involved crimes. Tracks two incident categories:
 
-## Common Commands
+- **Enforcement**: Incidents where ICE/CBP agents harmed non-immigrants (protesters, journalists, bystanders, US citizens, officers)
+- **Crime**: Crimes committed by individuals with immigration status issues
 
-```bash
-# Setup (first time)
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+The system includes LLM-powered article extraction, curation workflows, and analytics.
 
-# Activate venv (subsequent sessions)
-source .venv/bin/activate
-
-# Generate visualizations
-python scripts/generate_county_map.py           # Full incident map
-python scripts/generate_county_map_filtered.py  # Counties with 4+ incidents only
-python scripts/generate_pie_charts.py           # Statistical breakdown charts
-
-# Run analysis (outputs CSVs to output/)
-python scripts/run_analysis.py
-
-# Validate data integrity
-python scripts/validate_schema.py
-```
+## Quick Start
 
 ```bash
-# Run web app
-streamlit run app/app.py
+# Start database
+docker-compose up -d db
+
+# Backend (in one terminal)
+source .venv/bin/activate
+cd backend && uvicorn main:app --reload --port 8000
+
+# Frontend (in another terminal)
+cd frontend && npm run dev
 ```
 
-**Output locations:**
-- Visualizations: project root (`*.png`)
-- Analysis CSVs: `output/` directory
+Access the dashboard at http://localhost:5173
 
 ## Architecture
 
-### Data Pipeline
-
-The project uses a tiered confidence system for incident data:
-
-| Tier | Source Type | Confidence | Used in Ratios |
-|------|-------------|------------|----------------|
-| 1 | Official government (ICE, DOJ, FOIA) | HIGH | Yes |
-| 2 | Investigative journalism (ProPublica, The Trace) | MEDIUM-HIGH | Yes |
-| 3 | Systematic news search (AP, Reuters, major outlets) | MEDIUM | No |
-| 4 | Ad-hoc reports (local news, verified social media) | LOW | No |
-
-### Data Flow
-
-1. **Ingestion** (`scripts/extract_data_to_json.py`) - Converts source data to JSON
-2. **Augmentation** (`scripts/add_round*_incidents.py`) - Iterative data additions
-3. **Geocoding** (`scripts/expand_city_data.py`) - Maps cities to counties via FIPS codes
-4. **Deduplication** (`scripts/populate_canonical_ids.py`, `scripts/link_duplicates.py`)
-5. **Validation** (`scripts/validate_schema.py`) - Enforces schema consistency
-6. **Visualization** (`scripts/generate_*.py`) - Produces maps and charts
-
-### Key Data Files
-
-- `data/incidents/tier*.json` - Incident records by confidence tier
-- `data/reference/sanctuary_jurisdictions.json` - State/city policy classifications with source URLs
-- `data/methodology.json` - Complete methodology documentation and source tier definitions
-
-### City-to-County Mapping
-
-The mapping in `scripts/generate_county_map.py:14-225` (`CITY_TO_COUNTY` dict) converts incident city names to FIPS codes for geographic aggregation. When adding new cities, include: `("County Name", "State FIPS", "County FIPS")`.
-
-### Schema Requirements
-
-All incident records must include (enforced by `validate_schema.py`):
-- `id`, `date`, `state`, `incident_type`, `source_tier`, `verified`
-- `affected_count`, `incident_scale`, `outcome`, `outcome_detail`, `outcome_category`
-- `victim_category`, `date_precision`
-
-Valid `victim_category` values: `detainee`, `enforcement_target`, `protester`, `journalist`, `bystander`, `us_citizen_collateral`, `officer`, `multiple`
-
-Valid `incident_scale` values: `single` (1), `small` (2-5), `medium` (6-50), `large` (51-200), `mass` (200+)
-
-## Web App Architecture
-
-The `app/` directory contains an interactive dashboard:
-
-- `app/data.py` - Data loading/processing layer (framework-agnostic, reusable)
-- `app/app.py` - Streamlit UI (can be swapped for FastAPI+React later)
-
-The data layer is intentionally separated so the backend logic can be reused with a different frontend without rewriting.
-
-## Non-Immigrant Filtering Logic
-
-The analysis focuses on non-enforcement targets. An incident is classified as "non-immigrant" if:
-```python
-victim_category in ['us_citizen', 'bystander', 'officer', 'protester', 'journalist'] or
-us_citizen == True or
-protest_related == True
 ```
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│   React + Vite  │────▶│  FastAPI        │────▶│  PostgreSQL     │
+│   (frontend/)   │     │  (backend/)     │     │  (docker)       │
+└─────────────────┘     └─────────────────┘     └─────────────────┘
+                              │
+                              ▼
+                        ┌─────────────────┐
+                        │  Claude Sonnet  │
+                        │  (LLM Extract)  │
+                        └─────────────────┘
+```
+
+### Backend (`backend/`)
+
+- `main.py` - FastAPI routes for incidents, admin, analytics
+- `database.py` - PostgreSQL connection pool
+- `services/` - Business logic:
+  - `llm_extraction.py` - Article-to-incident extraction via Claude
+  - `auto_approval.py` - Confidence-based auto-approval
+  - `duplicate_detection.py` - URL, title, content, entity matching
+  - `unified_pipeline.py` - Orchestrates fetch → extract → dedupe → approve
+  - `job_executor.py` - Background job processing
+  - `settings.py` - Runtime configuration management
+
+### Frontend (`frontend/src/`)
+
+- `App.tsx` - Main dashboard with map, charts, filters
+- `AdminPanel.tsx` - Admin navigation and routing
+- `CurationQueue.tsx` - Review extracted articles
+- `BatchProcessing.tsx` - Tiered confidence queue processing
+- `IncidentBrowser.tsx` - Search/edit approved incidents
+- `JobManager.tsx` - Background job monitoring
+- `SettingsPanel.tsx` - Configuration UI
+- `AnalyticsDashboard.tsx` - Pipeline metrics and funnels
+
+### Database (`database/`)
+
+- `schema.sql` - Full PostgreSQL schema
+- `migrations/` - Incremental migrations
+
+Key tables: `incidents`, `articles`, `curation_queue`, `persons`, `jurisdictions`, `background_jobs`
+
+## Data Pipeline
+
+1. **Fetch** - RSS feeds → `articles` table
+2. **Extract** - Claude Sonnet analyzes article → `extracted_data` JSON
+3. **Dedupe** - Check URL, title similarity, entity overlap
+4. **Auto-Approve** - High confidence (≥85%) auto-approved
+5. **Curation** - Human review for medium/low confidence
+6. **Incident** - Approved items → `incidents` table
+
+## Scripts
+
+```bash
+# Migrate JSON data to database (one-time)
+python scripts/migrate_data.py
+
+# Import crime tracker data
+python scripts/import_crime_tracker.py
+
+# Validate JSON schema (legacy data files)
+python scripts/validate_schema.py
+```
+
+## Data Files
+
+- `data/incidents/tier*.json` - Original incident data (backup/reference)
+- `data/reference/sanctuary_jurisdictions.json` - Sanctuary policy classifications
+- `data/methodology.json` - Source tier definitions
+
+## Docker
+
+```bash
+# Start everything
+docker-compose up -d
+
+# Database only
+docker-compose up -d db
+
+# View logs
+docker-compose logs -f
+
+# Connect to database
+docker exec -it incident_tracker_db psql -U incident_tracker_app -d incident_tracker
+```
+
+## Environment Variables
+
+Copy `.env.example` to `.env` and configure:
+
+```
+DATABASE_URL=postgresql://incident_tracker_app:devpassword@localhost:5433/incident_tracker
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+## Confidence Tiers
+
+| Tier | Confidence | Action |
+|------|------------|--------|
+| HIGH | ≥ 85% | Auto-approve candidates |
+| MEDIUM | 50-85% | Quick human review |
+| LOW | < 50% | Full manual review |
+
+## Incident Categories
+
+**Enforcement** (higher scrutiny - 90% threshold):
+- Focus: victim details, officer involvement, outcome severity
+- Required: date, state, incident_type, victim_category, outcome_category
+
+**Crime** (standard - 85% threshold):
+- Focus: offender details, criminal history, deportation status
+- Required: date, state, incident_type, immigration_status
