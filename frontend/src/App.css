@@ -939,6 +939,85 @@ body {
   color: var(--text-secondary);
 }
 
+.charts-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--bg-card);
+  border-radius: 8px;
+  margin-bottom: 16px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.charts-filter-bar label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.category-select {
+  padding: 6px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.category-select:focus {
+  outline: none;
+  border-color: #3b82f6;
+}
+
+.filter-summary {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.category-summary {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.category-stat {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 16px;
+  background: var(--bg-card);
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.category-stat.enforcement {
+  border-left: 4px solid #dc2626;
+}
+
+.category-stat.crime {
+  border-left: 4px solid #7c3aed;
+}
+
+.category-stat.non-immigrant {
+  border-left: 4px solid #3b82f6;
+}
+
+.category-value {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.category-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+}
+
 .charts-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
