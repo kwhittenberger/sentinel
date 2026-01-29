@@ -675,3 +675,79 @@ export interface DetectedRelation {
   reason?: string;
   match_score?: number;
 }
+
+// Universal extraction format (from LLM universal extractor)
+export interface ExtractedActor {
+  name: string;
+  name_confidence?: number;
+  actor_type: 'person' | 'agency' | 'group';
+  roles: string[];
+  age?: number;
+  gender?: string;
+  nationality?: string;
+  country_of_origin?: string;
+  immigration_status?: string;
+  prior_deportations?: number;
+  prior_criminal_history?: boolean;
+  gang_affiliation?: string;
+  agency_type?: string;
+  charges?: string[];
+  sentence?: string;
+  injuries?: string;
+  action_taken?: string;
+  notes?: string;
+}
+
+export interface ExtractedEvent {
+  date?: string;
+  event_type: string;
+  description: string;
+  relation_to_incident?: string;
+}
+
+export interface ExtractedIncidentInfo {
+  date?: string;
+  title?: string;
+  summary?: string;
+  location?: {
+    city?: string;
+    state?: string;
+    county?: string;
+    address?: string;
+    location_type?: string;
+  };
+  outcome?: {
+    severity?: string;
+    description?: string;
+  };
+  categories?: string[];
+  incident_types?: string[];
+  date_confidence?: number;
+  date_approximate?: boolean;
+  overall_confidence?: number;
+  location_confidence?: number;
+}
+
+export interface ExtractedPolicyContext {
+  policy_mentioned?: string;
+  ice_detainer_status?: string;
+  sanctuary_jurisdiction?: boolean;
+}
+
+export interface UniversalExtractionData {
+  success?: boolean;
+  is_relevant?: boolean;
+  isRelevant?: boolean;
+  relevance_reason?: string;
+  confidence?: number;
+  categories?: string[];
+  extraction_type?: string;
+  extraction_notes?: string;
+  sources_cited?: string[];
+  incident?: ExtractedIncidentInfo;
+  actors?: ExtractedActor[];
+  events?: ExtractedEvent[];
+  policy_context?: ExtractedPolicyContext;
+  // Legacy flat fields (for backward compat)
+  [key: string]: unknown;
+}

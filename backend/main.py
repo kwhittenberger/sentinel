@@ -4,6 +4,7 @@ Supports both ICE enforcement incidents and immigration-related crime cases.
 """
 
 import os
+import uuid
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Query, HTTPException, Depends, Body
 from fastapi.middleware.cors import CORSMiddleware
@@ -1064,29 +1065,26 @@ async def bulk_approve(
     import uuid
     from datetime import datetime
 
-    # Map tier to confidence threshold
-    tier_thresholds = {
-        "high": (0.85, 1.0),
-        "medium": (0.50, 0.85),
-        "low": (0.0, 0.50),
+    # Map tier to confidence threshold (use <= for upper bound to include 1.0)
+    tier_filters = {
+        "high": "extraction_confidence >= 0.85",
+        "medium": "extraction_confidence >= 0.50 AND extraction_confidence < 0.85",
+        "low": "extraction_confidence < 0.50 OR extraction_confidence IS NULL",
     }
 
-    if tier not in tier_thresholds:
+    if tier not in tier_filters:
         raise HTTPException(status_code=400, detail="Invalid tier. Must be: high, medium, low")
 
-    min_conf, max_conf = tier_thresholds[tier]
-
     # Get articles in tier
-    query = """
+    query = f"""
         SELECT id, extracted_data, source_url, extraction_confidence
         FROM ingested_articles
         WHERE status = 'pending'
-          AND extraction_confidence >= $1
-          AND extraction_confidence < $2
+          AND ({tier_filters[tier]})
         ORDER BY extraction_confidence DESC
-        LIMIT $3
+        LIMIT $1
     """
-    rows = await fetch(query, min_conf, max_conf, limit)
+    rows = await fetch(query, limit)
 
     approved_count = 0
     incident_ids = []
@@ -1094,24 +1092,45 @@ async def bulk_approve(
     for row in rows:
         article_id = row["id"]
         extracted_data = row.get("extracted_data") or {}
-        if isinstance(extracted_data, dict) and "extracted_data" in extracted_data:
-            extracted_data = extracted_data.get("extracted_data") or {}
+
+        # Handle universal extraction format (nested under 'incident')
+        incident_info = extracted_data.get("incident", {}) if isinstance(extracted_data, dict) else {}
+        location_info = incident_info.get("location", {}) if isinstance(incident_info, dict) else {}
+
+        # Extract fields, checking universal format first then flat format
+        date_str = incident_info.get("date") or extracted_data.get("date")
+        state_str = location_info.get("state") or extracted_data.get("state")
+        city_str = location_info.get("city") or extracted_data.get("city")
+        description = incident_info.get("summary") or extracted_data.get("description")
+
+        # Determine category from extraction data
+        categories = extracted_data.get("categories", [])
+        category = "crime"
+        if isinstance(categories, list):
+            if "enforcement" in categories:
+                category = "enforcement"
+            elif "crime" in categories:
+                category = "crime"
+        if extracted_data.get("category"):
+            category = extracted_data["category"]
+
+        # Get incident types from universal or flat format
+        incident_types = incident_info.get("incident_types", [])
+        incident_type_name = incident_types[0] if incident_types else extracted_data.get("incident_type", "other")
 
         # Create incident
         incident_id = uuid.uuid4()
         incident_date = None
-        date_str = extracted_data.get("date")
         if date_str:
             try:
                 from datetime import date as date_type
                 incident_date = date_type.fromisoformat(date_str)
-            except:
+            except Exception:
                 pass
         if not incident_date:
             incident_date = datetime.utcnow().date()
 
-        # Get or create incident_type_id (simplified - use a default)
-        incident_type_name = extracted_data.get("incident_type", "other")
+        # Get or create incident_type_id
         type_rows = await fetch("SELECT id FROM incident_types WHERE name = $1 LIMIT 1", incident_type_name)
         if type_rows:
             incident_type_id = type_rows[0]["id"]
@@ -1119,7 +1138,7 @@ async def bulk_approve(
             incident_type_id = uuid.uuid4()
             await execute(
                 "INSERT INTO incident_types (id, name, category) VALUES ($1, $2, $3)",
-                incident_type_id, incident_type_name, "crime"
+                incident_type_id, incident_type_name, category
             )
 
         await execute("""
@@ -1129,9 +1148,9 @@ async def bulk_approve(
                 extraction_confidence, created_at
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
         """,
-            incident_id, "crime", incident_date,
-            normalize_state(extracted_data.get("state")), extracted_data.get("city"),
-            incident_type_id, extracted_data.get("description"),
+            incident_id, category, incident_date,
+            normalize_state(state_str), city_str,
+            incident_type_id, description,
             row.get("source_url"), "2", "approved",
             float(row["extraction_confidence"]) if row.get("extraction_confidence") else None,
             datetime.utcnow()
@@ -1168,28 +1187,25 @@ async def bulk_reject(
     from backend.database import fetch, execute
     from datetime import datetime
 
-    tier_thresholds = {
-        "high": (0.85, 1.0),
-        "medium": (0.50, 0.85),
-        "low": (0.0, 0.50),
+    tier_filters = {
+        "high": "extraction_confidence >= 0.85",
+        "medium": "extraction_confidence >= 0.50 AND extraction_confidence < 0.85",
+        "low": "extraction_confidence < 0.50 OR extraction_confidence IS NULL",
     }
 
-    if tier not in tier_thresholds:
+    if tier not in tier_filters:
         raise HTTPException(status_code=400, detail="Invalid tier. Must be: high, medium, low")
 
-    min_conf, max_conf = tier_thresholds[tier]
-
-    result = await execute("""
+    result = await execute(f"""
         UPDATE ingested_articles
         SET status = 'rejected', rejection_reason = $1, reviewed_at = $2
         WHERE id IN (
             SELECT id FROM ingested_articles
             WHERE status = 'pending'
-              AND extraction_confidence >= $3
-              AND extraction_confidence < $4
-            LIMIT $5
+              AND ({tier_filters[tier]})
+            LIMIT $3
         )
-    """, reason, datetime.utcnow(), min_conf, max_conf, limit)
+    """, reason, datetime.utcnow(), limit)
 
     # Parse result to get count
     rejected_count = 0
@@ -1200,6 +1216,415 @@ async def bulk_reject(
             pass
 
     return {"success": True, "rejected_count": rejected_count}
+
+
+@app.get("/api/admin/queue/extraction-status")
+async def get_queue_extraction_status():
+    """
+    Get breakdown of queue by extraction status and pipeline stage.
+    """
+    from backend.database import fetch
+
+    # Get stage-based counts for clearer pipeline view
+    stage_rows = await fetch("""
+        SELECT
+            CASE
+                -- Not yet extracted (keyword matching only or nothing)
+                WHEN extracted_data IS NULL THEN 'need_extraction'
+                WHEN extracted_data->>'matchedKeywords' IS NOT NULL
+                     AND extracted_data->>'extraction_type' IS NULL THEN 'need_extraction'
+                -- Extracted but not relevant
+                WHEN (extracted_data->>'is_relevant' = 'false'
+                      OR extracted_data->>'isRelevant' = 'false') THEN 'not_relevant'
+                -- Extracted, relevant, high confidence (ready to approve)
+                WHEN (extracted_data->>'is_relevant' = 'true'
+                      OR extracted_data->>'isRelevant' = 'true')
+                     AND COALESCE(extraction_confidence, 0) >= 0.85 THEN 'ready_to_approve'
+                -- Extracted, relevant, needs review (low/medium confidence)
+                WHEN (extracted_data->>'is_relevant' = 'true'
+                      OR extracted_data->>'isRelevant' = 'true') THEN 'needs_review'
+                -- Extracted but relevance unknown
+                ELSE 'needs_review'
+            END as stage,
+            COUNT(*) as count,
+            AVG(COALESCE(extraction_confidence, 0)) as avg_confidence
+        FROM ingested_articles
+        WHERE status = 'pending'
+        GROUP BY 1
+    """)
+
+    # Legacy breakdown for backwards compatibility
+    rows = await fetch("""
+        SELECT
+            CASE
+                WHEN extracted_data->>'success' = 'true' THEN 'full_extraction'
+                WHEN extracted_data->>'extraction_type' = 'universal' THEN 'full_extraction'
+                WHEN extracted_data->>'matchedKeywords' IS NOT NULL THEN 'keyword_only'
+                WHEN extracted_data IS NULL THEN 'no_extraction'
+                ELSE 'other'
+            END as extraction_type,
+            COUNT(*) as count,
+            AVG(CASE WHEN extraction_confidence IS NOT NULL THEN extraction_confidence ELSE 0 END) as avg_confidence
+        FROM ingested_articles
+        WHERE status = 'pending'
+        GROUP BY 1
+        ORDER BY count DESC
+    """)
+
+    relevance_rows = await fetch("""
+        SELECT
+            CASE
+                WHEN extracted_data->>'is_relevant' = 'true'
+                     OR extracted_data->>'isRelevant' = 'true' THEN 'relevant'
+                WHEN extracted_data->>'is_relevant' = 'false'
+                     OR extracted_data->>'isRelevant' = 'false' THEN 'not_relevant'
+                ELSE 'unknown'
+            END as relevance,
+            COUNT(*) as count
+        FROM ingested_articles
+        WHERE status = 'pending'
+          AND (extracted_data->>'success' = 'true'
+               OR extracted_data->>'extraction_type' = 'universal')
+        GROUP BY 1
+    """)
+
+    # Get schema type breakdown (universal vs legacy)
+    schema_rows = await fetch("""
+        SELECT
+            CASE
+                WHEN extracted_data->>'extraction_type' = 'universal' THEN 'universal'
+                WHEN extracted_data->>'success' = 'true' THEN 'legacy'
+                ELSE 'none'
+            END as schema_type,
+            COUNT(*) as count
+        FROM ingested_articles
+        WHERE status = 'pending'
+        GROUP BY 1
+    """)
+
+    # Build stage counts dict for easy access
+    stages = {row["stage"]: {"count": row["count"], "avg_confidence": float(row["avg_confidence"]) if row["avg_confidence"] else 0} for row in stage_rows}
+
+    return {
+        # New stage-based view
+        "stages": {
+            "need_extraction": stages.get("need_extraction", {"count": 0, "avg_confidence": 0}),
+            "not_relevant": stages.get("not_relevant", {"count": 0, "avg_confidence": 0}),
+            "needs_review": stages.get("needs_review", {"count": 0, "avg_confidence": 0}),
+            "ready_to_approve": stages.get("ready_to_approve", {"count": 0, "avg_confidence": 0}),
+        },
+        # Legacy fields for backwards compatibility
+        "by_extraction_type": [
+            {
+                "type": row["extraction_type"],
+                "count": row["count"],
+                "avg_confidence": float(row["avg_confidence"]) if row["avg_confidence"] else None
+            }
+            for row in rows
+        ],
+        "by_relevance": [
+            {"relevance": row["relevance"], "count": row["count"]}
+            for row in relevance_rows
+        ],
+        "by_schema_type": [
+            {"schema": row["schema_type"], "count": row["count"]}
+            for row in schema_rows
+        ],
+        "total_pending": sum(row["count"] for row in rows),
+        "needs_upgrade": sum(
+            row["count"] for row in schema_rows
+            if row["schema_type"] == 'legacy'  # Only count extracted items with old schema
+        )
+    }
+
+
+@app.post("/api/admin/queue/triage")
+async def triage_queue_items(
+    limit: int = Body(10, embed=True, ge=1, le=50),
+    auto_reject: bool = Body(False, embed=True, description="Automatically reject items recommended for rejection"),
+):
+    """
+    Run quick triage on queue items to determine relevance.
+    This is faster and cheaper than full extraction.
+    """
+    from backend.services import get_extractor
+    from backend.database import fetch, execute
+    import asyncio
+
+    extractor = get_extractor()
+    if not extractor.is_available():
+        return {"success": False, "error": "LLM not available"}
+
+    # Get items that only have keyword matching (no full extraction)
+    rows = await fetch("""
+        SELECT id, title, content, source_url
+        FROM ingested_articles
+        WHERE status = 'pending'
+          AND content IS NOT NULL
+          AND (extracted_data->>'success' IS NULL OR extracted_data->>'success' != 'true')
+        ORDER BY fetched_at ASC
+        LIMIT $1
+    """, limit)
+
+    results = {
+        "processed": 0,
+        "extract_recommended": 0,
+        "reject_recommended": 0,
+        "review_recommended": 0,
+        "auto_rejected": 0,
+        "items": []
+    }
+
+    for row in rows:
+        article_id = str(row["id"])
+        title = row.get("title") or ""
+        content = row.get("content") or ""
+
+        triage_result = extractor.triage(title, content)
+        results["processed"] += 1
+
+        recommendation = triage_result.get("recommendation", "review")
+        if recommendation == "extract":
+            results["extract_recommended"] += 1
+        elif recommendation == "reject":
+            results["reject_recommended"] += 1
+            # Auto-reject if enabled
+            if auto_reject:
+                await execute("""
+                    UPDATE ingested_articles
+                    SET status = 'rejected',
+                        rejection_reason = $2,
+                        reviewed_at = NOW()
+                    WHERE id = $1
+                """, row["id"], f"Triage: {triage_result.get('reason', 'Not a specific incident')}")
+                results["auto_rejected"] += 1
+        else:
+            results["review_recommended"] += 1
+
+        results["items"].append({
+            "id": article_id,
+            "title": title[:80] + "..." if len(title) > 80 else title,
+            "triage": triage_result
+        })
+
+        # Small delay to avoid rate limiting
+        await asyncio.sleep(0.2)
+
+    return {"success": True, **results}
+
+
+@app.post("/api/admin/queue/batch-extract")
+async def batch_extract_queue_items(
+    limit: int = Body(10, embed=True, ge=1, le=100),
+    re_extract: bool = Body(False, embed=True, description="Re-extract already extracted items"),
+    use_legacy: bool = Body(False, embed=True, description="Use legacy category-based extraction instead of universal"),
+):
+    """
+    Run universal LLM extraction on queue items.
+    Extracts all actors, events, and details regardless of category.
+    """
+    from backend.services import get_extractor
+    from backend.database import fetch, execute
+    from backend.utils.state_normalizer import normalize_state
+    import asyncio
+    import json as json_module
+
+    extractor = get_extractor()
+    if not extractor.is_available():
+        return {"success": False, "error": "LLM not available"}
+
+    # Get items needing extraction
+    if re_extract:
+        # Re-extract items that had successful LLM extraction but with old schema (not universal)
+        rows = await fetch("""
+            SELECT id, title, content, source_url, extracted_data
+            FROM ingested_articles
+            WHERE status = 'pending'
+              AND content IS NOT NULL
+              AND extracted_data->>'success' = 'true'
+              AND (extracted_data->>'extraction_type' IS NULL OR extracted_data->>'extraction_type' != 'universal')
+            ORDER BY fetched_at ASC
+            LIMIT $1
+        """, limit)
+    else:
+        # Only extract items that haven't been successfully extracted
+        rows = await fetch("""
+            SELECT id, title, content, source_url, extracted_data
+            FROM ingested_articles
+            WHERE status = 'pending'
+              AND content IS NOT NULL
+              AND (extracted_data->>'success' IS NULL OR extracted_data->>'success' != 'true')
+            ORDER BY fetched_at ASC
+            LIMIT $1
+        """, limit)
+
+    results = {
+        "processed": 0,
+        "extracted": 0,
+        "relevant": 0,
+        "not_relevant": 0,
+        "errors": 0,
+        "extraction_type": "legacy" if use_legacy else "universal",
+        "items": []
+    }
+
+    for row in rows:
+        article_id = row["id"]
+        title = row.get("title") or ""
+        content = row.get("content") or ""
+        full_text = f"Title: {title}\n\n{content}" if title else content
+
+        try:
+            # Use universal extraction by default
+            if use_legacy:
+                ext_result = extractor.extract(full_text)
+            else:
+                ext_result = extractor.extract_universal(full_text)
+
+            results["processed"] += 1
+
+            if ext_result.get("success"):
+                results["extracted"] += 1
+
+                # Normalize state if extracted (handle both schema formats)
+                incident = ext_result.get("incident", {}) or ext_result.get("extracted_data", {})
+                location = incident.get("location", {})
+                state = location.get("state") if isinstance(location, dict) else incident.get("state")
+                if state:
+                    normalized_state = normalize_state(state)
+                    if isinstance(location, dict):
+                        ext_result["incident"]["location"]["state"] = normalized_state
+                    elif "extracted_data" in ext_result:
+                        ext_result["extracted_data"]["state"] = normalized_state
+
+                if ext_result.get("is_relevant"):
+                    results["relevant"] += 1
+                else:
+                    results["not_relevant"] += 1
+
+                # Update the article with extraction results
+                confidence = ext_result.get("confidence", 0.5)
+                if not confidence and incident:
+                    confidence = incident.get("overall_confidence", 0.5)
+                relevance = 1.0 if ext_result.get("is_relevant") else 0.0
+
+                await execute("""
+                    UPDATE ingested_articles
+                    SET extracted_data = $2,
+                        extraction_confidence = $3,
+                        relevance_score = $4,
+                        extracted_at = NOW(),
+                        updated_at = NOW()
+                    WHERE id = $1
+                """, article_id, json_module.dumps(ext_result), confidence, relevance)
+
+                # Build result item
+                categories = ext_result.get("categories", [])
+                if not categories and incident:
+                    categories = incident.get("categories", [])
+
+                actors = ext_result.get("actors", [])
+                actor_summary = f"{len(actors)} actors" if actors else None
+
+                results["items"].append({
+                    "id": str(article_id),
+                    "title": title[:60] + "..." if len(title) > 60 else title,
+                    "is_relevant": ext_result.get("is_relevant"),
+                    "confidence": confidence,
+                    "categories": categories,
+                    "actors": actor_summary,
+                })
+            else:
+                results["errors"] += 1
+                results["items"].append({
+                    "id": str(article_id),
+                    "title": title[:60] + "..." if len(title) > 60 else title,
+                    "error": ext_result.get("error")
+                })
+        except Exception as e:
+            results["errors"] += 1
+            results["items"].append({
+                "id": str(article_id),
+                "title": title[:60] + "..." if len(title) > 60 else title,
+                "error": str(e)
+            })
+
+        # Delay to avoid rate limiting
+        await asyncio.sleep(0.5)
+
+    return {"success": True, **results}
+
+
+@app.post("/api/admin/queue/bulk-reject-by-criteria")
+async def bulk_reject_queue_items_by_criteria(
+    ids: List[str] = Body(None, embed=True, description="Specific IDs to reject"),
+    reject_not_relevant: bool = Body(False, embed=True, description="Reject all items with relevance_score = 0"),
+    reject_low_confidence: float = Body(None, embed=True, description="Reject items below this confidence"),
+    reason: str = Body("Bulk rejection", embed=True),
+):
+    """
+    Bulk reject queue items based on criteria (IDs, relevance, confidence).
+    """
+    from backend.database import fetch, execute
+
+    rejected_count = 0
+
+    if ids:
+        # Reject specific IDs
+        for article_id in ids:
+            try:
+                await execute("""
+                    UPDATE ingested_articles
+                    SET status = 'rejected',
+                        rejection_reason = $2,
+                        reviewed_at = NOW()
+                    WHERE id = $1 AND status = 'pending'
+                """, uuid.UUID(article_id), reason)
+                rejected_count += 1
+            except Exception as e:
+                logger.error(f"Error rejecting {article_id}: {e}")
+
+    if reject_not_relevant:
+        # Reject all not relevant items
+        await execute("""
+            UPDATE ingested_articles
+            SET status = 'rejected',
+                rejection_reason = $1,
+                reviewed_at = NOW()
+            WHERE status = 'pending'
+              AND extracted_data IS NOT NULL
+              AND (extracted_data->>'is_relevant' = 'false'
+                   OR relevance_score = 0)
+        """, "Not relevant to incident tracking")
+        rows = await fetch("""
+            SELECT COUNT(*) as cnt FROM ingested_articles
+            WHERE status = 'rejected' AND rejection_reason = 'Not relevant to incident tracking'
+              AND reviewed_at > NOW() - INTERVAL '1 minute'
+        """)
+        rejected_count += rows[0]["cnt"] if rows else 0
+
+    if reject_low_confidence is not None:
+        await execute("""
+            UPDATE ingested_articles
+            SET status = 'rejected',
+                rejection_reason = $2,
+                reviewed_at = NOW()
+            WHERE status = 'pending'
+              AND extraction_confidence IS NOT NULL
+              AND extraction_confidence < $1
+        """, reject_low_confidence, f"Low confidence (< {reject_low_confidence})")
+        rows = await fetch("""
+            SELECT COUNT(*) as cnt FROM ingested_articles
+            WHERE status = 'rejected'
+              AND rejection_reason LIKE 'Low confidence%'
+              AND reviewed_at > NOW() - INTERVAL '1 minute'
+        """)
+        rejected_count += rows[0]["cnt"] if rows else 0
+
+    return {
+        "success": True,
+        "rejected_count": rejected_count
+    }
 
 
 @app.get("/api/admin/queue/{article_id}")
@@ -1235,6 +1660,61 @@ async def get_queue_item(article_id: str):
         "extracted_data": row.get("extracted_data"),
         "status": row.get("status"),
     }
+
+
+@app.post("/api/admin/queue/{article_id}/extract-universal")
+async def extract_article_universal(article_id: str):
+    """Run universal extraction on an article to capture all entities."""
+    import uuid
+
+    if not USE_DATABASE:
+        raise HTTPException(status_code=501, detail="Database not enabled")
+
+    from backend.database import fetch, execute
+    from backend.services.llm_extraction import get_extractor
+
+    # Get article content
+    query = """
+        SELECT id, title, content, extracted_data
+        FROM ingested_articles
+        WHERE id = $1
+    """
+    rows = await fetch(query, uuid.UUID(article_id))
+    if not rows:
+        raise HTTPException(status_code=404, detail="Article not found")
+
+    row = rows[0]
+    content = row.get("content", "")
+    title = row.get("title", "")
+
+    if not content:
+        return {"success": False, "error": "Article has no content"}
+
+    # Run universal extraction
+    extractor = get_extractor()
+    if not extractor.is_available():
+        return {"success": False, "error": "LLM extraction not available"}
+
+    article_text = f"Title: {title}\n\n{content}" if title else content
+    result = extractor.extract_universal(article_text)
+
+    if result.get("success"):
+        # Update the article with universal extraction data
+        update_query = """
+            UPDATE ingested_articles
+            SET extracted_data = $1,
+                extraction_confidence = $2,
+                extraction_type = 'universal'
+            WHERE id = $3
+        """
+        await execute(
+            update_query,
+            result,
+            result.get("confidence", 0.5),
+            uuid.UUID(article_id)
+        )
+
+    return result
 
 
 @app.post("/api/admin/queue/{article_id}/approve")
@@ -1344,26 +1824,38 @@ async def approve_article(
     # Create incident from extracted data
     incident_id = str(uuid.uuid4())
 
+    # Handle universal extraction format (nested under 'incident')
+    incident_info = extracted_data.get("incident", {}) if isinstance(extracted_data, dict) else {}
+    location_info = incident_info.get("location", {}) if isinstance(incident_info, dict) else {}
+    outcome_info = incident_info.get("outcome", {}) if isinstance(incident_info, dict) else {}
+
+    # Extract fields, checking universal format first then flat format
+    date_str = incident_info.get("date") or extracted_data.get("date")
+    state_str = location_info.get("state") or extracted_data.get("state")
+    city_str = location_info.get("city") or extracted_data.get("city")
+    description = incident_info.get("summary") or extracted_data.get("description")
+
     # Parse date - default to today if not provided
-    date_str = extracted_data.get("date")
     incident_date = None
     if date_str:
         try:
             from datetime import date as date_type
             incident_date = date_type.fromisoformat(date_str)
-        except:
+        except Exception:
             pass
     if not incident_date:
         incident_date = datetime.utcnow().date()
 
+    # Get incident types from universal or flat format
+    incident_types = incident_info.get("incident_types", [])
+    incident_type_name = incident_types[0] if incident_types else extracted_data.get("incident_type", "other")
+
     # Get or create incident_type_id
-    incident_type_name = extracted_data.get("incident_type", "other")
     type_query = "SELECT id FROM incident_types WHERE name = $1 LIMIT 1"
     type_rows = await fetch(type_query, incident_type_name)
     if type_rows:
         incident_type_id = type_rows[0]["id"]
     else:
-        # Create new incident type
         import uuid as uuid_mod
         incident_type_id = uuid_mod.uuid4()
         await execute(
@@ -1371,10 +1863,33 @@ async def approve_article(
             incident_type_id, incident_type_name, category
         )
 
-    # Determine outcome category
+    # Determine outcome category from universal or flat format
     outcome_category = extracted_data.get("outcome_category")
+    if not outcome_category and outcome_info.get("severity"):
+        outcome_category = outcome_info["severity"]
     if not outcome_category and extracted_data.get("involves_fatality"):
         outcome_category = "death"
+
+    # Extract actor details from universal format for incident fields
+    actors_list = extracted_data.get("actors", [])
+    victim_name = extracted_data.get("victim_name")
+    victim_age = extracted_data.get("victim_age")
+    victim_category = extracted_data.get("victim_category")
+    offender_immigration_status = extracted_data.get("offender_immigration_status")
+    prior_deportations = extracted_data.get("prior_deportations", 0)
+    gang_affiliated = extracted_data.get("gang_affiliated", False)
+
+    if actors_list and not victim_name:
+        for actor in actors_list:
+            roles = actor.get("roles", [])
+            if "victim" in roles:
+                victim_name = victim_name or actor.get("name")
+                victim_age = victim_age or actor.get("age")
+            if "offender" in roles or "defendant" in roles:
+                offender_immigration_status = offender_immigration_status or actor.get("immigration_status")
+                prior_deportations = prior_deportations or actor.get("prior_deportations", 0)
+                if actor.get("gang_affiliation"):
+                    gang_affiliated = True
 
     insert_query = """
         INSERT INTO incidents (
@@ -1392,21 +1907,21 @@ async def approve_article(
         uuid.UUID(incident_id),
         category,
         incident_date,
-        normalize_state(extracted_data.get("state")),
-        extracted_data.get("city"),
+        normalize_state(state_str),
+        city_str,
         incident_type_id,
-        extracted_data.get("description"),
+        description,
         article.get("source_url"),
         "2",  # Default tier as string
         "approved",
         float(article["extraction_confidence"]) if article.get("extraction_confidence") else None,
-        extracted_data.get("victim_name"),
-        extracted_data.get("victim_age"),
-        extracted_data.get("victim_category"),
+        victim_name,
+        victim_age,
+        victim_category,
         outcome_category,
-        extracted_data.get("offender_immigration_status"),
-        extracted_data.get("prior_deportations", 0),
-        extracted_data.get("gang_affiliated", False),
+        offender_immigration_status,
+        prior_deportations or 0,
+        gang_affiliated or False,
         datetime.utcnow()
     )
 
@@ -2007,6 +2522,43 @@ async def admin_get_incident(incident_id: str):
             if inc.get('id') == incident_id:
                 return inc
         raise HTTPException(status_code=404, detail="Incident not found")
+
+
+@app.get("/api/admin/incidents/{incident_id}/articles")
+async def admin_get_incident_articles(incident_id: str):
+    """Get ingested articles linked to an incident, including content."""
+    if not USE_DATABASE:
+        raise HTTPException(status_code=501, detail="Database not enabled")
+
+    from backend.database import fetch
+    import uuid
+    try:
+        incident_uuid = uuid.UUID(incident_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid incident ID format")
+
+    rows = await fetch("""
+        SELECT id, title, content, source_name, source_url, published_date, fetched_at,
+               relevance_score, extraction_confidence, status
+        FROM ingested_articles
+        WHERE incident_id = $1
+        ORDER BY published_date DESC NULLS LAST, fetched_at DESC
+    """, incident_uuid)
+
+    articles = []
+    for row in rows:
+        article = dict(row)
+        article["id"] = str(article["id"])
+        if article.get("published_date"):
+            article["published_date"] = article["published_date"].isoformat()
+        if article.get("fetched_at"):
+            article["fetched_at"] = article["fetched_at"].isoformat()
+        for num_field in ("relevance_score", "extraction_confidence"):
+            if article.get(num_field) is not None:
+                article[num_field] = float(article[num_field])
+        articles.append(article)
+
+    return {"articles": articles, "total": len(articles)}
 
 
 @app.put("/api/admin/incidents/{incident_id}")
@@ -3530,6 +4082,138 @@ async def execute_pipeline(data: dict = Body(...)):
             "validation_errors": result.context.validation_errors if result.context else [],
         } if result.context else None,
     }
+
+
+# =====================
+# Enrichment Endpoints
+# =====================
+
+@app.get("/api/admin/enrichment/stats")
+async def get_enrichment_stats():
+    """Get missing field counts and enrichment summary."""
+    if not USE_DATABASE:
+        raise HTTPException(status_code=501, detail="Database not enabled")
+
+    from backend.services.enrichment_service import get_enrichment_service
+    service = get_enrichment_service()
+    return await service.get_enrichment_stats()
+
+
+@app.get("/api/admin/enrichment/candidates")
+async def get_enrichment_candidates(
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    target_fields: Optional[str] = Query(None, description="Comma-separated field names"),
+):
+    """Preview which incidents can be enriched."""
+    if not USE_DATABASE:
+        raise HTTPException(status_code=501, detail="Database not enabled")
+
+    from backend.services.enrichment_service import get_enrichment_service
+
+    fields = target_fields.split(",") if target_fields else None
+    service = get_enrichment_service()
+    candidates = await service.find_enrichment_candidates(limit=limit, offset=offset, target_fields=fields)
+    total_count = await service.count_enrichment_candidates(target_fields=fields)
+
+    # Serialize for JSON
+    for c in candidates:
+        c["id"] = str(c["id"])
+        if c.get("date"):
+            c["date"] = c["date"].isoformat()
+        for num_field in ("latitude", "longitude"):
+            if c.get(num_field) is not None:
+                c[num_field] = float(c[num_field])
+
+    return {"candidates": candidates, "total": len(candidates), "total_count": total_count}
+
+
+@app.post("/api/admin/enrichment/run")
+async def run_enrichment(
+    strategy: str = Body("cross_incident", embed=True),
+    limit: int = Body(100, embed=True),
+    target_fields: Optional[List[str]] = Body(None, embed=True),
+    auto_apply: Optional[bool] = Body(None, embed=True),
+    min_confidence: float = Body(0.7, embed=True),
+):
+    """Start an enrichment job."""
+    if not USE_DATABASE:
+        raise HTTPException(status_code=501, detail="Database not enabled")
+
+    if strategy not in ("cross_incident", "llm_reextract", "full"):
+        raise HTTPException(status_code=400, detail=f"Invalid strategy: {strategy}")
+
+    from backend.database import execute
+
+    params = {
+        "strategy": strategy,
+        "limit": limit,
+        "min_confidence": min_confidence,
+    }
+    if target_fields:
+        params["target_fields"] = target_fields
+    if auto_apply is not None:
+        params["auto_apply"] = auto_apply
+
+    job_id = uuid.uuid4()
+    await execute("""
+        INSERT INTO background_jobs (id, job_type, status, params, created_at)
+        VALUES ($1, 'cross_reference_enrich', 'pending', $2, $3)
+    """, job_id, params, datetime.utcnow())
+
+    return {"success": True, "job_id": str(job_id)}
+
+
+@app.get("/api/admin/enrichment/runs")
+async def get_enrichment_runs(
+    limit: int = Query(20, ge=1, le=100),
+):
+    """Get enrichment run history."""
+    if not USE_DATABASE:
+        raise HTTPException(status_code=501, detail="Database not enabled")
+
+    from backend.services.enrichment_service import get_enrichment_service
+    service = get_enrichment_service()
+    runs = await service.get_run_history(limit=limit)
+    return {"runs": runs, "total": len(runs)}
+
+
+@app.get("/api/admin/enrichment/log/{incident_id}")
+async def get_enrichment_log(incident_id: str, limit: int = Query(50, ge=1, le=200)):
+    """Get enrichment audit log for an incident."""
+    if not USE_DATABASE:
+        raise HTTPException(status_code=501, detail="Database not enabled")
+
+    try:
+        iid = uuid.UUID(incident_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid incident ID format")
+
+    from backend.services.enrichment_service import get_enrichment_service
+    service = get_enrichment_service()
+    entries = await service.get_incident_enrichment_log(iid, limit=limit)
+    return {"entries": entries, "total": len(entries)}
+
+
+@app.post("/api/admin/enrichment/revert/{log_id}")
+async def revert_enrichment(log_id: str):
+    """Revert a specific enrichment change."""
+    if not USE_DATABASE:
+        raise HTTPException(status_code=501, detail="Database not enabled")
+
+    try:
+        lid = uuid.UUID(log_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid log ID format")
+
+    from backend.services.enrichment_service import get_enrichment_service
+    service = get_enrichment_service()
+    success = await service.revert_enrichment(lid)
+
+    if not success:
+        raise HTTPException(status_code=404, detail="Enrichment log entry not found or not applied")
+
+    return {"success": True, "message": "Enrichment reverted"}
 
 
 # =====================

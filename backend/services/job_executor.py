@@ -113,6 +113,8 @@ class JobExecutor:
             return await self._run_batch_enrich_job(params, job_id)
         elif job_type == 'full_pipeline':
             return await self._run_full_pipeline_job(params, job_id)
+        elif job_type == 'cross_reference_enrich':
+            return await self._run_enrichment_job(params, job_id)
         else:
             raise ValueError(f"Unknown job type: {job_type}")
 
@@ -243,9 +245,76 @@ class JobExecutor:
         return {"message": f"Processed {processed}/{total} articles", "processed": processed}
 
     async def _run_batch_extract_job(self, params: Dict[str, Any], job_id: uuid.UUID) -> Dict[str, Any]:
-        """Run batch extraction on articles."""
-        # Same as process but with category filter
-        return await self._run_process_job(params, job_id)
+        """Run universal extraction on all pending articles."""
+        from backend.database import fetch, execute
+        from backend.services import get_extractor
+
+        limit = params.get('limit', 1000)  # Default to processing many
+
+        # Get pending articles that need extraction
+        articles = await fetch("""
+            SELECT id, title, content, source_url
+            FROM ingested_articles
+            WHERE status = 'pending'
+              AND content IS NOT NULL
+              AND (extracted_data->>'success' IS NULL OR extracted_data->>'success' != 'true')
+            ORDER BY fetched_at ASC
+            LIMIT $1
+        """, limit)
+
+        if not articles:
+            return {"message": "No articles to extract", "processed": 0}
+
+        extractor = get_extractor()
+        if not extractor.is_available():
+            return {"message": "LLM extractor not available", "processed": 0}
+
+        total = len(articles)
+        processed = 0
+        relevant = 0
+        errors = 0
+
+        for i, article in enumerate(articles):
+            await self._update_progress(job_id, i, total, f"Extracting {i+1}/{total}: {article['title'][:50]}...")
+
+            try:
+                full_text = f"{article['title']}\n\n{article['content']}" if article['title'] else article['content']
+                result = extractor.extract_universal(full_text or "")
+
+                if result.get('success', True):
+                    await execute("""
+                        UPDATE ingested_articles
+                        SET extracted_data = $1,
+                            extraction_confidence = $2,
+                            relevance_score = $3
+                        WHERE id = $4
+                    """,
+                        result,
+                        result.get('confidence', 0.5),
+                        1.0 if result.get('is_relevant') else 0.0,
+                        article['id']
+                    )
+                    processed += 1
+                    if result.get('is_relevant'):
+                        relevant += 1
+                else:
+                    errors += 1
+                    logger.warning(f"Extraction failed for {article['id']}: {result.get('error')}")
+
+            except Exception as e:
+                errors += 1
+                logger.warning(f"Failed to extract article {article['id']}: {e}")
+
+            # Rate limiting to avoid API limits
+            await asyncio.sleep(2)
+
+        await self._update_progress(job_id, total, total, f"Completed: {processed} extracted, {relevant} relevant")
+        return {
+            "message": f"Extracted {processed}/{total} articles ({relevant} relevant, {errors} errors)",
+            "processed": processed,
+            "relevant": relevant,
+            "errors": errors
+        }
 
     async def _run_batch_enrich_job(self, params: Dict[str, Any], job_id: uuid.UUID) -> Dict[str, Any]:
         """Enrich articles with additional data (fetch full content, etc.)."""
@@ -314,6 +383,44 @@ class JobExecutor:
         return {
             "message": f"Pipeline complete: fetched {fetch_result.get('fetched', 0)}, extracted {extract_result.get('processed', 0)}",
             "results": results
+        }
+
+    async def _run_enrichment_job(self, params: Dict[str, Any], job_id: uuid.UUID) -> Dict[str, Any]:
+        """Run cross-reference enrichment on incidents with missing data."""
+        from backend.services.enrichment_service import get_enrichment_service
+
+        service = get_enrichment_service()
+
+        strategy = params.get('strategy', 'cross_incident')
+        limit = params.get('limit', 100)
+        target_fields = params.get('target_fields')
+        auto_apply = params.get('auto_apply', strategy == 'cross_incident')
+        min_confidence = params.get('min_confidence', 0.7)
+
+        enrichment_params = {
+            'limit': limit,
+            'target_fields': target_fields,
+            'auto_apply': auto_apply,
+            'min_confidence': min_confidence,
+        }
+
+        result = await service.run_enrichment(
+            strategy=strategy,
+            params=enrichment_params,
+            job_id=job_id,
+            progress_callback=lambda p, t, m: self._update_progress(job_id, p, t, m),
+        )
+
+        return {
+            "message": (
+                f"Enrichment complete: {result.incidents_enriched}/{result.total_incidents} "
+                f"incidents enriched, {result.fields_filled} fields filled"
+            ),
+            "run_id": result.run_id,
+            "strategy": result.strategy,
+            "incidents_enriched": result.incidents_enriched,
+            "fields_filled": result.fields_filled,
+            "errors": result.errors,
         }
 
 

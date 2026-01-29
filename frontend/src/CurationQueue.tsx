@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
-import type { CurationQueueItem } from './types';
+import type { CurationQueueItem, UniversalExtractionData } from './types';
 import { SplitPane } from './SplitPane';
 import { IncidentDetailView } from './IncidentDetailView';
+import { ExtractionDetailView } from './ExtractionDetailView';
 
 const API_BASE = '/api';
 
@@ -33,6 +34,7 @@ export function CurationQueue({ onRefresh }: CurationQueueProps) {
   const [processing, setProcessing] = useState(false);
   const [editMode, setEditMode] = useState(false);
   const [editData, setEditData] = useState<EditableData>({});
+  const [rejectReason, setRejectReason] = useState('');
 
   const fetchQueue = async () => {
     setLoading(true);
@@ -421,23 +423,32 @@ export function CurationQueue({ onRefresh }: CurationQueueProps) {
                     </div>
                   </div>
                 ) : (
-                  <IncidentDetailView
-                    incident={{
-                      id: selectedItem.id,
-                      category: selectedItem.extracted_data?.category || 'crime',
-                      incident_type: selectedItem.extracted_data?.incident_type || 'unknown',
-                      date: selectedItem.extracted_data?.date || '',
-                      state: selectedItem.extracted_data?.state || '',
-                      source_url: selectedItem.source_url,
-                      source_name: selectedItem.source_name,
-                      tier: 3,
-                      is_non_immigrant: false,
-                      is_death: selectedItem.extracted_data?.involves_fatality || false,
-                    }}
-                    extractedData={selectedItem.extracted_data}
-                    articleContent={selectedItem.content}
-                    showSource={true}
-                  />
+                  /* Use universal view if extraction has nested incident/actors structure */
+                  (selectedItem.extracted_data as Record<string, unknown>)?.incident || (selectedItem.extracted_data as Record<string, unknown>)?.actors ? (
+                    <ExtractionDetailView
+                      data={selectedItem.extracted_data as UniversalExtractionData}
+                      articleContent={selectedItem.content}
+                      sourceUrl={selectedItem.source_url}
+                    />
+                  ) : (
+                    <IncidentDetailView
+                      incident={{
+                        id: selectedItem.id,
+                        category: selectedItem.extracted_data?.category || 'crime',
+                        incident_type: selectedItem.extracted_data?.incident_type || 'unknown',
+                        date: selectedItem.extracted_data?.date || '',
+                        state: selectedItem.extracted_data?.state || '',
+                        source_url: selectedItem.source_url,
+                        source_name: selectedItem.source_name,
+                        tier: 3,
+                        is_non_immigrant: false,
+                        is_death: selectedItem.extracted_data?.involves_fatality || false,
+                      }}
+                      extractedData={selectedItem.extracted_data}
+                      articleContent={selectedItem.content}
+                      showSource={true}
+                    />
+                  )
                 )}
 
                 <div className="detail-actions">
@@ -448,16 +459,23 @@ export function CurationQueue({ onRefresh }: CurationQueueProps) {
                   >
                     Approve & Create Incident
                   </button>
-                  <button
-                    className="action-btn reject"
-                    onClick={() => {
-                      const reason = prompt('Rejection reason:');
-                      if (reason) handleReject(selectedItem, reason);
-                    }}
-                    disabled={processing}
-                  >
-                    Reject
-                  </button>
+                  <div className="bp-inline-reject">
+                    <input
+                      type="text"
+                      className="bp-reject-input"
+                      value={rejectReason}
+                      onChange={e => setRejectReason(e.target.value)}
+                      placeholder="Rejection reason..."
+                      onKeyDown={e => { if (e.key === 'Enter' && rejectReason.trim()) { handleReject(selectedItem, rejectReason); setRejectReason(''); } }}
+                    />
+                    <button
+                      className="action-btn reject"
+                      onClick={() => { handleReject(selectedItem, rejectReason); setRejectReason(''); }}
+                      disabled={processing || !rejectReason.trim()}
+                    >
+                      Reject
+                    </button>
+                  </div>
                 </div>
               </div>
             ) : (

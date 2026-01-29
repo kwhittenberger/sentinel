@@ -12,6 +12,7 @@ from backend.pipeline.stages.validation import ValidationStage
 from backend.pipeline.stages.auto_approval import AutoApprovalStage
 from backend.pipeline.stages.pattern_detection import PatternDetectionStage
 from backend.pipeline.stages.cross_reference import CrossReferenceStage
+from backend.pipeline.stages.enrichment import EnrichmentStage
 
 __all__ = [
     "URLDedupeStage",
@@ -24,4 +25,5 @@ __all__ = [
     "AutoApprovalStage",
     "PatternDetectionStage",
     "CrossReferenceStage",
+    "EnrichmentStage",
 ]

@@ -152,6 +152,200 @@ EXTRACTION_SCHEMA = {
     "required": ["is_relevant", "relevance_reason"]
 }
 
+# Universal extraction schema - extracts ALL entities regardless of category
+UNIVERSAL_EXTRACTION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "is_relevant": {
+            "type": "boolean",
+            "description": "Whether the article describes a trackable immigration-related incident"
+        },
+        "relevance_reason": {
+            "type": "string",
+            "description": "Brief explanation of why the article is or isn't relevant"
+        },
+        "incident": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Short descriptive title for the incident"},
+                "summary": {"type": "string", "description": "2-3 sentence factual summary of what happened"},
+                "date": {"type": "string", "description": "Date of incident (YYYY-MM-DD format)"},
+                "date_approximate": {"type": "boolean", "description": "True if date is estimated"},
+                "date_confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                "location": {
+                    "type": "object",
+                    "properties": {
+                        "state": {"type": "string", "description": "US state (2-letter code)"},
+                        "city": {"type": "string"},
+                        "county": {"type": "string"},
+                        "address": {"type": "string", "description": "Specific address if mentioned"},
+                        "location_type": {"type": "string", "description": "e.g., courthouse, residence, workplace, street"}
+                    }
+                },
+                "location_confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                "incident_types": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "All applicable incident types: arrest, protest, assault, shooting, detention, deportation, raid, traffic_stop, court_hearing, etc."
+                },
+                "categories": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": ["enforcement", "crime", "protest", "legal", "policy"]},
+                    "description": "All applicable categories for this incident"
+                },
+                "outcome": {
+                    "type": "object",
+                    "properties": {
+                        "severity": {"type": "string", "enum": ["death", "serious_injury", "minor_injury", "arrest", "detention", "release", "no_injury", "unknown"]},
+                        "description": {"type": "string"}
+                    }
+                },
+                "overall_confidence": {"type": "number", "minimum": 0, "maximum": 1}
+            }
+        },
+        "actors": {
+            "type": "array",
+            "description": "ALL people, agencies, and organizations mentioned in the incident",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Full name or organization name"},
+                    "name_confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                    "actor_type": {
+                        "type": "string",
+                        "enum": ["person", "agency", "organization", "group"],
+                        "description": "Type of actor"
+                    },
+                    "roles": {
+                        "type": "array",
+                        "items": {
+                            "type": "string",
+                            "enum": [
+                                "victim", "offender", "suspect", "defendant", "detainee",
+                                "officer", "agent", "arresting_agency", "prosecuting_agency",
+                                "protester", "organizer", "bystander", "witness",
+                                "journalist", "lawyer", "judge",
+                                "family_member", "employer", "informant"
+                            ]
+                        },
+                        "description": "All roles this actor played in the incident"
+                    },
+                    # Person-specific fields
+                    "age": {"type": "integer"},
+                    "gender": {"type": "string", "enum": ["male", "female", "unknown"]},
+                    "nationality": {"type": "string"},
+                    "country_of_origin": {"type": "string"},
+                    "immigration_status": {
+                        "type": "string",
+                        "description": "If known: undocumented, visa_overstay, legal_resident, citizen, DACA, TPS, asylum_seeker, etc."
+                    },
+                    "prior_deportations": {"type": "integer"},
+                    "prior_criminal_history": {"type": "boolean"},
+                    "gang_affiliation": {"type": "string"},
+                    # Agency-specific fields
+                    "agency_type": {
+                        "type": "string",
+                        "enum": ["ice", "cbp", "hsi", "local_police", "sheriff", "state_police", "federal", "other"]
+                    },
+                    "badge_number": {"type": "string"},
+                    # Action fields
+                    "action_taken": {"type": "string", "description": "What this actor did: arrested, protested, detained, released, etc."},
+                    "charges": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Criminal charges if applicable"
+                    },
+                    "sentence": {"type": "string"},
+                    "injuries": {"type": "string", "description": "Injuries sustained or caused"},
+                    "notes": {"type": "string"}
+                },
+                "required": ["name", "actor_type", "roles"]
+            }
+        },
+        "events": {
+            "type": "array",
+            "description": "Related events mentioned (protests, hearings, prior incidents)",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "event_type": {"type": "string", "description": "protest, rally, hearing, prior_arrest, deportation, etc."},
+                    "description": {"type": "string"},
+                    "date": {"type": "string"},
+                    "participants_count": {"type": "integer"},
+                    "relation_to_incident": {"type": "string", "description": "caused_by, in_response_to, related_to, prior_to, after"}
+                }
+            }
+        },
+        "policy_context": {
+            "type": "object",
+            "description": "Policy factors mentioned",
+            "properties": {
+                "sanctuary_jurisdiction": {"type": "boolean"},
+                "ice_detainer_status": {"type": "string", "enum": ["issued", "honored", "ignored", "not_applicable", "unknown"]},
+                "policy_mentioned": {"type": "string", "description": "Any specific policy mentioned"}
+            }
+        },
+        "sources_cited": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Sources quoted in the article: police spokesperson, ICE statement, court records, etc."
+        },
+        "extraction_notes": {"type": "string", "description": "Any ambiguity or notes about the extraction"}
+    },
+    "required": ["is_relevant", "relevance_reason"]
+}
+
+# Universal extraction prompt - extracts all entities
+UNIVERSAL_SYSTEM_PROMPT = """You are an expert data extraction system for tracking immigration-related incidents.
+
+Your job is to extract ALL relevant entities and details from news articles, regardless of incident category.
+
+EXTRACT EVERYTHING:
+1. **ACTORS** - Every person, agency, and organization mentioned:
+   - People: names, ages, roles (victim, offender, officer, protester, witness, etc.)
+   - Agencies: ICE, CBP, local police, courts, etc.
+   - Organizations: advocacy groups, employers, etc.
+   - For each person, note immigration status if mentioned
+
+2. **INCIDENT DETAILS**:
+   - What happened (arrest, protest, assault, detention, etc.)
+   - Where (state, city, specific location)
+   - When (exact date or approximate)
+   - Outcome (injuries, arrests, deaths, releases)
+
+3. **RELATED EVENTS**:
+   - Protests sparked by the incident
+   - Prior arrests or deportations
+   - Court hearings
+   - Related incidents
+
+4. **POLICY CONTEXT**:
+   - Sanctuary city/state status
+   - ICE detainer decisions
+   - Relevant policies
+
+CONFIDENCE SCORES (0.0 to 1.0):
+- 1.0: Explicitly stated verbatim
+- 0.8-0.9: Clearly stated, minor inference
+- 0.6-0.7: Strongly implied
+- 0.4-0.5: Reasonable inference
+- 0.2-0.3: Weak inference
+- 0.0: Not found
+
+IMPORTANT:
+- Extract ALL named individuals, not just the primary subject
+- An incident can have multiple categories (enforcement AND protest)
+- Always return valid JSON"""
+
+UNIVERSAL_EXTRACTION_PROMPT = """Analyze this article and extract ALL relevant information about immigration-related incidents.
+
+Extract every actor (person, agency, organization), every event, and all contextual details.
+
+ARTICLE TEXT:
+{article_text}
+
+Return JSON matching the universal extraction schema. Include ALL actors with their roles, not just the primary subject."""
+
 # Category-specific system prompts
 ENFORCEMENT_SYSTEM_PROMPT = """You are extracting data about violent incidents involving ICE/CBP agents.
 
@@ -355,6 +549,75 @@ Extract the incident data and return as JSON following the schema provided.""",
 }
 
 
+# Triage prompt for quick relevance filtering
+TRIAGE_SYSTEM_PROMPT = """You are a news article classifier. Your job is to quickly determine if an article describes a specific, trackable incident.
+
+You are NOT looking for general policy discussions or news coverage. You ARE looking for:
+1. A specific incident that occurred at a specific time and place
+2. Involving either:
+   - ICE/CBP enforcement actions that affected someone (arrest, detention, use of force)
+   - Crimes committed by individuals with documented immigration status issues
+
+REJECT if the article is:
+- General policy discussion or opinion piece
+- Coverage of protests/rallies without a specific incident
+- Statistics or reports without specific incidents
+- Announcements of policy changes
+- Coverage of legislation or court rulings (unless describing a specific incident case)
+- Political commentary
+
+ACCEPT if the article describes:
+- A specific arrest, detention, or use of force incident
+- A specific crime with named individuals
+- A specific death, injury, or altercation
+- A specific court case about a specific incident"""
+
+TRIAGE_PROMPT = """Analyze this article and determine if it describes a SPECIFIC, TRACKABLE INCIDENT.
+
+ARTICLE TITLE: {title}
+
+ARTICLE TEXT:
+{article_text}
+
+Respond with JSON:
+{{
+  "is_specific_incident": true/false,
+  "reason": "brief explanation",
+  "incident_type": "enforcement" | "crime" | "both" | "none",
+  "has_named_individuals": true/false,
+  "has_specific_date_or_timeframe": true/false,
+  "has_specific_location": true/false,
+  "recommendation": "extract" | "reject" | "review"
+}}
+
+IMPORTANT:
+- "extract" = Clear incident, run full extraction
+- "reject" = Not a trackable incident, remove from queue
+- "review" = Unclear, needs human review"""
+
+TRIAGE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "is_specific_incident": {"type": "boolean"},
+        "reason": {"type": "string"},
+        "incident_type": {"type": "string", "enum": ["enforcement", "crime", "both", "none"]},
+        "has_named_individuals": {"type": "boolean"},
+        "has_specific_date_or_timeframe": {"type": "boolean"},
+        "has_specific_location": {"type": "boolean"},
+        "recommendation": {"type": "string", "enum": ["extract", "reject", "review"]}
+    },
+    "required": ["is_specific_incident", "reason", "recommendation"]
+}
+
+
+def get_triage_prompt(title: str, article_text: str) -> str:
+    """Get the triage prompt for quick relevance filtering."""
+    # Truncate long articles for triage (we only need enough to determine relevance)
+    if len(article_text) > 3000:
+        article_text = article_text[:3000] + "\n\n[Article truncated for triage]"
+    return TRIAGE_PROMPT.format(title=title, article_text=article_text)
+
+
 def get_extraction_prompt(document_type: str, article_text: str, category: IncidentCategory = None) -> str:
     """
     Get the appropriate extraction prompt for a document type and category.
@@ -413,3 +676,16 @@ def get_required_fields(category: IncidentCategory) -> list:
         return CRIME_REQUIRED_FIELDS
     else:
         return ['date', 'state', 'incident_type']
+
+
+def get_universal_extraction_prompt(article_text: str) -> str:
+    """
+    Get the universal extraction prompt that extracts all entities.
+
+    Args:
+        article_text: The article content to analyze
+
+    Returns:
+        Formatted prompt string
+    """
+    return UNIVERSAL_EXTRACTION_PROMPT.format(article_text=article_text)

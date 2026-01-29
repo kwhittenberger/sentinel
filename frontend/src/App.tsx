@@ -149,9 +149,10 @@ function App() {
   // Load incident types for display names
   useEffect(() => {
     fetch('/api/admin/types')
-      .then(res => res.json())
+      .then(res => res.ok ? res.json() : [])
+      .then(data => Array.isArray(data) ? data : [])
       .then(setIncidentTypes)
-      .catch(() => {});
+      .catch(() => setIncidentTypes([]));
   }, []);
 
   // Helper to get display name for incident type

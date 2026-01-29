@@ -8,6 +8,7 @@ import {
   fetchQueueStats,
   fetchPipelineConfig,
   fetchLLMStatus,
+  fetchPipelineStages,
 } from './api';
 import { SettingsPanel } from './SettingsPanel';
 import { IncidentBrowser } from './IncidentBrowser';
@@ -15,13 +16,15 @@ import { JobManager } from './JobManager';
 import { AnalyticsDashboard } from './AnalyticsDashboard';
 import { BatchProcessing } from './BatchProcessing';
 import { CurationQueue } from './CurationQueue';
+import { QueueManager } from './QueueManager';
 import { IncidentTypeManager } from './IncidentTypeManager';
 import { PromptManager } from './PromptManager';
 import { EventBrowser } from './EventBrowser';
 import { ActorBrowser } from './ActorBrowser';
+import { EnrichmentPanel } from './EnrichmentPanel';
 import './AdminPanel.css';
 
-type AdminView = 'dashboard' | 'queue' | 'batch' | 'pipeline' | 'sources' | 'incidents' | 'jobs' | 'analytics' | 'settings' | 'types' | 'prompts' | 'events' | 'actors';
+type AdminView = 'dashboard' | 'queue' | 'queuemanager' | 'batch' | 'pipeline' | 'sources' | 'incidents' | 'jobs' | 'analytics' | 'settings' | 'types' | 'prompts' | 'events' | 'actors' | 'enrichment';
 
 interface QueueStats {
   pending: number;
@@ -56,6 +59,10 @@ export function AdminPanel({ onClose, onRefresh }: AdminPanelProps) {
   const [queueStats, setQueueStats] = useState<QueueStats | null>(null);
   const [pipelineConfig, setPipelineConfig] = useState<PipelineConfig | null>(null);
   const [llmStatus, setLlmStatus] = useState<{ available: boolean; model: string | null } | null>(null);
+  const [pipelineStages, setPipelineStages] = useState<{
+    id: string; name: string; slug: string;
+    description: string | null; default_order: number; is_active: boolean;
+  }[]>([]);
   const [loading, setLoading] = useState(true);
   const [operating, setOperating] = useState<string | null>(null);
   const [result, setResult] = useState<PipelineResult | null>(null);
@@ -64,16 +71,18 @@ export function AdminPanel({ onClose, onRefresh }: AdminPanelProps) {
   const loadDashboard = useCallback(async () => {
     setLoading(true);
     try {
-      const [statusData, statsData, configData, llmData] = await Promise.all([
+      const [statusData, statsData, configData, llmData, stagesData] = await Promise.all([
         fetchAdminStatus().catch(() => null),
         fetchQueueStats().catch(() => null),
         fetchPipelineConfig().catch(() => null),
         fetchLLMStatus().catch(() => null),
+        fetchPipelineStages().catch(() => []),
       ]);
       if (statusData) setStatus(statusData);
       if (statsData) setQueueStats(statsData);
       if (configData) setPipelineConfig(configData as unknown as PipelineConfig);
       if (llmData) setLlmStatus(llmData);
+      if (stagesData) setPipelineStages(stagesData);
     } finally {
       setLoading(false);
     }
@@ -122,6 +131,7 @@ export function AdminPanel({ onClose, onRefresh }: AdminPanelProps) {
         </div>
 
         <div className="admin-nav-items">
+          {/* Overview */}
           <button
             className={`admin-nav-item ${view === 'dashboard' ? 'active' : ''}`}
             onClick={() => setView('dashboard')}
@@ -129,29 +139,79 @@ export function AdminPanel({ onClose, onRefresh }: AdminPanelProps) {
             <span className="nav-icon">📊</span>
             Dashboard
           </button>
+
+          {/* Curation Section */}
+          <div className="admin-nav-divider">
+            <span>Curation</span>
+          </div>
+          <button
+            className={`admin-nav-item ${view === 'queuemanager' ? 'active' : ''}`}
+            onClick={() => setView('queuemanager')}
+          >
+            <span className="nav-icon">⚡</span>
+            Queue Manager
+            {queueStats && queueStats.pending > 0 && (
+              <span className="nav-badge">{queueStats.pending}</span>
+            )}
+          </button>
           <button
             className={`admin-nav-item ${view === 'queue' ? 'active' : ''}`}
             onClick={() => setView('queue')}
           >
             <span className="nav-icon">📋</span>
-            Curation Queue
-            {queueStats && queueStats.pending > 0 && (
-              <span className="nav-badge">{queueStats.pending}</span>
-            )}
+            Review Items
           </button>
           <button
             className={`admin-nav-item ${view === 'batch' ? 'active' : ''}`}
             onClick={() => setView('batch')}
           >
             <span className="nav-icon">🤖</span>
-            Batch Processing
+            Batch Approve
           </button>
+
+          {/* Data Section */}
+          <div className="admin-nav-divider">
+            <span>Data</span>
+          </div>
           <button
             className={`admin-nav-item ${view === 'incidents' ? 'active' : ''}`}
             onClick={() => setView('incidents')}
           >
             <span className="nav-icon">📁</span>
             Incidents
+          </button>
+          <button
+            className={`admin-nav-item ${view === 'actors' ? 'active' : ''}`}
+            onClick={() => setView('actors')}
+          >
+            <span className="nav-icon">👥</span>
+            Actors
+          </button>
+          <button
+            className={`admin-nav-item ${view === 'events' ? 'active' : ''}`}
+            onClick={() => setView('events')}
+          >
+            <span className="nav-icon">📅</span>
+            Events
+          </button>
+
+          {/* Pipeline Section */}
+          <div className="admin-nav-divider">
+            <span>Pipeline</span>
+          </div>
+          <button
+            className={`admin-nav-item ${view === 'sources' ? 'active' : ''}`}
+            onClick={() => setView('sources')}
+          >
+            <span className="nav-icon">📡</span>
+            Data Sources
+          </button>
+          <button
+            className={`admin-nav-item ${view === 'pipeline' ? 'active' : ''}`}
+            onClick={() => setView('pipeline')}
+          >
+            <span className="nav-icon">⚙️</span>
+            Pipeline Config
           </button>
           <button
             className={`admin-nav-item ${view === 'jobs' ? 'active' : ''}`}
@@ -161,37 +221,16 @@ export function AdminPanel({ onClose, onRefresh }: AdminPanelProps) {
             Jobs
           </button>
           <button
-            className={`admin-nav-item ${view === 'analytics' ? 'active' : ''}`}
-            onClick={() => setView('analytics')}
+            className={`admin-nav-item ${view === 'enrichment' ? 'active' : ''}`}
+            onClick={() => setView('enrichment')}
           >
-            <span className="nav-icon">📈</span>
-            Analytics
-          </button>
-          <button
-            className={`admin-nav-item ${view === 'pipeline' ? 'active' : ''}`}
-            onClick={() => setView('pipeline')}
-          >
-            <span className="nav-icon">⚙️</span>
-            Pipeline
-          </button>
-          <button
-            className={`admin-nav-item ${view === 'sources' ? 'active' : ''}`}
-            onClick={() => setView('sources')}
-          >
-            <span className="nav-icon">📡</span>
-            Data Sources
-          </button>
-          <button
-            className={`admin-nav-item ${view === 'settings' ? 'active' : ''}`}
-            onClick={() => setView('settings')}
-          >
-            <span className="nav-icon">🔧</span>
-            Settings
+            <span className="nav-icon">🔗</span>
+            Enrichment
           </button>
 
-          {/* Extensible System Section */}
+          {/* System Section */}
           <div className="admin-nav-divider">
-            <span>Extensible System</span>
+            <span>System</span>
           </div>
           <button
             className={`admin-nav-item ${view === 'types' ? 'active' : ''}`}
@@ -208,18 +247,18 @@ export function AdminPanel({ onClose, onRefresh }: AdminPanelProps) {
             Prompts
           </button>
           <button
-            className={`admin-nav-item ${view === 'events' ? 'active' : ''}`}
-            onClick={() => setView('events')}
+            className={`admin-nav-item ${view === 'analytics' ? 'active' : ''}`}
+            onClick={() => setView('analytics')}
           >
-            <span className="nav-icon">📅</span>
-            Events
+            <span className="nav-icon">📈</span>
+            Analytics
           </button>
           <button
-            className={`admin-nav-item ${view === 'actors' ? 'active' : ''}`}
-            onClick={() => setView('actors')}
+            className={`admin-nav-item ${view === 'settings' ? 'active' : ''}`}
+            onClick={() => setView('settings')}
           >
-            <span className="nav-icon">👥</span>
-            Actors
+            <span className="nav-icon">🔧</span>
+            Settings
           </button>
         </div>
 
@@ -347,6 +386,11 @@ export function AdminPanel({ onClose, onRefresh }: AdminPanelProps) {
           <CurationQueue onRefresh={loadDashboard} />
         )}
 
+        {/* Queue Manager View */}
+        {view === 'queuemanager' && (
+          <QueueManager onRefresh={loadDashboard} />
+        )}
+
         {/* Pipeline View */}
         {view === 'pipeline' && (
           <div className="admin-page">
@@ -378,71 +422,36 @@ export function AdminPanel({ onClose, onRefresh }: AdminPanelProps) {
             </div>
 
             <div className="page-content">
-              {/* Pipeline Stages */}
-              <div className="pipeline-stages">
-                <div className="stage-card">
-                  <div className="stage-header">
-                    <span className={`stage-dot ${pipelineConfig?.duplicate_detection?.strategies_enabled?.title ? 'active' : ''}`}></span>
-                    <h3>Duplicate Detection</h3>
-                  </div>
-                  <div className="stage-config">
-                    <div className="config-row">
-                      <span>Title Similarity</span>
-                      <span>{((pipelineConfig?.duplicate_detection?.title_similarity_threshold || 0) * 100).toFixed(0)}%</span>
-                    </div>
-                    <div className="config-row">
-                      <span>Strategies</span>
-                      <span>
-                        {Object.entries(pipelineConfig?.duplicate_detection?.strategies_enabled || {})
-                          .filter(([, v]) => v)
-                          .map(([k]) => k)
-                          .join(', ') || 'None'}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="stage-card">
-                  <div className="stage-header">
-                    <span className={`stage-dot ${llmStatus?.available ? 'active' : ''}`}></span>
-                    <h3>LLM Extraction</h3>
-                  </div>
-                  <div className="stage-config">
-                    <div className="config-row">
-                      <span>Status</span>
-                      <span className={llmStatus?.available ? 'text-success' : 'text-danger'}>
-                        {llmStatus?.available ? 'Available' : 'Unavailable'}
-                      </span>
-                    </div>
-                    {llmStatus?.model && (
-                      <div className="config-row">
-                        <span>Model</span>
-                        <span>{llmStatus.model}</span>
+              {/* Pipeline Stages Flow */}
+              <div className="pipeline-flow">
+                {[...pipelineStages]
+                  .sort((a, b) => a.default_order - b.default_order)
+                  .map((stage, idx, arr) => {
+                    const isClickable = stage.slug === 'enrichment';
+                    return (
+                      <div className="pipeline-node" key={stage.id}>
+                        <div
+                          className={`pipeline-stage${stage.is_active ? '' : ' inactive'}${isClickable ? ' clickable' : ''}`}
+                          onClick={isClickable ? () => setView('enrichment') : undefined}
+                          title={stage.description || stage.name}
+                        >
+                          <span className="pipeline-order">{stage.default_order}</span>
+                          <div className="pipeline-stage-info">
+                            <span className="pipeline-stage-name">{stage.name}</span>
+                            {stage.description && (
+                              <span className="pipeline-stage-desc">{stage.description}</span>
+                            )}
+                          </div>
+                        </div>
+                        {idx < arr.length - 1 && (
+                          <span className="pipeline-connector">&rarr;</span>
+                        )}
                       </div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="stage-card">
-                  <div className="stage-header">
-                    <span className={`stage-dot ${pipelineConfig?.auto_approval?.enable_auto_approve ? 'active' : ''}`}></span>
-                    <h3>Auto-Approval</h3>
-                  </div>
-                  <div className="stage-config">
-                    <div className="config-row">
-                      <span>Auto-Approve</span>
-                      <span>{pipelineConfig?.auto_approval?.enable_auto_approve ? 'Enabled' : 'Disabled'}</span>
-                    </div>
-                    <div className="config-row">
-                      <span>Min Confidence</span>
-                      <span>{((pipelineConfig?.auto_approval?.min_confidence_auto_approve || 0) * 100).toFixed(0)}%</span>
-                    </div>
-                    <div className="config-row">
-                      <span>Auto-Reject</span>
-                      <span>{pipelineConfig?.auto_approval?.enable_auto_reject ? 'Enabled' : 'Disabled'}</span>
-                    </div>
-                  </div>
-                </div>
+                    );
+                  })}
+                {pipelineStages.length === 0 && (
+                  <p className="no-data">No pipeline stages configured</p>
+                )}
               </div>
 
               {/* Operation Result */}
@@ -584,6 +593,11 @@ export function AdminPanel({ onClose, onRefresh }: AdminPanelProps) {
         {/* Actors View */}
         {view === 'actors' && (
           <ActorBrowser />
+        )}
+
+        {/* Enrichment View */}
+        {view === 'enrichment' && (
+          <EnrichmentPanel />
         )}
       </main>
     </div>

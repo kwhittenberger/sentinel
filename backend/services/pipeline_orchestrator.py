@@ -133,6 +133,7 @@ class PipelineOrchestrator:
                 AutoApprovalStage,
                 PatternDetectionStage,
                 CrossReferenceStage,
+                EnrichmentStage,
             )
 
             self.register_stage(URLDedupeStage)
@@ -145,6 +146,7 @@ class PipelineOrchestrator:
             self.register_stage(AutoApprovalStage)
             self.register_stage(PatternDetectionStage)
             self.register_stage(CrossReferenceStage)
+            self.register_stage(EnrichmentStage)
 
         except ImportError as e:
             logger.warning(f"Could not load pipeline stages: {e}")

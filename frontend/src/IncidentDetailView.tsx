@@ -1,4 +1,4 @@
-import ReactMarkdown from 'react-markdown';
+import { HighlightedArticle, collectHighlightsFromRecord } from './articleHighlight';
 import type { Incident, ExtractedIncidentData } from './types';
 import './ExtensibleSystem.css';
 
@@ -77,6 +77,12 @@ export function IncidentDetailView({
 
   const isEnforcement = incident?.category === 'enforcement';
   const isCrime = incident?.category === 'crime';
+
+  // Build highlights from incident + extracted data for article content
+  const highlights = collectHighlightsFromRecord({
+    ...(incident ? incident : {}),
+    ...(extractedData ? extractedData : {}),
+  } as Record<string, unknown>);
 
   return (
     <div className="ext-incident-detail-view">
@@ -273,9 +279,10 @@ export function IncidentDetailView({
         <div className="ext-detail-section-group">
           <h4>Description</h4>
           <div className="ext-description-content">
-            <ReactMarkdown>
-              {extractedData?.description || incident?.description || incident?.notes || ''}
-            </ReactMarkdown>
+            <HighlightedArticle
+              content={extractedData?.description || incident?.description || incident?.notes || ''}
+              highlights={highlights}
+            />
           </div>
         </div>
       )}
@@ -285,9 +292,7 @@ export function IncidentDetailView({
         <div className="ext-detail-section-group">
           <h4>Article Content</h4>
           <div className="ext-article-content">
-            <ReactMarkdown>
-              {articleContent}
-            </ReactMarkdown>
+            <HighlightedArticle content={articleContent} highlights={highlights} />
           </div>
         </div>
       )}

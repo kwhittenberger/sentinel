@@ -14,8 +14,14 @@ import anthropic
 
 from .extraction_prompts import (
     EXTRACTION_SCHEMA,
+    UNIVERSAL_EXTRACTION_SCHEMA,
+    UNIVERSAL_SYSTEM_PROMPT,
+    TRIAGE_SCHEMA,
+    TRIAGE_SYSTEM_PROMPT,
     get_extraction_prompt,
     get_system_prompt,
+    get_triage_prompt,
+    get_universal_extraction_prompt,
     get_required_fields,
     IncidentCategory,
 )
@@ -58,6 +64,153 @@ class LLMExtractor:
     def is_available(self) -> bool:
         """Check if extraction is available."""
         return self.client is not None
+
+    def triage(self, title: str, article_text: str) -> dict:
+        """
+        Quick triage to determine if article is worth full extraction.
+        Uses a smaller context and faster model for efficiency.
+
+        Args:
+            title: Article title
+            article_text: Article content
+
+        Returns:
+            dict with recommendation (extract/reject/review) and reasoning
+        """
+        if not self.client:
+            return {
+                "success": False,
+                "error": "LLM not available",
+                "recommendation": "review"
+            }
+
+        prompt = get_triage_prompt(title, article_text)
+
+        try:
+            message = self.client.messages.create(
+                model="claude-sonnet-4-20250514",  # Fast model for triage
+                max_tokens=500,
+                system=TRIAGE_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": prompt}],
+            )
+
+            response_text = message.content[0].text
+
+            # Extract JSON
+            if "```json" in response_text:
+                json_start = response_text.find("```json") + 7
+                json_end = response_text.find("```", json_start)
+                response_text = response_text[json_start:json_end].strip()
+            elif "```" in response_text:
+                json_start = response_text.find("```") + 3
+                json_end = response_text.find("```", json_start)
+                response_text = response_text[json_start:json_end].strip()
+
+            data = json.loads(response_text)
+
+            return {
+                "success": True,
+                "is_specific_incident": data.get("is_specific_incident", False),
+                "reason": data.get("reason", ""),
+                "incident_type": data.get("incident_type", "none"),
+                "has_named_individuals": data.get("has_named_individuals", False),
+                "has_specific_date_or_timeframe": data.get("has_specific_date_or_timeframe", False),
+                "has_specific_location": data.get("has_specific_location", False),
+                "recommendation": data.get("recommendation", "review"),
+            }
+
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse triage response: {e}")
+            return {"success": False, "error": str(e), "recommendation": "review"}
+        except Exception as e:
+            logger.exception(f"Triage error: {e}")
+            return {"success": False, "error": str(e), "recommendation": "review"}
+
+    def extract_universal(self, article_text: str, max_tokens: int = 4000) -> dict:
+        """
+        Universal extraction that captures ALL entities regardless of category.
+
+        This extracts:
+        - All actors (people, agencies, organizations) with their roles
+        - All events (protests, hearings, prior incidents)
+        - Incident details with multiple possible categories
+        - Policy context
+
+        Args:
+            article_text: The article content to analyze
+            max_tokens: Maximum tokens for response
+
+        Returns:
+            dict with universal extraction schema results
+        """
+        if not self.client:
+            return {
+                "success": False,
+                "error": "LLM extraction not available - ANTHROPIC_API_KEY not set",
+            }
+
+        # Truncate very long articles
+        if len(article_text) > 20000:
+            article_text = article_text[:20000] + "\n\n[Article truncated due to length]"
+
+        prompt = get_universal_extraction_prompt(article_text)
+        prompt += f"\n\nRespond with JSON matching this schema:\n{json.dumps(UNIVERSAL_EXTRACTION_SCHEMA, indent=2)}"
+
+        try:
+            message = self.client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=max_tokens,
+                system=UNIVERSAL_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": prompt}],
+            )
+
+            response_text = message.content[0].text
+
+            # Extract JSON from response
+            if "```json" in response_text:
+                json_start = response_text.find("```json") + 7
+                json_end = response_text.find("```", json_start)
+                response_text = response_text[json_start:json_end].strip()
+            elif "```" in response_text:
+                json_start = response_text.find("```") + 3
+                json_end = response_text.find("```", json_start)
+                response_text = response_text[json_start:json_end].strip()
+
+            data = json.loads(response_text)
+
+            result = {
+                "success": True,
+                "is_relevant": data.get("is_relevant", False),
+                "relevance_reason": data.get("relevance_reason", ""),
+                "extraction_type": "universal",
+            }
+
+            if data.get("is_relevant"):
+                result["incident"] = data.get("incident", {})
+                result["actors"] = data.get("actors", [])
+                result["events"] = data.get("events", [])
+                result["policy_context"] = data.get("policy_context", {})
+                result["sources_cited"] = data.get("sources_cited", [])
+                result["extraction_notes"] = data.get("extraction_notes", "")
+
+                # Calculate overall confidence
+                incident = result.get("incident", {})
+                result["confidence"] = incident.get("overall_confidence", 0.5)
+
+                # Determine categories from incident
+                result["categories"] = incident.get("categories", [])
+
+            return result
+
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse universal extraction response: {e}")
+            return {"success": False, "error": f"Failed to parse response: {e}"}
+        except anthropic.APIError as e:
+            logger.error(f"Anthropic API error: {e}")
+            return {"success": False, "error": f"API error: {e}"}
+        except Exception as e:
+            logger.exception(f"Unexpected error during universal extraction: {e}")
+            return {"success": False, "error": f"Unexpected error: {e}"}
 
     async def _get_prompt_from_db(
         self,

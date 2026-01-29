@@ -495,3 +495,12 @@ export async function toggleFeed(feedId: string, active: boolean): Promise<{ suc
   });
   return response.json();
 }
+
+// Pipeline stages metadata
+export async function fetchPipelineStages(): Promise<{
+  id: string; name: string; slug: string;
+  description: string | null; default_order: number; is_active: boolean;
+}[]> {
+  const response = await fetch(`${API_BASE}/admin/pipeline/stages`);
+  return response.json();
+}

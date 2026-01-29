@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
-import type { ExtractedIncidentData } from './types';
+import type { ExtractedIncidentData, UniversalExtractionData } from './types';
 import { SplitPane } from './SplitPane';
+import { ExtractionDetailView } from './ExtractionDetailView';
+import { HighlightedArticle, collectHighlightsFromRecord } from './articleHighlight';
 
 const API_BASE = '/api';
 
@@ -76,6 +78,14 @@ export function BatchProcessing({ onClose, onRefresh }: BatchProcessingProps) {
   // Edit mode state
   const [editMode, setEditMode] = useState(false);
   const [editData, setEditData] = useState<EditableData>({});
+
+  // Confirmation dialog state
+  const [confirmAction, setConfirmAction] = useState<{
+    type: 'bulk-approve' | 'bulk-reject';
+    tier: string;
+    count: number;
+  } | null>(null);
+  const [rejectReason, setRejectReason] = useState('');
 
   const loadTieredQueue = useCallback(async () => {
     setLoading(true);
@@ -185,17 +195,17 @@ export function BatchProcessing({ onClose, onRefresh }: BatchProcessingProps) {
     }
   };
 
-  const handleReject = async () => {
+  const handleReject = async (reason?: string) => {
     if (!selectedItem) return;
-    const reason = prompt('Rejection reason:');
-    if (!reason) return;
+    const finalReason = reason || rejectReason;
+    if (!finalReason) return;
 
     setProcessing(true);
     try {
       const response = await fetch(`${API_BASE}/admin/queue/${selectedItem.id}/reject`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reason }),
+        body: JSON.stringify({ reason: finalReason }),
       });
       if (response.ok) {
         setMessage({ type: 'success', text: 'Article rejected' });
@@ -203,6 +213,7 @@ export function BatchProcessing({ onClose, onRefresh }: BatchProcessingProps) {
         setFullArticle(null);
         setEditMode(false);
         setEditData({});
+        setRejectReason('');
         loadTieredQueue();
       } else {
         setMessage({ type: 'error', text: 'Failed to reject' });
@@ -215,10 +226,9 @@ export function BatchProcessing({ onClose, onRefresh }: BatchProcessingProps) {
   };
 
   const handleBulkApprove = async () => {
-    if (!confirm(`Approve all ${tieredQueue[selectedTier].length} items in ${selectedTier} confidence tier?`)) return;
-
     setProcessing(true);
     setMessage(null);
+    setConfirmAction(null);
     try {
       const response = await fetch(`${API_BASE}/admin/queue/bulk-approve`, {
         method: 'POST',
@@ -244,26 +254,25 @@ export function BatchProcessing({ onClose, onRefresh }: BatchProcessingProps) {
   };
 
   const handleBulkReject = async () => {
-    const reason = prompt('Enter rejection reason:');
-    if (!reason) return;
-
-    if (!confirm(`Reject all ${tieredQueue[selectedTier].length} items in ${selectedTier} confidence tier?`)) return;
+    if (!rejectReason.trim()) return;
 
     setProcessing(true);
     setMessage(null);
+    setConfirmAction(null);
     try {
       const response = await fetch(`${API_BASE}/admin/queue/bulk-reject`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           tier: selectedTier,
-          reason,
+          reason: rejectReason,
           limit: 100,
         }),
       });
       if (response.ok) {
         const data = await response.json();
         setMessage({ type: 'success', text: `Rejected ${data.rejected_count} items` });
+        setRejectReason('');
         loadTieredQueue();
       } else {
         setMessage({ type: 'error', text: 'Bulk reject failed' });
@@ -340,15 +349,18 @@ export function BatchProcessing({ onClose, onRefresh }: BatchProcessingProps) {
       <div className="bulk-actions">
         <button
           className="action-btn approve"
-          onClick={handleBulkApprove}
-          disabled={processing || currentItems.length === 0}
+          onClick={() => setConfirmAction({ type: 'bulk-approve', tier: selectedTier, count: currentItems.length })}
+          disabled={processing || currentItems.length === 0 || !!confirmAction}
         >
           {processing ? 'Processing...' : `Approve All ${currentItems.length} Items`}
         </button>
         <button
           className="action-btn reject"
-          onClick={handleBulkReject}
-          disabled={processing || currentItems.length === 0}
+          onClick={() => {
+            setRejectReason('');
+            setConfirmAction({ type: 'bulk-reject', tier: selectedTier, count: currentItems.length });
+          }}
+          disabled={processing || currentItems.length === 0 || !!confirmAction}
         >
           Reject All
         </button>
@@ -356,6 +368,63 @@ export function BatchProcessing({ onClose, onRefresh }: BatchProcessingProps) {
           Refresh
         </button>
       </div>
+
+      {/* Inline Confirmation Dialog */}
+      {confirmAction && (
+        <div className="bp-confirm-dialog">
+          <div className="bp-confirm-content">
+            {confirmAction.type === 'bulk-approve' ? (
+              <>
+                <p>
+                  Approve all <strong>{confirmAction.count}</strong> items
+                  in the <strong>{confirmAction.tier}</strong> confidence tier?
+                </p>
+                <p className="bp-confirm-note">
+                  This will create incidents from the extracted data.
+                </p>
+                <div className="bp-confirm-actions">
+                  <button className="action-btn approve" onClick={handleBulkApprove} disabled={processing}>
+                    {processing ? 'Approving...' : 'Confirm Approve'}
+                  </button>
+                  <button className="action-btn" onClick={() => setConfirmAction(null)} disabled={processing}>
+                    Cancel
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <p>
+                  Reject all <strong>{confirmAction.count}</strong> items
+                  in the <strong>{confirmAction.tier}</strong> confidence tier?
+                </p>
+                <div className="bp-reject-reason">
+                  <label>Rejection reason:</label>
+                  <input
+                    type="text"
+                    value={rejectReason}
+                    onChange={e => setRejectReason(e.target.value)}
+                    placeholder="Enter reason for rejection..."
+                    autoFocus
+                    onKeyDown={e => { if (e.key === 'Enter' && rejectReason.trim()) handleBulkReject(); }}
+                  />
+                </div>
+                <div className="bp-confirm-actions">
+                  <button
+                    className="action-btn reject"
+                    onClick={handleBulkReject}
+                    disabled={processing || !rejectReason.trim()}
+                  >
+                    {processing ? 'Rejecting...' : 'Confirm Reject'}
+                  </button>
+                  <button className="action-btn" onClick={() => { setConfirmAction(null); setRejectReason(''); }} disabled={processing}>
+                    Cancel
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Content */}
       <SplitPane
@@ -584,10 +653,19 @@ export function BatchProcessing({ onClose, onRefresh }: BatchProcessingProps) {
                 ) : (
                   /* Extracted Data Section */
                   fullArticle?.extracted_data && (
-                    <div className="detail-section">
-                      <h4>Extracted Data</h4>
-                      <ExtractionTable data={fullArticle.extracted_data} />
-                    </div>
+                    (fullArticle.extracted_data as Record<string, unknown>)?.incident ||
+                    (fullArticle.extracted_data as Record<string, unknown>)?.actors ? (
+                      <ExtractionDetailView
+                        data={fullArticle.extracted_data as unknown as UniversalExtractionData}
+                        articleContent={fullArticle.content}
+                        sourceUrl={fullArticle.source_url}
+                      />
+                    ) : (
+                      <div className="detail-section">
+                        <h4>Extracted Data</h4>
+                        <ExtractionTable data={fullArticle.extracted_data} />
+                      </div>
+                    )
                   )
                 )}
 
@@ -637,8 +715,10 @@ export function BatchProcessing({ onClose, onRefresh }: BatchProcessingProps) {
                   <div className="detail-section">
                     <h4>Article Content</h4>
                     <div className="article-content">
-                      {fullArticle.content.substring(0, 1500)}
-                      {fullArticle.content.length > 1500 && '...'}
+                      <HighlightedArticle
+                        content={fullArticle.content}
+                        highlights={fullArticle.extracted_data ? collectHighlightsFromRecord(fullArticle.extracted_data as Record<string, unknown>) : []}
+                      />
                     </div>
                   </div>
                 )}
@@ -653,13 +733,23 @@ export function BatchProcessing({ onClose, onRefresh }: BatchProcessingProps) {
               >
                 {processing ? 'Processing...' : editMode ? 'Save & Approve' : 'Approve & Create Incident'}
               </button>
-              <button
-                className="action-btn reject"
-                onClick={handleReject}
-                disabled={processing}
-              >
-                Reject
-              </button>
+              <div className="bp-inline-reject">
+                <input
+                  type="text"
+                  className="bp-reject-input"
+                  value={rejectReason}
+                  onChange={e => setRejectReason(e.target.value)}
+                  placeholder="Rejection reason..."
+                  onKeyDown={e => { if (e.key === 'Enter' && rejectReason.trim()) handleReject(); }}
+                />
+                <button
+                  className="action-btn reject"
+                  onClick={() => handleReject()}
+                  disabled={processing || !rejectReason.trim()}
+                >
+                  Reject
+                </button>
+              </div>
             </div>
           </div>
         ) : (
