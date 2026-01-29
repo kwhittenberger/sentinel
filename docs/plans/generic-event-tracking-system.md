@@ -10,7 +10,8 @@
 This plan outlines the transformation of the current immigration-focused incident tracking system into a generic event tracking platform capable of handling diverse event domains including criminal justice, civil rights, immigration, prosecutorial accountability, and recidivism tracking.
 
 **Key Goals:**
-- Maintain backward compatibility with existing immigration tracking
+- Preserve existing data and functionality during migration
+- Define API versioning and release management strategy for future deployments
 - Enable tracking of any event type through configurable schemas
 - Support complex event relationships and sequences
 - Provide domain-specific analytics and reporting
@@ -670,7 +671,7 @@ CREATE TABLE prosecutorial_actions (
     action_date DATE NOT NULL,
 
     -- Charge details (DEPRECATED: use prosecutor_action_charges junction table instead)
-    -- Kept for backward compatibility during migration, will be removed in future version
+    -- Retained during initial implementation; remove once junction table is fully adopted
     original_charges JSONB,
     amended_charges JSONB,
     dismissed_charges JSONB,
@@ -796,7 +797,7 @@ CREATE TABLE dispositions (
     -- Compliance
     compliance_status VARCHAR(50) DEFAULT 'pending'
         CHECK (compliance_status IN ('pending', 'compliant', 'non_compliant', 'completed', 'revoked')),
-    -- Legacy fields (kept for backward compatibility)
+    -- Legacy fields (retained for migration; remove once structured sentencing fields are validated)
     sentence JSONB,
     sentence_years INTEGER,
     sentence_months INTEGER,
@@ -1080,10 +1081,13 @@ CREATE UNIQUE INDEX idx_recidivism_actor ON recidivism_analysis(actor_id);
 -- Recidivism indicator function [M-003]
 -- WARNING: This is a HEURISTIC indicator, NOT a validated risk assessment instrument.
 -- FOR INFORMATIONAL USE ONLY. Not validated for judicial decision-making.
--- Must not be used for automated decision-making without a validated ML model.
+-- Must not be used for automated decision-making without proper validation.
 -- Known limitations: no demographic normalization, no offense-type weighting,
 -- no validation study performed, potential for demographic bias.
--- To be replaced with validated ML model in Phase 5.
+-- IMPLEMENTATION REQUIREMENT: Algorithm coefficients, weighting factors, and
+-- acceptance criteria MUST be defined and validated before merge. Document the
+-- methodology, define precision/recall targets, and create a golden test dataset
+-- for regression testing. See Phase 4 acceptance criteria.
 CREATE FUNCTION calculate_recidivism_indicator(p_actor_id UUID)
 RETURNS TABLE (
     indicator_score DECIMAL(5,4),
@@ -1127,11 +1131,14 @@ BEGIN
         END
     );
 
+    -- TODO: Replace coefficients (0.1, 100, 0.3/0.2/0.1) with validated values.
+    -- Acceptance criteria must be met before merge — see Phase 4 requirements.
+
     RETURN QUERY SELECT
         v_score,
-        TRUE,  -- Always preliminary until ML model replaces this
+        TRUE,  -- Preliminary until validated against golden dataset
         'heuristic-v1'::VARCHAR(20),
-        'FOR INFORMATIONAL USE ONLY. Heuristic indicator not validated for judicial decision-making. Potential for demographic bias. See Phase 5 for validated model.'::TEXT;
+        'FOR INFORMATIONAL USE ONLY. Heuristic indicator not validated for judicial decision-making. Potential for demographic bias.'::TEXT;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -2654,7 +2661,7 @@ export function ProsecutorDashboard() {
 - ✅ Create taxonomy tables (domains, categories)
 - ✅ Add custom_fields to incidents
 - ✅ Migrate immigration data to new structure
-- ✅ Test backward compatibility
+- ✅ Verify data integrity after migration
 - ✅ Update UI to show domains
 
 ### Migration Concurrency Strategy
@@ -2668,7 +2675,7 @@ The system will remain fully operational during all migration phases using the f
 ```python
 # backend/services/migration_service.py
 """
-Zero-downtime migration with dual-write strategy.
+Zero-downtime migration with concurrent data transformation.
 """
 import asyncpg
 from contextlib import asynccontextmanager
@@ -2756,9 +2763,9 @@ class MigrationService:
         incident_data: Dict[str, Any]
     ) -> str:
         """
-        Create incident with dual-write strategy during migration.
+        Create incident during migration.
 
-        Writes to both old and new schema fields for compatibility.
+        Writes to both old and new schema fields until migration completes.
         """
         async with self.pool.acquire() as conn:
             # Determine domain/category from input or default to immigration
@@ -2771,10 +2778,10 @@ class MigrationService:
                 WHERE ec.domain_id = $1 AND ec.slug = $2
             """, domain_id, category_slug)
 
-            # Insert with both old and new fields
+            # Insert with both old and new fields during migration
             incident_id = await conn.fetchval("""
                 INSERT INTO incidents (
-                    -- Old schema (for compatibility)
+                    -- Old schema (populated until migration finalizes)
                     category, date, state, city,
                     -- New schema
                     domain_id, category_id,
@@ -2807,7 +2814,7 @@ class MigrationService:
 | Operation | Isolation Level | Locking Strategy | Rationale |
 |-----------|----------------|------------------|-----------|
 | Batch migration | READ COMMITTED | Row-level (FOR UPDATE SKIP LOCKED) | Allow reads during migration, skip locked rows |
-| New incident creation | READ COMMITTED | None | Default behavior, dual-write to both schemas |
+| New incident creation | READ COMMITTED | None | Default behavior, populates both schemas during migration |
 | Incident reads | READ COMMITTED | None | No locks needed for reads |
 | Analytics queries | READ COMMITTED | None | Slight staleness acceptable |
 
@@ -2939,16 +2946,16 @@ async def test_category_reference_during_migration():
    - Writes: Old schema only
    - Reads: Old schema only
 
-2. **During Migration (Dual-Write Mode):**
-   - Old schema: Still populated (compatibility)
+2. **During Migration:**
+   - Old schema: Still populated (until migration finalizes)
    - New schema: Gradually populating
-   - Writes: **Both schemas** (dual-write)
+   - Writes: **Both schemas** (ensures consistency)
    - Reads: Prefer new schema, fallback to old
 
 3. **After Migration Complete:**
-   - Old schema: Deprecated (but still present)
+   - Old schema: Columns dropped (old data preserved in new columns)
    - New schema: Fully populated
-   - Writes: New schema only (old schema optional)
+   - Writes: New schema only
    - Reads: New schema only
 
 **In-Flight Transaction Handling**
@@ -3072,7 +3079,9 @@ COMMIT;  -- Transaction 1 releases lock
 |------|-------|-------|--------------|
 | Design recidivism tracking schema | 12 | Backend | Phase 2 complete |
 | Create migration 014_recidivism_tracking.sql | 16 | Backend | Schema design |
-| Implement recidivism calculation function | 20 | Backend/DBA | Migration |
+| Define recidivism algorithm & acceptance criteria | 12 | Backend/DBA | Schema design |
+| Implement recidivism calculation function | 20 | Backend/DBA | Algorithm defined |
+| Create golden test dataset for recidivism validation | 8 | Backend | Algorithm defined |
 | Create event_relationships schema | 12 | Backend | Phase 1 |
 | Create migration 010_event_relationships.sql | 12 | Backend | Schema design |
 | Implement relationship management service | 20 | Backend | Migration |
@@ -3596,196 +3605,188 @@ async def test_case_lifecycle():
     assert len(events) >= 3
 ```
 
-### Backward Compatibility Testing
+### Release Management & API Versioning Strategy
 
-**Scope of Backward Compatibility:**
+> **Note:** There is no currently deployed instance, so backward compatibility with an
+> existing system is not a concern. This section defines the release management strategy
+> for future deployments — how we version APIs, manage breaking changes, and ensure
+> smooth upgrades once the system is live.
 
-The following APIs/queries must continue to work identically after migration:
+**API Surface to Version:**
 
-1. **Incident Creation (Legacy Format):**
+The following API groups will use versioned routing once deployed:
+
+1. **Incident Management:**
    ```python
-   POST /api/incidents
-   {
-       "category": "enforcement",  # Old enum value
-       "date": "2026-01-15",
-       "state": "CA",
-       "victim_category": "protester"
-   }
+   POST /api/v1/incidents
+   GET  /api/v1/incidents?domain=immigration&category=enforcement
+   GET  /api/v1/incidents?start_date=2025-01-01&end_date=2026-01-01
    ```
 
-2. **Incident Queries (Legacy Filters):**
+2. **Analytics Endpoints:**
    ```python
-   GET /api/incidents?category=enforcement
-   GET /api/incidents?start_date=2025-01-01&end_date=2026-01-01
+   GET /api/v1/stats/by-category
+   GET /api/v1/stats/by-state
+   GET /api/v1/stats/by-domain
    ```
 
-3. **Analytics Endpoints:**
+3. **Article Extraction:**
    ```python
-   GET /api/stats/by-category  # Must still work with old category enum
-   GET /api/stats/by-state
+   POST /api/v1/articles/extract  # Requires domain parameter
    ```
 
-4. **Article Extraction (Immigration Domain):**
-   ```python
-   POST /api/articles/extract  # Must default to immigration domain if not specified
-   ```
-
-**Regression Test Suite:**
+**Core API Test Suite:**
 
 ```python
-# tests/test_backward_compatibility.py
+# tests/test_api_versioning.py
 """
-Regression tests to ensure migration maintains backward compatibility.
+Tests for API versioning and release management.
+Validates that versioned endpoints work correctly and that
+the versioning strategy supports future breaking changes.
 """
 import pytest
 from httpx import AsyncClient
 
-class TestBackwardCompatibility:
-    """Test suite for backward compatibility after migration."""
+class TestAPIVersioning:
+    """Test suite for API versioning and migration data integrity."""
 
     @pytest.fixture
-    async def pre_migration_incidents(self, test_db_pool):
-        """Create incidents using old schema format."""
+    async def sample_incidents(self, test_db_pool):
+        """Create incidents using the new schema format."""
         async with test_db_pool.acquire() as conn:
-            # Create incidents with old schema fields
             ids = []
             for i in range(10):
                 incident_id = await conn.fetchval("""
                     INSERT INTO incidents (
-                        category, date, state, city,
-                        victim_category, immigration_status, sanctuary_status
+                        domain_id, category_id, event_start_date, state, city,
+                        victim_type_id, custom_fields
                     ) VALUES (
                         $1, $2, $3, $4, $5, $6, $7
                     ) RETURNING id
                 """,
-                    'enforcement' if i % 2 == 0 else 'crime',
+                    enforcement_domain_id if i % 2 == 0 else crime_domain_id,
+                    enforcement_cat_id if i % 2 == 0 else crime_cat_id,
                     f'2026-01-{i+1:02d}',
                     'CA', 'Los Angeles',
-                    'protester', 'undocumented', 'sanctuary'
+                    protester_type_id,
+                    '{}'
                 )
                 ids.append(incident_id)
             return ids
 
     @pytest.mark.asyncio
-    async def test_legacy_incident_creation(self, client: AsyncClient):
-        """Test that legacy incident creation still works."""
-        response = await client.post("/api/incidents", json={
+    async def test_incident_creation(self, client: AsyncClient):
+        """Test incident creation with domain/category taxonomy."""
+        response = await client.post("/api/v1/incidents", json={
+            "domain": "immigration",
             "category": "enforcement",
             "date": "2026-01-29",
             "state": "CA",
             "city": "San Francisco",
-            "victim_category": "protester",
-            "immigration_status": "citizen",
-            "sanctuary_status": "sanctuary"
+            "victim_type": "protester",
+            "custom_fields": {}
         })
 
         assert response.status_code == 200
         data = response.json()
 
-        # Verify incident created with both old and new schema
         async with test_db_pool.acquire() as conn:
             row = await conn.fetchrow(
                 "SELECT * FROM incidents WHERE id = $1",
                 UUID(data['incident_id'])
             )
 
-            # Old schema fields populated
-            assert row['category'] == 'enforcement'
-            assert row['date'] == datetime.date(2026, 1, 29)
-
-            # New schema fields also populated
             assert row['domain_id'] is not None
             assert row['category_id'] is not None
-            assert row['event_start_date'] == datetime.date(2026, 1, 29)
+            assert row['event_start_date'] is not None
 
     @pytest.mark.asyncio
-    async def test_legacy_category_filter(
+    async def test_domain_category_filter(
         self,
         client: AsyncClient,
-        pre_migration_incidents
+        sample_incidents
     ):
-        """Test that filtering by old category enum still works."""
-        response = await client.get("/api/incidents?category=enforcement")
-
-        assert response.status_code == 200
-        data = response.json()
-
-        # Should return 5 enforcement incidents
-        assert len(data['incidents']) == 5
-        assert all(inc['category'] == 'enforcement' for inc in data['incidents'])
-
-    @pytest.mark.asyncio
-    async def test_legacy_date_range_query(
-        self,
-        client: AsyncClient,
-        pre_migration_incidents
-    ):
-        """Test that date range queries still work."""
+        """Test filtering by domain and category."""
         response = await client.get(
-            "/api/incidents?start_date=2026-01-01&end_date=2026-01-05"
+            "/api/v1/incidents?domain=immigration&category=enforcement"
         )
 
         assert response.status_code == 200
         data = response.json()
 
-        # Should return incidents from Jan 1-5
         assert len(data['incidents']) == 5
+        assert all(inc['domain'] == 'immigration' for inc in data['incidents'])
 
     @pytest.mark.asyncio
-    async def test_legacy_stats_endpoint(
+    async def test_date_range_query(
         self,
         client: AsyncClient,
-        pre_migration_incidents
+        sample_incidents
     ):
-        """Test that legacy stats endpoint returns same format."""
-        response = await client.get("/api/stats/by-category")
+        """Test date range queries work with event_start_date."""
+        response = await client.get(
+            "/api/v1/incidents?start_date=2026-01-01&end_date=2026-01-05"
+        )
 
         assert response.status_code == 200
         data = response.json()
 
-        # Should have both category counts
-        assert 'enforcement' in data
-        assert 'crime' in data
-        assert data['enforcement'] == 5
-        assert data['crime'] == 5
+        assert len(data['incidents']) == 5
 
     @pytest.mark.asyncio
-    async def test_legacy_extraction_defaults_to_immigration(
+    async def test_stats_by_domain(
+        self,
+        client: AsyncClient,
+        sample_incidents
+    ):
+        """Test stats endpoint groups by domain/category."""
+        response = await client.get("/api/v1/stats/by-domain")
+
+        assert response.status_code == 200
+        data = response.json()
+
+        assert 'immigration' in data
+        assert data['immigration']['total'] == 10
+
+    @pytest.mark.asyncio
+    async def test_extraction_requires_domain(
         self,
         client: AsyncClient
     ):
-        """Test that article extraction without domain defaults to immigration."""
-        response = await client.post("/api/articles/extract", json={
+        """Test that article extraction uses domain-specific schemas."""
+        response = await client.post("/api/v1/articles/extract", json={
             "url": "https://example.com/article",
             "title": "ICE Raid in California",
-            "text": "ICE agents arrested 10 people in a raid..."
+            "text": "ICE agents arrested 10 people in a raid...",
+            "domain": "immigration"
         })
 
         assert response.status_code == 200
         data = response.json()
 
-        # Should use immigration domain extraction schema
         assert data['domain'] == 'immigration'
         assert data['category'] in ['enforcement', 'crime']
 
     @pytest.mark.asyncio
-    async def test_performance_no_degradation(
+    async def test_query_performance_baseline(
         self,
         test_db_pool,
-        pre_migration_incidents
+        sample_incidents
     ):
-        """Test that query performance hasn't degraded > 5%."""
+        """Establish query performance baselines."""
         import time
 
-        # Baseline query time (should be fast on small dataset)
         async with test_db_pool.acquire() as conn:
             start = time.perf_counter()
 
             for _ in range(100):
                 await conn.fetch("""
-                    SELECT * FROM incidents
-                    WHERE category = 'enforcement'
-                    AND date BETWEEN '2026-01-01' AND '2026-01-31'
+                    SELECT i.*, d.name as domain_name, c.name as category_name
+                    FROM incidents i
+                    JOIN event_domains d ON i.domain_id = d.id
+                    JOIN event_categories c ON i.category_id = c.id
+                    WHERE d.slug = 'immigration'
+                    AND i.event_start_date BETWEEN '2026-01-01' AND '2026-01-31'
                     LIMIT 100
                 """)
 
@@ -3794,120 +3795,114 @@ class TestBackwardCompatibility:
 
         # Query should complete in < 10ms on average
         assert avg_query_time < 0.01, \
-            f"Query performance degraded: {avg_query_time*1000:.2f}ms avg"
+            f"Query too slow: {avg_query_time*1000:.2f}ms avg"
 
     @pytest.mark.asyncio
-    async def test_api_contract_unchanged(self, client: AsyncClient):
-        """Test that API response format hasn't changed."""
-        response = await client.get("/api/incidents/recent?limit=1")
+    async def test_api_response_contract(self, client: AsyncClient):
+        """Test that API v1 response contract is correct."""
+        response = await client.get("/api/v1/incidents/recent?limit=1")
 
         assert response.status_code == 200
         data = response.json()
 
-        # Response should have expected structure
         assert 'incidents' in data
-        assert len(data['incidents']) >= 0
+        assert 'pagination' in data
 
         if data['incidents']:
             incident = data['incidents'][0]
 
-            # Required fields still present
+            # Required fields in v1 contract
             assert 'id' in incident
-            assert 'date' in incident
+            assert 'domain' in incident
             assert 'category' in incident
+            assert 'event_start_date' in incident
             assert 'state' in incident
 
-            # New fields should be present but optional in responses
-            # (clients shouldn't break if they ignore new fields)
-            assert 'domain_id' in incident or True  # Optional
-            assert 'category_id' in incident or True  # Optional
-
     @pytest.mark.asyncio
-    async def test_curation_queue_still_works(self, client: AsyncClient):
-        """Test that curation workflow isn't broken."""
-        # Submit article for extraction
-        response = await client.post("/api/articles/submit", json={
+    async def test_curation_queue_workflow(self, client: AsyncClient):
+        """Test that curation workflow operates correctly."""
+        response = await client.post("/api/v1/articles/submit", json={
             "url": "https://example.com/test",
             "title": "Test Article",
-            "text": "Test content"
+            "text": "Test content",
+            "domain": "immigration"
         })
 
         assert response.status_code == 200
 
-        # Check curation queue
-        response = await client.get("/api/curation/queue")
+        response = await client.get("/api/v1/curation/queue")
         assert response.status_code == 200
 
-        # Approve/reject should still work
         if response.json()['queue']:
             queue_item = response.json()['queue'][0]
             response = await client.post(
-                f"/api/curation/{queue_item['id']}/approve"
+                f"/api/v1/curation/{queue_item['id']}/approve"
             )
             assert response.status_code == 200
 
 ```
 
-**Compatibility Validation Checklist:**
+**Migration Data Integrity Checklist:**
 
 Before declaring migration complete, validate:
 
-- [ ] All existing unit tests still pass (0 regressions)
-- [ ] All existing integration tests still pass (0 regressions)
-- [ ] API response formats unchanged for legacy endpoints
-- [ ] Query performance within 5% of pre-migration baseline
+- [ ] All unit tests pass (0 regressions)
+- [ ] All integration tests pass (0 regressions)
+- [ ] Row counts match pre/post migration checksums
+- [ ] Foreign key relationships valid (zero orphans)
+- [ ] Query performance meets targets (see JSONB benchmarks)
 - [ ] Frontend UI displays incidents correctly
 - [ ] Curation queue workflow functional
 - [ ] Article extraction pipeline functional
 - [ ] Analytics dashboards display correctly
-- [ ] No errors in production logs for 48 hours post-migration
-- [ ] Manual smoke test by domain expert passes
+- [ ] Manual smoke test passes
 
-**API Versioning Strategy (If Breaking Changes Needed):**
+**API Versioning Strategy (For Future Releases):**
 
-If breaking changes become necessary:
+When breaking changes are introduced in future versions:
 
 ```python
 # backend/main.py
 from fastapi import APIRouter
 
-# v1 API (legacy, deprecated)
+# Current API (v1)
 router_v1 = APIRouter(prefix="/api/v1")
 
 @router_v1.get("/incidents")
-async def get_incidents_v1(category: str = None):
-    """Legacy endpoint - uses old category enum."""
-    # Map to new schema internally
+async def get_incidents_v1(domain: str = None, category: str = None):
+    """v1 endpoint - domain/category taxonomy."""
     pass
 
-# v2 API (new, recommended)
+# Future API (v2) - introduced when breaking changes are needed
 router_v2 = APIRouter(prefix="/api/v2")
 
 @router_v2.get("/incidents")
 async def get_incidents_v2(domain_slug: str = None, category_slug: str = None):
-    """New endpoint - uses domain/category taxonomy."""
+    """v2 endpoint - breaking changes to response structure."""
     pass
 
 app.include_router(router_v1)
-app.include_router(router_v2)
+# app.include_router(router_v2)  # Enable when v2 is ready
 ```
 
-**Deprecation Timeline:**
+**Deprecation Policy (For Future Deployed Versions):**
 
-1. **Week 0-4:** Both old and new schemas coexist (dual-write)
-2. **Week 4-12:** Gradual transition, old API marked as deprecated in docs
-3. **Week 12+:** Old category column deprecated (comment added)
-4. **Month 6:** Remove old category column (breaking change, requires v2 API)
+When a new API version is released:
 
-**Quantitative Definition of "Compatible":**
+1. **Release N:** New version available, old version marked deprecated in docs
+2. **Release N+1:** Old version returns `Deprecation` header with sunset date
+3. **Release N+2:** Old version removed (minimum 3-month window between N and N+2)
+4. Changelog and migration guide published for each breaking change
 
-A migration is considered backward compatible if:
+**Release Quality Gate:**
 
-- Zero breaking API changes (all existing endpoints return same response structure)
-- Query performance degradation < 5% (measured at p95)
-- Zero data loss (checksums match pre/post migration)
-- Zero new errors in production logs for 48 hours
-- 100% of regression tests pass
+A release candidate passes quality gate if:
+
+- Zero data integrity violations (checksums, FK validation)
+- Query performance meets benchmark targets (see JSONB Performance section)
+- 100% of API contract tests pass
+- Zero errors in staging environment for 24 hours
+- All acceptance criteria for included features are met
 
 ## Performance Considerations
 
@@ -4239,7 +4234,7 @@ Each table has a `data_classification` column (default: 'restricted'). API endpo
 
 ## Conclusion
 
-This plan provides a comprehensive roadmap for transforming the immigration-focused incident tracker into a generic event tracking platform. The hybrid migration approach balances innovation with stability, allowing the system to evolve incrementally while maintaining backward compatibility.
+This plan provides a comprehensive roadmap for transforming the immigration-focused incident tracker into a generic event tracking platform. The phased migration approach allows the system to evolve incrementally with clear quality gates and a forward-looking API versioning strategy for future releases.
 
 **Key Takeaways:**
 - Flexible schema via JSONB custom fields

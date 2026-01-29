@@ -118,16 +118,16 @@ No changes needed - this was already comprehensive.
 ### [C-007] Backward Compatibility Validation Missing
 **Status: RESOLVED**
 
-**Response:** The plan already contained a full "Backward Compatibility Testing" section with:
+**Response:** Reframed as "Release Management & API Versioning Strategy" since there is no deployed instance requiring backward compatibility. The plan now contains:
 
-1. **Scope definition** - 4 specific API groups: incident creation, incident queries, analytics endpoints, article extraction.
-2. **Regression test suite** - `TestBackwardCompatibility` class with 8 test methods covering legacy creation, filtering, date ranges, stats, extraction, performance, API contracts, and curation.
-3. **API versioning strategy** - v1 (legacy) / v2 (new) router pattern with FastAPI.
-4. **Deprecation timeline** - 4-phase: dual-write (weeks 0-4), gradual transition (weeks 4-12), column deprecation (week 12+), column removal (month 6).
-5. **Quantitative compatibility definition** - Zero breaking changes, < 5% p95 degradation, zero data loss, zero errors for 48h, 100% regression tests pass.
-6. **Validation checklist** - 10-item checklist for declaring migration complete.
+1. **Scope definition** - 3 versioned API groups: incident management, analytics, article extraction.
+2. **API test suite** - `TestAPIVersioning` class with tests covering incident creation, domain/category filtering, date ranges, stats, extraction, performance baselines, API contracts, and curation workflow.
+3. **API versioning strategy** - v1 (current) / v2 (future breaking changes) router pattern with FastAPI.
+4. **Deprecation policy** - 3-release minimum window: deprecated → sunset header → removal.
+5. **Release quality gate** - Zero data integrity violations, benchmark targets met, 100% contract tests pass, 24h error-free in staging.
+6. **Data integrity checklist** - 10-item checklist for declaring migration complete.
 
-No changes needed - this was already comprehensive.
+Updated to reflect no deployed instance — focuses on data integrity during migration and forward-looking release strategy.
 
 ---
 
@@ -165,8 +165,8 @@ No changes needed - this was already comprehensive.
 2. **Added explicit disclaimers** - "FOR INFORMATIONAL USE ONLY. Not validated for judicial decision-making."
 3. **Added `is_preliminary` flag** - Returns metadata indicating the score is from a heuristic model, not a validated instrument.
 4. **Documented limitations** - Known bias risks, lack of validation study, factors not considered.
-5. **Defined acceptable error rate** - "Not applicable until replaced by validated model. Heuristic scores must not be used for any automated decision-making."
-6. **Gated deployment** - Feature hidden behind feature flag, admin-only access, cannot be used in automated workflows.
+5. **Implementation requirement** - Algorithm coefficients, weighting factors, and acceptance criteria must be defined and validated before merge. Golden test dataset required for regression testing.
+6. **Phase 4 tasks added** - Explicit tasks for defining algorithm acceptance criteria (12h), creating golden test dataset (8h), and validating against it before merge.
 
 ---
 
