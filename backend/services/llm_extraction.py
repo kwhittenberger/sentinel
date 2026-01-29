@@ -6,11 +6,8 @@ Now integrates with PromptManager for database-backed prompts when available.
 
 import json
 import logging
-import os
 from typing import Optional, Literal
 from uuid import UUID
-
-import anthropic
 
 from .extraction_prompts import (
     EXTRACTION_SCHEMA,
@@ -29,9 +26,6 @@ from .prompt_manager import ExecutionResult
 
 logger = logging.getLogger(__name__)
 
-# Get API key from environment
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-
 # Import PromptManager for database-backed prompts (optional)
 try:
     from .prompt_manager import get_prompt_manager, PromptManager
@@ -42,19 +36,18 @@ except ImportError:
 
 
 class LLMExtractor:
-    """Extracts incident data from article text using Claude."""
+    """Extracts incident data from article text using LLM providers."""
 
-    def __init__(self, api_key: Optional[str] = None, use_db_prompts: bool = True):
-        self.api_key = api_key or ANTHROPIC_API_KEY
+    def __init__(self, use_db_prompts: bool = True):
         self.use_db_prompts = use_db_prompts and PROMPT_MANAGER_AVAILABLE
         self._prompt_manager: Optional[PromptManager] = None
         self._db_pool = None
 
-        if not self.api_key:
-            logger.warning("ANTHROPIC_API_KEY not set - LLM extraction disabled")
-            self.client = None
-        else:
-            self.client = anthropic.Anthropic(api_key=self.api_key)
+        from .llm_provider import get_llm_router
+        self._router = get_llm_router()
+
+        if not self._router.has_available_provider():
+            logger.warning("No LLM providers available - extraction disabled")
 
     def set_db_pool(self, pool):
         """Set database pool for PromptManager integration."""
@@ -64,7 +57,14 @@ class LLMExtractor:
 
     def is_available(self) -> bool:
         """Check if extraction is available."""
-        return self.client is not None
+        return self._router.has_available_provider()
+
+    def _get_stage_config(self, stage_key: str):
+        """Get LLM stage config from settings."""
+        from .settings import get_settings_service
+        settings = get_settings_service()
+        llm_settings = settings._settings.llm
+        return llm_settings.get_stage_config(stage_key), llm_settings
 
     def triage(self, title: str, article_text: str) -> dict:
         """
@@ -78,7 +78,7 @@ class LLMExtractor:
         Returns:
             dict with recommendation (extract/reject/review) and reasoning
         """
-        if not self.client:
+        if not self._router.has_available_provider():
             return {
                 "success": False,
                 "error": "LLM not available",
@@ -86,16 +86,20 @@ class LLMExtractor:
             }
 
         prompt = get_triage_prompt(title, article_text)
+        stage_cfg, llm_settings = self._get_stage_config("triage")
 
         try:
-            message = self.client.messages.create(
-                model="claude-sonnet-4-20250514",  # Fast model for triage
-                max_tokens=500,
-                system=TRIAGE_SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": prompt}],
+            response = self._router.call(
+                system_prompt=TRIAGE_SYSTEM_PROMPT,
+                user_message=prompt,
+                model=stage_cfg.model,
+                max_tokens=stage_cfg.max_tokens,
+                provider_name=stage_cfg.provider,
+                fallback_provider=llm_settings.fallback_provider,
+                fallback_model=llm_settings.fallback_model,
             )
 
-            response_text = message.content[0].text
+            response_text = response.text
 
             # Extract JSON
             if "```json" in response_text:
@@ -181,10 +185,10 @@ class LLMExtractor:
         Returns:
             dict with universal extraction schema results
         """
-        if not self.client:
+        if not self._router.has_available_provider():
             return {
                 "success": False,
-                "error": "LLM extraction not available - ANTHROPIC_API_KEY not set",
+                "error": "LLM extraction not available - no providers configured",
             }
 
         # Truncate very long articles
@@ -194,15 +198,20 @@ class LLMExtractor:
         prompt = get_universal_extraction_prompt(article_text)
         prompt += f"\n\nRespond with JSON matching this schema:\n{json.dumps(UNIVERSAL_EXTRACTION_SCHEMA, indent=2)}"
 
+        stage_cfg, llm_settings = self._get_stage_config("extraction_universal")
+
         try:
-            message = self.client.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=max_tokens,
-                system=UNIVERSAL_SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": prompt}],
+            response = self._router.call(
+                system_prompt=UNIVERSAL_SYSTEM_PROMPT,
+                user_message=prompt,
+                model=stage_cfg.model,
+                max_tokens=stage_cfg.max_tokens if max_tokens == 4000 else max_tokens,
+                provider_name=stage_cfg.provider,
+                fallback_provider=llm_settings.fallback_provider,
+                fallback_model=llm_settings.fallback_model,
             )
 
-            response_text = message.content[0].text
+            response_text = response.text
 
             # Extract JSON from response
             if "```json" in response_text:
@@ -238,14 +247,20 @@ class LLMExtractor:
                 # Determine categories from incident
                 result["categories"] = incident.get("categories", [])
 
+            # Track provider info for usage recording
+            result["_api_usage"] = {
+                "input_tokens": response.input_tokens,
+                "output_tokens": response.output_tokens,
+                "latency_ms": response.latency_ms,
+                "provider": response.provider,
+                "model": response.model,
+            }
+
             return result
 
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse universal extraction response: {e}")
             return {"success": False, "error": f"Failed to parse response: {e}"}
-        except anthropic.APIError as e:
-            logger.error(f"Anthropic API error: {e}")
-            return {"success": False, "error": f"API error: {e}"}
         except Exception as e:
             logger.exception(f"Unexpected error during universal extraction: {e}")
             return {"success": False, "error": f"Unexpected error: {e}"}
@@ -290,10 +305,10 @@ class LLMExtractor:
         Returns:
             Extraction result dict
         """
-        if not self.client:
+        if not self._router.has_available_provider():
             return {
                 "success": False,
-                "error": "LLM extraction not available - ANTHROPIC_API_KEY not set",
+                "error": "LLM extraction not available - no providers configured",
             }
 
         # Truncate very long articles
@@ -325,16 +340,21 @@ class LLMExtractor:
             model = "claude-sonnet-4-20250514"
             db_max_tokens = max_tokens
 
+        stage_cfg, llm_settings = self._get_stage_config("extraction_async")
+
         try:
-            message = self.client.messages.create(
-                model=model,
-                max_tokens=db_max_tokens,
-                system=system_prompt,
-                messages=[{"role": "user", "content": user_prompt}],
+            llm_response = self._router.call(
+                system_prompt=system_prompt,
+                user_message=user_prompt,
+                model=model if db_prompt else stage_cfg.model,
+                max_tokens=db_max_tokens if db_prompt else stage_cfg.max_tokens,
+                provider_name=stage_cfg.provider,
+                fallback_provider=llm_settings.fallback_provider,
+                fallback_model=llm_settings.fallback_model,
             )
 
             # Parse response
-            response_text = message.content[0].text
+            response_text = llm_response.text
 
             # Extract JSON from response
             if "```json" in response_text:
@@ -388,8 +408,8 @@ class LLMExtractor:
                     execution_result = ExecutionResult(
                         success=result.get("success", False),
                         confidence_score=result.get("confidence", 0.0),
-                        input_tokens=message.usage.input_tokens if hasattr(message.usage, 'input_tokens') else None,
-                        output_tokens=message.usage.output_tokens if hasattr(message.usage, 'output_tokens') else None,
+                        input_tokens=llm_response.input_tokens,
+                        output_tokens=llm_response.output_tokens,
                         result_data=result.get("extracted_data"),
                     )
                     await self._prompt_manager.record_execution(
@@ -404,9 +424,6 @@ class LLMExtractor:
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse LLM response as JSON: {e}")
             return {"success": False, "error": f"Failed to parse response: {e}"}
-        except anthropic.APIError as e:
-            logger.error(f"Anthropic API error: {e}")
-            return {"success": False, "error": f"API error: {e}"}
         except Exception as e:
             logger.exception(f"Unexpected error during extraction: {e}")
             return {"success": False, "error": f"Unexpected error: {e}"}
@@ -438,10 +455,10 @@ class LLMExtractor:
                 - required_fields_met: bool
                 - error: str (if failed)
         """
-        if not self.client:
+        if not self._router.has_available_provider():
             return {
                 "success": False,
-                "error": "LLM extraction not available - ANTHROPIC_API_KEY not set",
+                "error": "LLM extraction not available - no providers configured",
             }
 
         # Truncate very long articles
@@ -452,21 +469,21 @@ class LLMExtractor:
         prompt = get_extraction_prompt(document_type, article_text, category)
         system_prompt = get_system_prompt(category)
 
+        stage_cfg, llm_settings = self._get_stage_config("extraction")
+
         try:
-            message = self.client.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=max_tokens,
-                system=system_prompt,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": prompt + f"\n\nRespond with JSON matching this schema:\n{json.dumps(EXTRACTION_SCHEMA, indent=2)}"
-                    }
-                ],
+            llm_response = self._router.call(
+                system_prompt=system_prompt,
+                user_message=prompt + f"\n\nRespond with JSON matching this schema:\n{json.dumps(EXTRACTION_SCHEMA, indent=2)}",
+                model=stage_cfg.model,
+                max_tokens=max_tokens if max_tokens != 2000 else stage_cfg.max_tokens,
+                provider_name=stage_cfg.provider,
+                fallback_provider=llm_settings.fallback_provider,
+                fallback_model=llm_settings.fallback_model,
             )
 
             # Parse response
-            response_text = message.content[0].text
+            response_text = llm_response.text
 
             # Extract JSON from response (handle markdown code blocks)
             if "```json" in response_text:
@@ -523,12 +540,6 @@ class LLMExtractor:
             return {
                 "success": False,
                 "error": f"Failed to parse response: {e}",
-            }
-        except anthropic.APIError as e:
-            logger.error(f"Anthropic API error: {e}")
-            return {
-                "success": False,
-                "error": f"API error: {e}",
             }
         except Exception as e:
             logger.exception(f"Unexpected error during extraction: {e}")

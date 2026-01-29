@@ -50,6 +50,32 @@ interface EventClusteringSettings {
   enable_actor_matching: boolean;
 }
 
+interface LLMStageConfig {
+  provider: string;
+  model: string;
+  max_tokens: number;
+  enabled: boolean;
+}
+
+interface LLMSettings {
+  default_provider: string;
+  default_model: string;
+  fallback_provider: string;
+  fallback_model: string;
+  ollama_base_url: string;
+  triage: LLMStageConfig;
+  extraction_universal: LLMStageConfig;
+  extraction_async: LLMStageConfig;
+  extraction: LLMStageConfig;
+  pipeline_extraction: LLMStageConfig;
+  relevance_ai: LLMStageConfig;
+  enrichment_reextract: LLMStageConfig;
+}
+
+interface ProviderStatus {
+  [name: string]: { available: boolean; name: string };
+}
+
 interface Feed {
   id: string;
   name: string;
@@ -65,7 +91,7 @@ interface SettingsPanelProps {
 }
 
 export function SettingsPanel({ onClose }: SettingsPanelProps) {
-  const [activeTab, setActiveTab] = useState<'auto-approval' | 'duplicate' | 'pipeline' | 'clustering' | 'feeds'>('auto-approval');
+  const [activeTab, setActiveTab] = useState<'auto-approval' | 'duplicate' | 'pipeline' | 'clustering' | 'feeds' | 'llm'>('auto-approval');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -77,6 +103,9 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
   const [feeds, setFeeds] = useState<Feed[]>([]);
   const [showAddFeed, setShowAddFeed] = useState(false);
   const [newFeed, setNewFeed] = useState({ name: '', url: '', interval_minutes: 60 });
+  const [llm, setLlm] = useState<LLMSettings | null>(null);
+  const [providerStatus, setProviderStatus] = useState<ProviderStatus>({});
+  const [availableModels, setAvailableModels] = useState<Record<string, string[]>>({});
 
   const loadSettings = useCallback(async () => {
     setLoading(true);
@@ -94,6 +123,26 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
       if (feedsResponse.ok) {
         const feedsData = await feedsResponse.json();
         setFeeds(feedsData.feeds || []);
+      }
+
+      // Load LLM settings
+      const llmResponse = await fetch(`${API_BASE}/admin/settings/llm`);
+      if (llmResponse.ok) {
+        setLlm(await llmResponse.json());
+      }
+
+      // Load provider status
+      const statusResponse = await fetch(`${API_BASE}/admin/llm/providers`);
+      if (statusResponse.ok) {
+        const statusData = await statusResponse.json();
+        setProviderStatus(statusData.providers || {});
+      }
+
+      // Load available models
+      const modelsResponse = await fetch(`${API_BASE}/admin/llm/models`);
+      if (modelsResponse.ok) {
+        const modelsData = await modelsResponse.json();
+        setAvailableModels(modelsData.models || {});
       }
     } catch (err) {
       setMessage({ type: 'error', text: 'Failed to load settings' });
@@ -225,6 +274,50 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
     }
   };
 
+  const saveLlm = async () => {
+    if (!llm) return;
+    setSaving(true);
+    setMessage(null);
+    try {
+      const response = await fetch(`${API_BASE}/admin/settings/llm`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(llm),
+      });
+      if (response.ok) {
+        setMessage({ type: 'success', text: 'LLM provider settings saved' });
+        // Refresh provider status and models after save
+        const statusResponse = await fetch(`${API_BASE}/admin/llm/providers`);
+        if (statusResponse.ok) {
+          const statusData = await statusResponse.json();
+          setProviderStatus(statusData.providers || {});
+        }
+        const modelsResponse = await fetch(`${API_BASE}/admin/llm/models`);
+        if (modelsResponse.ok) {
+          const modelsData = await modelsResponse.json();
+          setAvailableModels(modelsData.models || {});
+        }
+      } else {
+        setMessage({ type: 'error', text: 'Failed to save LLM settings' });
+      }
+    } catch {
+      setMessage({ type: 'error', text: 'Failed to save LLM settings' });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const updateStageConfig = (stageKey: string, field: string, value: string | number | boolean) => {
+    if (!llm) return;
+    setLlm({
+      ...llm,
+      [stageKey]: {
+        ...(llm as any)[stageKey],
+        [field]: value,
+      },
+    });
+  };
+
   const toggleFeed = async (feedId: string, active: boolean) => {
     try {
       await fetch(`${API_BASE}/admin/feeds/${feedId}/toggle`, {
@@ -258,7 +351,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
       )}
 
       <div className="settings-tabs">
-        {(['auto-approval', 'duplicate', 'pipeline', 'clustering', 'feeds'] as const).map(tab => (
+        {(['auto-approval', 'duplicate', 'pipeline', 'clustering', 'feeds', 'llm'] as const).map(tab => (
           <button
             key={tab}
             className={`settings-tab ${activeTab === tab ? 'active' : ''}`}
@@ -269,6 +362,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
             {tab === 'pipeline' && 'Pipeline'}
             {tab === 'clustering' && 'Event Clustering'}
             {tab === 'feeds' && 'RSS Feeds'}
+            {tab === 'llm' && 'LLM Providers'}
           </button>
         ))}
       </div>
@@ -794,6 +888,166 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
             <div className="settings-actions">
               <button className="action-btn primary" onClick={saveClustering} disabled={saving}>
                 {saving ? 'Saving...' : 'Save Clustering Settings'}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'llm' && llm && (
+          <div className="settings-section">
+            <h3>Provider Status</h3>
+            <div className="provider-status-grid">
+              {Object.entries(providerStatus).map(([name, status]) => (
+                <div key={name} className="provider-status-item">
+                  <span className={`status-dot ${status.available ? 'available' : 'unavailable'}`} />
+                  <span className="provider-name">{name}</span>
+                  <span className="provider-availability">
+                    {status.available ? 'Available' : 'Unavailable'}
+                  </span>
+                </div>
+              ))}
+            </div>
+
+            <h3>Global Defaults</h3>
+
+            <div className="settings-group">
+              <label>Default Provider</label>
+              <select
+                value={llm.default_provider}
+                onChange={e => setLlm({ ...llm, default_provider: e.target.value })}
+                className="settings-select"
+              >
+                <option value="anthropic">Anthropic (Claude)</option>
+                <option value="ollama">Ollama (Local)</option>
+              </select>
+            </div>
+
+            <div className="settings-group">
+              <label>Default Model</label>
+              <input
+                type="text"
+                value={llm.default_model}
+                onChange={e => setLlm({ ...llm, default_model: e.target.value })}
+                className="settings-input"
+                placeholder="e.g., claude-sonnet-4-20250514"
+              />
+            </div>
+
+            <div className="settings-group">
+              <label>Fallback Provider</label>
+              <select
+                value={llm.fallback_provider}
+                onChange={e => setLlm({ ...llm, fallback_provider: e.target.value })}
+                className="settings-select"
+              >
+                <option value="anthropic">Anthropic (Claude)</option>
+                <option value="ollama">Ollama (Local)</option>
+              </select>
+            </div>
+
+            <div className="settings-group">
+              <label>Fallback Model</label>
+              <input
+                type="text"
+                value={llm.fallback_model}
+                onChange={e => setLlm({ ...llm, fallback_model: e.target.value })}
+                className="settings-input"
+              />
+            </div>
+
+            <div className="settings-group">
+              <label>Ollama Base URL</label>
+              <input
+                type="text"
+                value={llm.ollama_base_url}
+                onChange={e => setLlm({ ...llm, ollama_base_url: e.target.value })}
+                className="settings-input"
+                placeholder="http://localhost:11434/v1"
+              />
+            </div>
+
+            <h3>Per-Stage Configuration</h3>
+            <p className="settings-hint">Override provider and model for each pipeline stage.</p>
+
+            <div className="llm-stages-table">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Stage</th>
+                    <th>Provider</th>
+                    <th>Model</th>
+                    <th>Max Tokens</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {([
+                    { key: 'triage', label: 'Triage' },
+                    { key: 'extraction_universal', label: 'Universal Extraction' },
+                    { key: 'extraction_async', label: 'Async Extraction' },
+                    { key: 'extraction', label: 'Extraction' },
+                    { key: 'pipeline_extraction', label: 'Pipeline Extraction' },
+                    { key: 'relevance_ai', label: 'AI Relevance' },
+                    { key: 'enrichment_reextract', label: 'Enrichment Re-extract' },
+                  ] as const).map(stage => {
+                    const cfg = (llm as any)[stage.key] as LLMStageConfig;
+                    if (!cfg) return null;
+                    const providerModels = availableModels[cfg.provider] || [];
+                    return (
+                      <tr key={stage.key}>
+                        <td>{stage.label}</td>
+                        <td>
+                          <select
+                            value={cfg.provider}
+                            onChange={e => updateStageConfig(stage.key, 'provider', e.target.value)}
+                            className="settings-select-sm"
+                          >
+                            <option value="anthropic">Anthropic</option>
+                            <option value="ollama">Ollama</option>
+                          </select>
+                        </td>
+                        <td>
+                          {providerModels.length > 0 ? (
+                            <select
+                              value={cfg.model}
+                              onChange={e => updateStageConfig(stage.key, 'model', e.target.value)}
+                              className="settings-select-sm"
+                            >
+                              {providerModels.map(m => (
+                                <option key={m} value={m}>{m}</option>
+                              ))}
+                              {!providerModels.includes(cfg.model) && (
+                                <option value={cfg.model}>{cfg.model}</option>
+                              )}
+                            </select>
+                          ) : (
+                            <input
+                              type="text"
+                              value={cfg.model}
+                              onChange={e => updateStageConfig(stage.key, 'model', e.target.value)}
+                              className="settings-input-sm"
+                            />
+                          )}
+                        </td>
+                        <td>
+                          <input
+                            type="number"
+                            min="100"
+                            max="16000"
+                            value={cfg.max_tokens}
+                            onChange={e => updateStageConfig(stage.key, 'max_tokens', parseInt(e.target.value) || 500)}
+                            className="settings-input-sm"
+                          />
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="settings-actions">
+              <button className="action-btn primary" onClick={saveLlm} disabled={saving}>
+                {saving ? 'Saving...' : 'Save LLM Settings'}
               </button>
             </div>
           </div>

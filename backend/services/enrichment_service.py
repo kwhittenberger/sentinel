@@ -747,18 +747,20 @@ class EnrichmentService:
     ) -> Optional[List[dict]]:
         """Use LLM to extract specific missing fields from article text."""
         import json
+        from backend.services.llm_provider import get_llm_router
+        from backend.services.settings import get_settings_service
 
-        try:
-            from backend.services import get_extractor
-            extractor = get_extractor()
-            if not extractor or not extractor.client:
-                logger.warning("LLM extractor not available for re-extraction")
-                return None
-        except Exception:
-            logger.warning("Could not get LLM extractor")
+        router = get_llm_router()
+        if not router.has_available_provider():
+            logger.warning("No LLM providers available for re-extraction")
             return None
 
-        prompt = f"""You previously extracted data from this article. Some fields are missing.
+        settings = get_settings_service()
+        llm_settings = settings._settings.llm
+        stage_cfg = llm_settings.get_stage_config("enrichment_reextract")
+
+        system_prompt = "You are a data extraction assistant. Extract only the requested fields from the article text. Return valid JSON."
+        user_message = f"""You previously extracted data from this article. Some fields are missing.
 Re-read the article and try to extract ONLY these missing fields:
 
 {fields_description}
@@ -772,12 +774,16 @@ Article text:
 {article_text[:8000]}"""
 
         try:
-            response = extractor.client.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=1000,
-                messages=[{"role": "user", "content": prompt}],
+            llm_response = router.call(
+                system_prompt=system_prompt,
+                user_message=user_message,
+                model=stage_cfg.model,
+                max_tokens=stage_cfg.max_tokens,
+                provider_name=stage_cfg.provider,
+                fallback_provider=llm_settings.fallback_provider,
+                fallback_model=llm_settings.fallback_model,
             )
-            content = response.content[0].text
+            content = llm_response.text
 
             # Parse JSON from response
             # Handle potential markdown code blocks

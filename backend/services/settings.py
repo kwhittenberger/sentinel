@@ -76,12 +76,70 @@ class EventClusteringSettings:
 
 
 @dataclass
+class LLMProviderConfig:
+    """Configuration for a single LLM call site (stage)."""
+    provider: str = "anthropic"
+    model: str = "claude-sonnet-4-20250514"
+    max_tokens: int = 2000
+    enabled: bool = True
+
+
+@dataclass
+class LLMSettings:
+    """LLM provider routing settings."""
+    # Global defaults
+    default_provider: str = "anthropic"
+    default_model: str = "claude-sonnet-4-20250514"
+    fallback_provider: str = "anthropic"
+    fallback_model: str = "claude-sonnet-4-20250514"
+    ollama_base_url: str = "http://localhost:11434/v1"
+
+    # Per-stage overrides (None means use global defaults)
+    triage: LLMProviderConfig = field(default_factory=lambda: LLMProviderConfig(max_tokens=500))
+    extraction_universal: LLMProviderConfig = field(default_factory=lambda: LLMProviderConfig(max_tokens=4000))
+    extraction_async: LLMProviderConfig = field(default_factory=lambda: LLMProviderConfig(max_tokens=2000))
+    extraction: LLMProviderConfig = field(default_factory=lambda: LLMProviderConfig(max_tokens=2000))
+    pipeline_extraction: LLMProviderConfig = field(default_factory=lambda: LLMProviderConfig(max_tokens=2000))
+    relevance_ai: LLMProviderConfig = field(default_factory=lambda: LLMProviderConfig(max_tokens=500))
+    enrichment_reextract: LLMProviderConfig = field(default_factory=lambda: LLMProviderConfig(max_tokens=1000))
+
+    def get_stage_config(self, stage_key: str) -> LLMProviderConfig:
+        """Get effective config for a stage, falling back to global defaults."""
+        stage_cfg = getattr(self, stage_key, None)
+        if stage_cfg is None:
+            return LLMProviderConfig(
+                provider=self.default_provider,
+                model=self.default_model,
+            )
+        # Fill in global defaults for any stage fields still at class defaults
+        return LLMProviderConfig(
+            provider=stage_cfg.provider if stage_cfg.provider != "anthropic" or self.default_provider == "anthropic" else self.default_provider,
+            model=stage_cfg.model if stage_cfg.model != "claude-sonnet-4-20250514" or self.default_model == "claude-sonnet-4-20250514" else self.default_model,
+            max_tokens=stage_cfg.max_tokens,
+            enabled=stage_cfg.enabled,
+        )
+
+
+# Stage keys for iteration
+LLM_STAGE_KEYS = [
+    "triage",
+    "extraction_universal",
+    "extraction_async",
+    "extraction",
+    "pipeline_extraction",
+    "relevance_ai",
+    "enrichment_reextract",
+]
+
+
+@dataclass
 class AllSettings:
     """All application settings combined."""
     auto_approval: AutoApprovalSettings = field(default_factory=AutoApprovalSettings)
     duplicate_detection: DuplicateDetectionSettings = field(default_factory=DuplicateDetectionSettings)
     pipeline: PipelineSettings = field(default_factory=PipelineSettings)
     event_clustering: EventClusteringSettings = field(default_factory=EventClusteringSettings)
+    llm: LLMSettings = field(default_factory=LLMSettings)
 
 
 class SettingsService:
@@ -97,6 +155,7 @@ class SettingsService:
             'duplicate_detection': asdict(self._settings.duplicate_detection),
             'pipeline': asdict(self._settings.pipeline),
             'event_clustering': asdict(self._settings.event_clustering),
+            'llm': asdict(self._settings.llm),
         }
 
     def get_auto_approval(self) -> dict:
@@ -162,6 +221,43 @@ class SettingsService:
                 logger.info(f"Updated event_clustering.{key} = {value}")
 
         return self.get_event_clustering()
+
+    def get_llm(self) -> dict:
+        """Get LLM provider settings."""
+        return asdict(self._settings.llm)
+
+    def update_llm(self, config: dict) -> dict:
+        """Update LLM provider settings."""
+        llm = self._settings.llm
+
+        # Update top-level fields
+        for key in ("default_provider", "default_model", "fallback_provider",
+                     "fallback_model", "ollama_base_url"):
+            if key in config:
+                setattr(llm, key, config[key])
+                logger.info(f"Updated llm.{key} = {config[key]}")
+
+        # Update per-stage configs
+        for stage_key in LLM_STAGE_KEYS:
+            if stage_key in config and isinstance(config[stage_key], dict):
+                stage_cfg = getattr(llm, stage_key)
+                for field_name, value in config[stage_key].items():
+                    if hasattr(stage_cfg, field_name):
+                        setattr(stage_cfg, field_name, value)
+                        logger.info(f"Updated llm.{stage_key}.{field_name} = {value}")
+
+        # Propagate Ollama URL change to the router if it's already initialized
+        try:
+            from .llm_provider import get_llm_router
+            router = get_llm_router()
+            if llm.ollama_base_url != router.ollama._base_url:
+                router.ollama._base_url = llm.ollama_base_url
+                router.ollama._client = None  # Force re-create on next call
+                logger.info(f"Updated Ollama base URL to {llm.ollama_base_url}")
+        except Exception:
+            pass
+
+        return self.get_llm()
 
 
 # Singleton instance

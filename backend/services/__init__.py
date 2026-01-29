@@ -14,7 +14,8 @@ from .extraction_prompts import (
 from .duplicate_detection import DuplicateDetector, get_detector
 from .auto_approval import AutoApprovalService, get_auto_approval_service
 from .unified_pipeline import UnifiedPipeline, get_pipeline
-from .settings import SettingsService, get_settings_service
+from .settings import SettingsService, get_settings_service, LLMSettings, LLMProviderConfig
+from .llm_provider import LLMRouter, get_llm_router, LLMResponse
 
 # New extensible system services
 from .prompt_manager import PromptManager, get_prompt_manager, PromptType, PromptStatus
@@ -46,6 +47,12 @@ __all__ = [
     # Settings
     "SettingsService",
     "get_settings_service",
+    "LLMSettings",
+    "LLMProviderConfig",
+    # LLM Provider
+    "LLMRouter",
+    "get_llm_router",
+    "LLMResponse",
     # Prompt Management
     "PromptManager",
     "get_prompt_manager",

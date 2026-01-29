@@ -4,7 +4,6 @@ Extraction stage - extracts structured incident data from article using LLM.
 
 import json
 import logging
-import time
 from typing import Dict, Any
 
 from backend.services.pipeline_orchestrator import (
@@ -40,8 +39,8 @@ class ExtractionStage(PipelineStage):
             PromptType,
             ExecutionResult
         )
-        import anthropic
-        import os
+        from backend.services.llm_provider import get_llm_router
+        from backend.services.settings import get_settings_service
 
         # Check if already extracted
         if config.get("skip_if_extracted", True) and context.article.get("extracted_data"):
@@ -90,32 +89,36 @@ class ExtractionStage(PipelineStage):
             type_service = get_incident_type_service()
             output_schema = await type_service.get_extraction_schema(context.incident_type_id)
 
-        # Call LLM
-        api_key = os.getenv("ANTHROPIC_API_KEY")
-        if not api_key:
+        # Call LLM via router
+        router = get_llm_router()
+        if not router.has_available_provider():
             return StageExecutionResult(
                 stage_slug=self.slug,
                 result=StageResult.ERROR,
-                error="ANTHROPIC_API_KEY not set"
+                error="No LLM providers available"
             )
 
-        start_time = time.time()
-        try:
-            client = anthropic.Anthropic(api_key=api_key)
+        settings = get_settings_service()
+        llm_settings = settings._settings.llm
+        stage_cfg = llm_settings.get_stage_config("pipeline_extraction")
 
+        try:
             user_content = rendered.user_prompt
             if output_schema:
                 user_content += f"\n\nRespond with JSON matching this schema:\n{json.dumps(output_schema, indent=2)}"
 
-            message = client.messages.create(
+            llm_response = router.call(
+                system_prompt=rendered.system_prompt,
+                user_message=user_content,
                 model=config.get("model", prompt.model_name),
                 max_tokens=config.get("max_tokens", prompt.max_tokens),
-                system=rendered.system_prompt,
-                messages=[{"role": "user", "content": user_content}],
+                provider_name=stage_cfg.provider,
+                fallback_provider=llm_settings.fallback_provider,
+                fallback_model=llm_settings.fallback_model,
             )
 
-            latency_ms = int((time.time() - start_time) * 1000)
-            response_text = message.content[0].text
+            latency_ms = llm_response.latency_ms
+            response_text = llm_response.text
 
             # Parse JSON response
             if "```json" in response_text:
@@ -134,8 +137,8 @@ class ExtractionStage(PipelineStage):
                 prompt.id,
                 ExecutionResult(
                     success=True,
-                    input_tokens=message.usage.input_tokens,
-                    output_tokens=message.usage.output_tokens,
+                    input_tokens=llm_response.input_tokens,
+                    output_tokens=llm_response.output_tokens,
                     latency_ms=latency_ms,
                     confidence_score=data.get("incident", {}).get("overall_confidence"),
                     result_data=data
@@ -171,13 +174,6 @@ class ExtractionStage(PipelineStage):
                 stage_slug=self.slug,
                 result=StageResult.ERROR,
                 error=f"JSON parse error: {e}"
-            )
-        except anthropic.APIError as e:
-            logger.error(f"Anthropic API error: {e}")
-            return StageExecutionResult(
-                stage_slug=self.slug,
-                result=StageResult.ERROR,
-                error=f"API error: {e}"
             )
         except Exception as e:
             logger.exception(f"Extraction error: {e}")

@@ -104,6 +104,9 @@ class RelevanceStage(PipelineStage):
         """Run AI-based relevance check."""
         try:
             from backend.services.prompt_manager import get_prompt_manager, PromptType
+            from backend.services.llm_provider import get_llm_router
+            from backend.services.settings import get_settings_service
+            import json
 
             prompt_manager = get_prompt_manager()
             prompt = await prompt_manager.get_prompt(
@@ -122,21 +125,23 @@ class RelevanceStage(PipelineStage):
                 {"article_text": f"{title}\n\n{content}"}
             )
 
-            # Call LLM
-            import anthropic
-            import json
-            import os
+            # Call LLM via router
+            router = get_llm_router()
+            settings = get_settings_service()
+            llm_settings = settings._settings.llm
+            stage_cfg = llm_settings.get_stage_config("relevance_ai")
 
-            client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-
-            message = client.messages.create(
+            llm_response = router.call(
+                system_prompt=rendered.system_prompt,
+                user_message=rendered.user_prompt,
                 model=prompt.model_name,
                 max_tokens=prompt.max_tokens,
-                system=rendered.system_prompt,
-                messages=[{"role": "user", "content": rendered.user_prompt}],
+                provider_name=stage_cfg.provider,
+                fallback_provider=llm_settings.fallback_provider,
+                fallback_model=llm_settings.fallback_model,
             )
 
-            response_text = message.content[0].text
+            response_text = llm_response.text
 
             # Parse JSON response
             if "```json" in response_text:

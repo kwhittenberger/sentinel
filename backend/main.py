@@ -2564,6 +2564,60 @@ def update_settings_event_clustering(config: dict = Body(...)):
 
 
 # =====================
+# LLM Provider Endpoints
+# =====================
+
+@app.get("/api/admin/settings/llm")
+def get_settings_llm():
+    """Get LLM provider settings."""
+    from backend.services import get_settings_service
+    return get_settings_service().get_llm()
+
+
+@app.put("/api/admin/settings/llm")
+def update_settings_llm(config: dict = Body(...)):
+    """Update LLM provider settings."""
+    from backend.services import get_settings_service
+    return get_settings_service().update_llm(config)
+
+
+@app.get("/api/admin/llm/providers")
+def get_llm_provider_status():
+    """Get availability status of each LLM provider."""
+    from backend.services.llm_provider import get_llm_router
+    router = get_llm_router()
+    return {
+        "providers": {
+            name: {
+                "available": available,
+                "name": name,
+            }
+            for name, available in router.provider_status().items()
+        }
+    }
+
+
+@app.get("/api/admin/llm/models")
+def get_llm_available_models():
+    """Get available models from each provider."""
+    from backend.services.llm_provider import get_llm_router
+    router = get_llm_router()
+
+    models = {
+        "anthropic": [
+            "claude-sonnet-4-20250514",
+            "claude-haiku-4-20250514",
+        ],
+        "ollama": [],
+    }
+
+    if router.ollama.is_available():
+        models["ollama"] = router.ollama.list_models()
+
+    return {"models": models}
+
+
+# =====================
 # Incident Browser Endpoints
 # =====================
 
