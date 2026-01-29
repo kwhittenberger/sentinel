@@ -22,9 +22,12 @@ import { EventBrowser } from './EventBrowser';
 import { ActorBrowser } from './ActorBrowser';
 import { EnrichmentPanel } from './EnrichmentPanel';
 import { ArticleAudit } from './ArticleAudit';
+import { DomainManager } from './DomainManager';
+import { CaseManager } from './CaseManager';
+import { ProsecutorDashboard } from './ProsecutorDashboard';
 import './AdminPanel.css';
 
-type AdminView = 'dashboard' | 'queuemanager' | 'batch' | 'pipeline' | 'sources' | 'incidents' | 'jobs' | 'analytics' | 'settings' | 'types' | 'prompts' | 'events' | 'actors' | 'enrichment' | 'audit';
+type AdminView = 'dashboard' | 'queuemanager' | 'batch' | 'pipeline' | 'sources' | 'incidents' | 'jobs' | 'analytics' | 'settings' | 'types' | 'prompts' | 'events' | 'actors' | 'enrichment' | 'audit' | 'domains' | 'cases' | 'prosecutors';
 
 interface QueueStats {
   pending: number;
@@ -201,6 +204,20 @@ export function AdminPanel({ onClose, onRefresh }: AdminPanelProps) {
             <span className="nav-icon">📅</span>
             Events
           </button>
+          <button
+            className={`admin-nav-item ${view === 'cases' ? 'active' : ''}`}
+            onClick={() => setView('cases')}
+          >
+            <span className="nav-icon">⚖️</span>
+            Cases
+          </button>
+          <button
+            className={`admin-nav-item ${view === 'prosecutors' ? 'active' : ''}`}
+            onClick={() => setView('prosecutors')}
+          >
+            <span className="nav-icon">🏛️</span>
+            Prosecutors
+          </button>
 
           {/* Pipeline Section */}
           <div className="admin-nav-divider">
@@ -239,6 +256,13 @@ export function AdminPanel({ onClose, onRefresh }: AdminPanelProps) {
           <div className="admin-nav-divider">
             <span>System</span>
           </div>
+          <button
+            className={`admin-nav-item ${view === 'domains' ? 'active' : ''}`}
+            onClick={() => setView('domains')}
+          >
+            <span className="nav-icon">🏷️</span>
+            Domains
+          </button>
           <button
             className={`admin-nav-item ${view === 'types' ? 'active' : ''}`}
             onClick={() => setView('types')}
@@ -605,6 +629,21 @@ export function AdminPanel({ onClose, onRefresh }: AdminPanelProps) {
         {/* Article Audit View */}
         {view === 'audit' && (
           <ArticleAudit />
+        )}
+
+        {/* Domain Management View */}
+        {view === 'domains' && (
+          <DomainManager />
+        )}
+
+        {/* Case Management View */}
+        {view === 'cases' && (
+          <CaseManager />
+        )}
+
+        {/* Prosecutor Dashboard View */}
+        {view === 'prosecutors' && (
+          <ProsecutorDashboard />
         )}
       </main>
     </div>

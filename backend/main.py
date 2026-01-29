@@ -2618,6 +2618,137 @@ def get_llm_available_models():
 
 
 # =====================
+# Domain & Category Endpoints
+# =====================
+
+@app.get("/api/admin/domains")
+async def list_domains(include_inactive: bool = Query(False)):
+    """List all event domains."""
+    from backend.services.domain_service import get_domain_service
+    service = get_domain_service()
+    return {"domains": await service.list_domains(include_inactive=include_inactive)}
+
+
+@app.post("/api/admin/domains")
+async def create_domain(data: dict = Body(...)):
+    """Create a new event domain."""
+    from backend.services.domain_service import get_domain_service
+    service = get_domain_service()
+    if not data.get("name") or not data.get("slug"):
+        raise HTTPException(status_code=400, detail="name and slug are required")
+    try:
+        domain = await service.create_domain(data)
+        return domain
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/admin/domains/{slug}")
+async def get_domain(slug: str):
+    """Get a domain by slug."""
+    from backend.services.domain_service import get_domain_service
+    service = get_domain_service()
+    domain = await service.get_domain(slug)
+    if not domain:
+        raise HTTPException(status_code=404, detail="Domain not found")
+    return domain
+
+
+@app.put("/api/admin/domains/{slug}")
+async def update_domain(slug: str, data: dict = Body(...)):
+    """Update a domain."""
+    from backend.services.domain_service import get_domain_service
+    service = get_domain_service()
+    try:
+        domain = await service.update_domain(slug, data)
+        if not domain:
+            raise HTTPException(status_code=404, detail="Domain not found")
+        return domain
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/admin/domains/{slug}/categories")
+async def list_categories_for_domain(slug: str, include_inactive: bool = Query(False)):
+    """List categories within a domain."""
+    from backend.services.domain_service import get_domain_service
+    service = get_domain_service()
+    categories = await service.list_categories(domain_slug=slug, include_inactive=include_inactive)
+    return {"categories": categories}
+
+
+@app.post("/api/admin/domains/{slug}/categories")
+async def create_category(slug: str, data: dict = Body(...)):
+    """Create a category within a domain."""
+    from backend.services.domain_service import get_domain_service
+    service = get_domain_service()
+    if not data.get("name") or not data.get("slug"):
+        raise HTTPException(status_code=400, detail="name and slug are required")
+    try:
+        category = await service.create_category(slug, data)
+        if not category:
+            raise HTTPException(status_code=404, detail="Domain not found")
+        return category
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/admin/categories/{category_id}")
+async def get_category(category_id: str):
+    """Get a single category with field definitions."""
+    from backend.services.domain_service import get_domain_service
+    service = get_domain_service()
+    category = await service.get_category(uuid.UUID(category_id))
+    if not category:
+        raise HTTPException(status_code=404, detail="Category not found")
+    return category
+
+
+@app.put("/api/admin/categories/{category_id}")
+async def update_category(category_id: str, data: dict = Body(...)):
+    """Update a category."""
+    from backend.services.domain_service import get_domain_service
+    service = get_domain_service()
+    try:
+        category = await service.update_category(uuid.UUID(category_id), data)
+        if not category:
+            raise HTTPException(status_code=404, detail="Category not found")
+        return category
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/admin/incidents/{incident_id}/relationships")
+async def list_incident_relationships(incident_id: str):
+    """List relationships for an incident."""
+    from backend.services.domain_service import get_domain_service
+    service = get_domain_service()
+    relationships = await service.list_relationships(uuid.UUID(incident_id))
+    return {"relationships": relationships}
+
+
+@app.post("/api/admin/incidents/relationships")
+async def create_incident_relationship(data: dict = Body(...)):
+    """Create a relationship between two incidents."""
+    from backend.services.domain_service import get_domain_service
+    service = get_domain_service()
+    required = ["source_incident_id", "target_incident_id", "relationship_type"]
+    for field in required:
+        if field not in data:
+            raise HTTPException(status_code=400, detail=f"{field} is required")
+    # Convert string UUIDs
+    data["source_incident_id"] = uuid.UUID(data["source_incident_id"])
+    data["target_incident_id"] = uuid.UUID(data["target_incident_id"])
+    try:
+        rel = await service.create_relationship(data)
+        if not rel:
+            raise HTTPException(status_code=400, detail="Failed to create relationship")
+        return rel
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# =====================
 # Incident Browser Endpoints
 # =====================
 
@@ -4498,6 +4629,386 @@ async def revert_enrichment(log_id: str):
         raise HTTPException(status_code=404, detail="Enrichment log entry not found or not applied")
 
     return {"success": True, "message": "Enrichment reverted"}
+
+
+# =====================
+# Cases & Legal Tracking
+# =====================
+
+@app.get("/api/admin/cases")
+async def list_cases(
+    status: str = None,
+    case_type: str = None,
+    jurisdiction: str = None,
+    search: str = None,
+    page: int = 1,
+    page_size: int = 50,
+):
+    """List cases with optional filters."""
+    if not USE_DATABASE:
+        raise HTTPException(status_code=501, detail="Database not enabled")
+
+    from backend.services.criminal_justice_service import get_criminal_justice_service
+    service = get_criminal_justice_service()
+    return await service.list_cases(
+        status=status, case_type=case_type, jurisdiction=jurisdiction,
+        search=search, page=page, page_size=page_size,
+    )
+
+
+@app.post("/api/admin/cases")
+async def create_case(data: dict = Body(...)):
+    """Create a new case."""
+    if not USE_DATABASE:
+        raise HTTPException(status_code=501, detail="Database not enabled")
+
+    if "case_type" not in data:
+        raise HTTPException(status_code=400, detail="case_type is required")
+
+    from backend.services.criminal_justice_service import get_criminal_justice_service
+    service = get_criminal_justice_service()
+    return await service.create_case(data)
+
+
+@app.get("/api/admin/cases/{case_id}")
+async def get_case(case_id: str):
+    """Get a case by ID."""
+    if not USE_DATABASE:
+        raise HTTPException(status_code=501, detail="Database not enabled")
+
+    try:
+        cid = uuid.UUID(case_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid case ID")
+
+    from backend.services.criminal_justice_service import get_criminal_justice_service
+    service = get_criminal_justice_service()
+    result = await service.get_case(cid)
+    if not result:
+        raise HTTPException(status_code=404, detail="Case not found")
+    return result
+
+
+@app.put("/api/admin/cases/{case_id}")
+async def update_case(case_id: str, data: dict = Body(...)):
+    """Update a case."""
+    if not USE_DATABASE:
+        raise HTTPException(status_code=501, detail="Database not enabled")
+
+    try:
+        cid = uuid.UUID(case_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid case ID")
+
+    from backend.services.criminal_justice_service import get_criminal_justice_service
+    service = get_criminal_justice_service()
+    result = await service.update_case(cid, data)
+    if not result:
+        raise HTTPException(status_code=404, detail="Case not found")
+    return result
+
+
+# --- Charges ---
+
+@app.get("/api/admin/cases/{case_id}/charges")
+async def list_charges(case_id: str):
+    """List charges for a case."""
+    if not USE_DATABASE:
+        raise HTTPException(status_code=501, detail="Database not enabled")
+
+    try:
+        cid = uuid.UUID(case_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid case ID")
+
+    from backend.services.criminal_justice_service import get_criminal_justice_service
+    service = get_criminal_justice_service()
+    return await service.list_charges(cid)
+
+
+@app.post("/api/admin/cases/{case_id}/charges")
+async def create_charge(case_id: str, data: dict = Body(...)):
+    """Create a charge within a case."""
+    if not USE_DATABASE:
+        raise HTTPException(status_code=501, detail="Database not enabled")
+
+    try:
+        cid = uuid.UUID(case_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid case ID")
+
+    if "charge_number" not in data or "charge_description" not in data:
+        raise HTTPException(status_code=400, detail="charge_number and charge_description are required")
+
+    from backend.services.criminal_justice_service import get_criminal_justice_service
+    service = get_criminal_justice_service()
+    return await service.create_charge(cid, data)
+
+
+@app.put("/api/admin/charges/{charge_id}")
+async def update_charge(charge_id: str, data: dict = Body(...)):
+    """Update a charge."""
+    if not USE_DATABASE:
+        raise HTTPException(status_code=501, detail="Database not enabled")
+
+    try:
+        chid = uuid.UUID(charge_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid charge ID")
+
+    from backend.services.criminal_justice_service import get_criminal_justice_service
+    service = get_criminal_justice_service()
+    result = await service.update_charge(chid, data)
+    if not result:
+        raise HTTPException(status_code=404, detail="Charge not found")
+    return result
+
+
+# --- Charge History ---
+
+@app.get("/api/admin/cases/{case_id}/charge-history")
+async def list_charge_history(case_id: str, charge_id: str = None):
+    """List charge history for a case, optionally filtered by charge."""
+    if not USE_DATABASE:
+        raise HTTPException(status_code=501, detail="Database not enabled")
+
+    try:
+        cid = uuid.UUID(case_id)
+        chid = uuid.UUID(charge_id) if charge_id else None
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid ID format")
+
+    from backend.services.criminal_justice_service import get_criminal_justice_service
+    service = get_criminal_justice_service()
+    return await service.list_charge_history(cid, chid)
+
+
+@app.post("/api/admin/charge-history")
+async def record_charge_event(data: dict = Body(...)):
+    """Record a charge history event."""
+    if not USE_DATABASE:
+        raise HTTPException(status_code=501, detail="Database not enabled")
+
+    for field in ("charge_id", "case_id", "event_type"):
+        if field not in data:
+            raise HTTPException(status_code=400, detail=f"{field} is required")
+
+    data["charge_id"] = uuid.UUID(data["charge_id"])
+    data["case_id"] = uuid.UUID(data["case_id"])
+    if data.get("actor_id"):
+        data["actor_id"] = uuid.UUID(data["actor_id"])
+
+    from backend.services.criminal_justice_service import get_criminal_justice_service
+    service = get_criminal_justice_service()
+    return await service.record_charge_event(data)
+
+
+# --- Prosecutorial Actions ---
+
+@app.get("/api/admin/cases/{case_id}/prosecutorial-actions")
+async def list_prosecutorial_actions(case_id: str):
+    """List prosecutorial actions for a case."""
+    if not USE_DATABASE:
+        raise HTTPException(status_code=501, detail="Database not enabled")
+
+    try:
+        cid = uuid.UUID(case_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid case ID")
+
+    from backend.services.criminal_justice_service import get_criminal_justice_service
+    service = get_criminal_justice_service()
+    return await service.list_prosecutorial_actions(cid)
+
+
+@app.post("/api/admin/prosecutorial-actions")
+async def create_prosecutorial_action(data: dict = Body(...)):
+    """Create a prosecutorial action."""
+    if not USE_DATABASE:
+        raise HTTPException(status_code=501, detail="Database not enabled")
+
+    for field in ("case_id", "action_type"):
+        if field not in data:
+            raise HTTPException(status_code=400, detail=f"{field} is required")
+
+    data["case_id"] = uuid.UUID(data["case_id"])
+    if data.get("prosecutor_id"):
+        data["prosecutor_id"] = uuid.UUID(data["prosecutor_id"])
+
+    from backend.services.criminal_justice_service import get_criminal_justice_service
+    service = get_criminal_justice_service()
+    return await service.create_prosecutorial_action(data)
+
+
+# --- Bail Decisions ---
+
+@app.get("/api/admin/cases/{case_id}/bail-decisions")
+async def list_bail_decisions(case_id: str):
+    """List bail decisions for a case."""
+    if not USE_DATABASE:
+        raise HTTPException(status_code=501, detail="Database not enabled")
+
+    try:
+        cid = uuid.UUID(case_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid case ID")
+
+    from backend.services.criminal_justice_service import get_criminal_justice_service
+    service = get_criminal_justice_service()
+    return await service.list_bail_decisions(cid)
+
+
+@app.post("/api/admin/bail-decisions")
+async def create_bail_decision(data: dict = Body(...)):
+    """Create a bail decision."""
+    if not USE_DATABASE:
+        raise HTTPException(status_code=501, detail="Database not enabled")
+
+    for field in ("case_id", "decision_type"):
+        if field not in data:
+            raise HTTPException(status_code=400, detail=f"{field} is required")
+
+    data["case_id"] = uuid.UUID(data["case_id"])
+    if data.get("judge_id"):
+        data["judge_id"] = uuid.UUID(data["judge_id"])
+
+    from backend.services.criminal_justice_service import get_criminal_justice_service
+    service = get_criminal_justice_service()
+    return await service.create_bail_decision(data)
+
+
+# --- Dispositions ---
+
+@app.get("/api/admin/cases/{case_id}/dispositions")
+async def list_dispositions(case_id: str):
+    """List dispositions for a case."""
+    if not USE_DATABASE:
+        raise HTTPException(status_code=501, detail="Database not enabled")
+
+    try:
+        cid = uuid.UUID(case_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid case ID")
+
+    from backend.services.criminal_justice_service import get_criminal_justice_service
+    service = get_criminal_justice_service()
+    return await service.list_dispositions(cid)
+
+
+@app.post("/api/admin/dispositions")
+async def create_disposition(data: dict = Body(...)):
+    """Create a disposition."""
+    if not USE_DATABASE:
+        raise HTTPException(status_code=501, detail="Database not enabled")
+
+    for field in ("case_id", "disposition_type"):
+        if field not in data:
+            raise HTTPException(status_code=400, detail=f"{field} is required")
+
+    data["case_id"] = uuid.UUID(data["case_id"])
+    if data.get("charge_id"):
+        data["charge_id"] = uuid.UUID(data["charge_id"])
+    if data.get("judge_id"):
+        data["judge_id"] = uuid.UUID(data["judge_id"])
+
+    from backend.services.criminal_justice_service import get_criminal_justice_service
+    service = get_criminal_justice_service()
+    return await service.create_disposition(data)
+
+
+# --- Case Linking ---
+
+@app.get("/api/admin/cases/{case_id}/incidents")
+async def list_case_incidents(case_id: str):
+    """List incidents linked to a case."""
+    if not USE_DATABASE:
+        raise HTTPException(status_code=501, detail="Database not enabled")
+
+    try:
+        cid = uuid.UUID(case_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid case ID")
+
+    from backend.services.criminal_justice_service import get_criminal_justice_service
+    service = get_criminal_justice_service()
+    return await service.list_case_incidents(cid)
+
+
+@app.post("/api/admin/cases/{case_id}/incidents")
+async def link_case_incident(case_id: str, data: dict = Body(...)):
+    """Link an incident to a case."""
+    if not USE_DATABASE:
+        raise HTTPException(status_code=501, detail="Database not enabled")
+
+    data["case_id"] = uuid.UUID(case_id)
+    if "incident_id" not in data:
+        raise HTTPException(status_code=400, detail="incident_id is required")
+    data["incident_id"] = uuid.UUID(data["incident_id"])
+
+    from backend.services.criminal_justice_service import get_criminal_justice_service
+    service = get_criminal_justice_service()
+    return await service.link_incident(data)
+
+
+@app.get("/api/admin/cases/{case_id}/actors")
+async def list_case_actors(case_id: str):
+    """List actors linked to a case."""
+    if not USE_DATABASE:
+        raise HTTPException(status_code=501, detail="Database not enabled")
+
+    try:
+        cid = uuid.UUID(case_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid case ID")
+
+    from backend.services.criminal_justice_service import get_criminal_justice_service
+    service = get_criminal_justice_service()
+    return await service.list_case_actors(cid)
+
+
+@app.post("/api/admin/cases/{case_id}/actors")
+async def link_case_actor(case_id: str, data: dict = Body(...)):
+    """Link an actor to a case."""
+    if not USE_DATABASE:
+        raise HTTPException(status_code=501, detail="Database not enabled")
+
+    data["case_id"] = uuid.UUID(case_id)
+    if "actor_id" not in data:
+        raise HTTPException(status_code=400, detail="actor_id is required")
+    data["actor_id"] = uuid.UUID(data["actor_id"])
+    if data.get("role_type_id"):
+        data["role_type_id"] = uuid.UUID(data["role_type_id"])
+
+    from backend.services.criminal_justice_service import get_criminal_justice_service
+    service = get_criminal_justice_service()
+    return await service.link_actor(data)
+
+
+# --- Prosecutor Stats ---
+
+@app.get("/api/admin/prosecutor-stats")
+async def get_prosecutor_stats(prosecutor_id: str = None):
+    """Get prosecutor performance stats."""
+    if not USE_DATABASE:
+        raise HTTPException(status_code=501, detail="Database not enabled")
+
+    pid = uuid.UUID(prosecutor_id) if prosecutor_id else None
+
+    from backend.services.criminal_justice_service import get_criminal_justice_service
+    service = get_criminal_justice_service()
+    return await service.get_prosecutor_stats(pid)
+
+
+@app.post("/api/admin/prosecutor-stats/refresh")
+async def refresh_prosecutor_stats():
+    """Refresh the prosecutor stats materialized view."""
+    if not USE_DATABASE:
+        raise HTTPException(status_code=501, detail="Database not enabled")
+
+    from backend.services.criminal_justice_service import get_criminal_justice_service
+    service = get_criminal_justice_service()
+    await service.refresh_prosecutor_stats()
+    return {"success": True, "message": "Prosecutor stats refreshed"}
 
 
 # =====================

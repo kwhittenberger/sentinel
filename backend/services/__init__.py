@@ -16,6 +16,7 @@ from .auto_approval import AutoApprovalService, get_auto_approval_service
 from .unified_pipeline import UnifiedPipeline, get_pipeline
 from .settings import SettingsService, get_settings_service, LLMSettings, LLMProviderConfig
 from .llm_provider import LLMRouter, get_llm_router, LLMResponse
+from .domain_service import DomainService, get_domain_service
 
 # New extensible system services
 from .prompt_manager import PromptManager, get_prompt_manager, PromptType, PromptStatus
@@ -23,6 +24,7 @@ from .incident_type_service import IncidentTypeService, get_incident_type_servic
 from .event_service import EventService, get_event_service
 from .actor_service import ActorService, get_actor_service, ActorType, ActorRole
 from .pipeline_orchestrator import PipelineOrchestrator, get_pipeline_orchestrator, PipelineStage, PipelineContext
+from .criminal_justice_service import CriminalJusticeService, get_criminal_justice_service
 
 __all__ = [
     # LLM Extraction
@@ -53,6 +55,9 @@ __all__ = [
     "LLMRouter",
     "get_llm_router",
     "LLMResponse",
+    # Domain Service
+    "DomainService",
+    "get_domain_service",
     # Prompt Management
     "PromptManager",
     "get_prompt_manager",
@@ -76,4 +81,7 @@ __all__ = [
     "get_pipeline_orchestrator",
     "PipelineStage",
     "PipelineContext",
+    # Criminal Justice
+    "CriminalJusticeService",
+    "get_criminal_justice_service",
 ]
