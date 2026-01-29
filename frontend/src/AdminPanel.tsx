@@ -25,9 +25,12 @@ import { ArticleAudit } from './ArticleAudit';
 import { DomainManager } from './DomainManager';
 import { CaseManager } from './CaseManager';
 import { ProsecutorDashboard } from './ProsecutorDashboard';
+import { ExtractionSchemaManager } from './ExtractionSchemaManager';
+import { PromptTestRunner } from './PromptTestRunner';
+import { RecidivismDashboard } from './RecidivismDashboard';
 import './AdminPanel.css';
 
-type AdminView = 'dashboard' | 'queuemanager' | 'batch' | 'pipeline' | 'sources' | 'incidents' | 'jobs' | 'analytics' | 'settings' | 'types' | 'prompts' | 'events' | 'actors' | 'enrichment' | 'audit' | 'domains' | 'cases' | 'prosecutors';
+type AdminView = 'dashboard' | 'queuemanager' | 'batch' | 'pipeline' | 'sources' | 'incidents' | 'jobs' | 'analytics' | 'settings' | 'types' | 'prompts' | 'events' | 'actors' | 'enrichment' | 'audit' | 'domains' | 'cases' | 'prosecutors' | 'extraction-schemas' | 'prompt-tests' | 'recidivism';
 
 interface QueueStats {
   pending: number;
@@ -217,6 +220,32 @@ export function AdminPanel({ onClose, onRefresh }: AdminPanelProps) {
           >
             <span className="nav-icon">🏛️</span>
             Prosecutors
+          </button>
+          <button
+            className={`admin-nav-item ${view === 'recidivism' ? 'active' : ''}`}
+            onClick={() => setView('recidivism')}
+          >
+            <span className="nav-icon">🔄</span>
+            Recidivism
+          </button>
+
+          {/* Extraction Section */}
+          <div className="admin-nav-divider">
+            <span>Extraction</span>
+          </div>
+          <button
+            className={`admin-nav-item ${view === 'extraction-schemas' ? 'active' : ''}`}
+            onClick={() => setView('extraction-schemas')}
+          >
+            <span className="nav-icon">🧬</span>
+            Schemas
+          </button>
+          <button
+            className={`admin-nav-item ${view === 'prompt-tests' ? 'active' : ''}`}
+            onClick={() => setView('prompt-tests')}
+          >
+            <span className="nav-icon">🧪</span>
+            Prompt Tests
           </button>
 
           {/* Pipeline Section */}
@@ -644,6 +673,21 @@ export function AdminPanel({ onClose, onRefresh }: AdminPanelProps) {
         {/* Prosecutor Dashboard View */}
         {view === 'prosecutors' && (
           <ProsecutorDashboard />
+        )}
+
+        {/* Extraction Schema Manager View */}
+        {view === 'extraction-schemas' && (
+          <ExtractionSchemaManager />
+        )}
+
+        {/* Prompt Test Runner View */}
+        {view === 'prompt-tests' && (
+          <PromptTestRunner />
+        )}
+
+        {/* Recidivism Dashboard View */}
+        {view === 'recidivism' && (
+          <RecidivismDashboard />
         )}
       </main>
     </div>

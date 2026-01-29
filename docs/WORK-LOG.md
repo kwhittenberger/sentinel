@@ -78,7 +78,97 @@ Phase 1 (Foundation) complete, now implementing Phase 2 (Cases & Legal Tracking)
 - `backend/services/__init__.py` — exported CriminalJusticeService
 - `frontend/src/AdminPanel.tsx` — added cases/prosecutors views and nav items
 
-### Next Steps
-- Commit Phase 1 + Phase 2 changes
-- Phase 3: Flexible Extraction System (prompt templates, multi-domain extraction)
-- Phase 4: Advanced Analytics
+### Commits
+- `0fca7da` — Phase 1 + Phase 2 (event taxonomy, cases, prosecutorial tracking)
+
+### Phase 3: Flexible Extraction System — COMPLETE
+- [x] Migration 015: Extraction schemas — `database/migrations/015_extraction_schemas.sql`
+  - extraction_schemas table (domain/category-scoped LLM configs, version control, quality metrics)
+  - prompt_test_datasets, prompt_test_cases, prompt_test_runs tables
+  - extraction_quality_samples table (production monitoring)
+  - Custom field validation trigger on incidents
+  - Materialized view refresh configuration table
+  - Seed data: prosecution extraction schema
+  - Indexes, constraints, grants
+- [x] GenericExtractionService — `backend/services/generic_extraction.py`
+  - Schema CRUD (list, get, create, update)
+  - Production schema lookup by domain/category
+  - Schema-driven LLM extraction via LLMRouter
+  - Field validation, weighted confidence scoring, cross-field validation
+  - Quality sample recording and review
+  - Production quality monitoring with degradation detection
+- [x] PromptTestingService — `backend/services/prompt_testing.py`
+  - Test dataset and test case CRUD
+  - Test run execution: per-case LLM extraction, field comparison, precision/recall/F1
+  - Deploy-to-production workflow with quality gate
+  - Rollback to previous version
+  - Fuzzy value matching (string similarity, numeric tolerance)
+- [x] API endpoints — 18 new endpoints in `backend/main.py`
+  - Extraction schemas: GET/POST/PUT /api/admin/extraction-schemas, GET quality, POST extract/deploy/rollback
+  - Prompt tests: GET/POST datasets, GET cases, GET/POST runs, POST execute
+- [x] ExtractionSchemaManager UI — `frontend/src/ExtractionSchemaManager.tsx`
+  - Split-view schema list with domain filter
+  - Detail panel: configuration, quality metrics, fields, prompts
+  - Create/edit modals with domain/category/model selection
+  - Production/Active/Inactive status badges
+- [x] PromptTestRunner UI — `frontend/src/PromptTestRunner.tsx`
+  - Two tabs: Datasets and Test Runs
+  - Dataset management with test case list (importance badges, field counts)
+  - Test run results with precision/recall/F1 metrics
+  - Create dataset, add test case, and run test modals
+- [x] AdminPanel integration — added Extraction section (Schemas, Prompt Tests nav items)
+- [x] TypeScript compiles clean
+- [x] Python syntax validated
+
+### Phase 4: Advanced Analytics — COMPLETE
+- [x] Migration 016: Recidivism tracking — `database/migrations/016_recidivism_analytics.sql`
+  - actor_incident_history view (windowed: incident_number, days_since_last, total_for_actor)
+  - recidivism_analysis materialized view (aggregated stats, incident/outcome progression arrays)
+  - calculate_recidivism_indicator() function (heuristic-v1, with disclaimers)
+  - defendant_lifecycle_timeline view (12-phase CJ lifecycle)
+  - import_sagas table (multi-step ETL orchestration with status machine)
+  - staging_incidents, staging_actors tables (validation, dedup, comparison tracking)
+  - migration_rollback_log table
+  - Materialized view refresh config for recidivism_analysis
+  - Grants for all tables/views
+- [x] RecidivismService — `backend/services/recidivism_service.py`
+  - Actor incident history, recidivism stats, full profile
+  - Recidivism indicator calculation via SQL function
+  - Defendant lifecycle timeline
+  - Analytics summary (totals, averages)
+  - Materialized view refresh
+  - Import saga CRUD (list, create, update with status machine)
+- [x] API endpoints — 10 new endpoints in `backend/main.py`
+  - Recidivism: GET summary, GET actors, GET actor profile/history/indicator/lifecycle
+  - POST recidivism refresh
+  - Import sagas: GET/POST/PUT
+- [x] RecidivismDashboard UI — `frontend/src/RecidivismDashboard.tsx`
+  - Summary cards (repeat offenders, avg incidents, max, avg days between)
+  - Actor list with incident count badges and gap/span columns
+  - Detail panel: indicator badge (color-coded score, disclaimer), stats grid
+  - Incident progression tag display
+  - Two tabs: Incident History (timeline cards) and Lifecycle Timeline (phase list)
+  - Min incidents filter, refresh button
+- [x] AdminPanel integration — added Recidivism nav item under Data section
+- [x] TypeScript compiles clean
+- [x] Python syntax validated
+
+### Files Created (Phase 3)
+- `database/migrations/015_extraction_schemas.sql`
+- `backend/services/generic_extraction.py`
+- `backend/services/prompt_testing.py`
+- `frontend/src/ExtractionSchemaManager.tsx`
+- `frontend/src/PromptTestRunner.tsx`
+
+### Files Created (Phase 4)
+- `database/migrations/016_recidivism_analytics.sql`
+- `backend/services/recidivism_service.py`
+- `frontend/src/RecidivismDashboard.tsx`
+
+### Files Modified (Phase 3 + 4)
+- `backend/main.py` — 28 new API endpoints (18 Phase 3 + 10 Phase 4)
+- `backend/services/__init__.py` — exported Phase 3+4 services
+- `frontend/src/AdminPanel.tsx` — added Extraction section + Recidivism nav
+
+### Status: ALL PHASES COMPLETE
+Phases 1-4 fully implemented. Phases 5-7 (ML, Cross-Domain, Public API) are future aspirational items.

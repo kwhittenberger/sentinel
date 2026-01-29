@@ -25,6 +25,9 @@ from .event_service import EventService, get_event_service
 from .actor_service import ActorService, get_actor_service, ActorType, ActorRole
 from .pipeline_orchestrator import PipelineOrchestrator, get_pipeline_orchestrator, PipelineStage, PipelineContext
 from .criminal_justice_service import CriminalJusticeService, get_criminal_justice_service
+from .generic_extraction import GenericExtractionService, get_generic_extraction_service
+from .prompt_testing import PromptTestingService, get_prompt_testing_service
+from .recidivism_service import RecidivismService, get_recidivism_service
 
 __all__ = [
     # LLM Extraction
@@ -84,4 +87,13 @@ __all__ = [
     # Criminal Justice
     "CriminalJusticeService",
     "get_criminal_justice_service",
+    # Generic Extraction
+    "GenericExtractionService",
+    "get_generic_extraction_service",
+    # Prompt Testing
+    "PromptTestingService",
+    "get_prompt_testing_service",
+    # Recidivism
+    "RecidivismService",
+    "get_recidivism_service",
 ]

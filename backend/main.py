@@ -5012,6 +5012,257 @@ async def refresh_prosecutor_stats():
 
 
 # =====================
+# Extraction Schemas
+# =====================
+
+
+@app.get("/api/admin/extraction-schemas")
+async def list_extraction_schemas(
+    domain_id: Optional[str] = None,
+    category_id: Optional[str] = None,
+    is_active: Optional[bool] = True,
+    page: int = 1,
+    page_size: int = 50,
+):
+    from backend.services.generic_extraction import get_generic_extraction_service
+    service = get_generic_extraction_service()
+    return await service.list_schemas(domain_id, category_id, is_active, page, page_size)
+
+
+@app.get("/api/admin/extraction-schemas/{schema_id}")
+async def get_extraction_schema(schema_id: str):
+    from backend.services.generic_extraction import get_generic_extraction_service
+    service = get_generic_extraction_service()
+    result = await service.get_schema(schema_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Schema not found")
+    return result
+
+
+@app.post("/api/admin/extraction-schemas")
+async def create_extraction_schema(data: dict = Body(...)):
+    from backend.services.generic_extraction import get_generic_extraction_service
+    service = get_generic_extraction_service()
+    return await service.create_schema(data)
+
+
+@app.put("/api/admin/extraction-schemas/{schema_id}")
+async def update_extraction_schema(schema_id: str, data: dict = Body(...)):
+    from backend.services.generic_extraction import get_generic_extraction_service
+    service = get_generic_extraction_service()
+    result = await service.update_schema(schema_id, data)
+    if not result:
+        raise HTTPException(status_code=404, detail="Schema not found")
+    return result
+
+
+@app.post("/api/admin/extraction-schemas/{schema_id}/extract")
+async def run_extraction(schema_id: str, data: dict = Body(...)):
+    from backend.services.generic_extraction import get_generic_extraction_service
+    service = get_generic_extraction_service()
+    return await service.extract_from_article(
+        article_text=data["article_text"],
+        schema_id=schema_id,
+    )
+
+
+@app.get("/api/admin/extraction-schemas/{schema_id}/quality")
+async def get_extraction_quality(schema_id: str, sample_size: int = 100):
+    from backend.services.generic_extraction import get_generic_extraction_service
+    service = get_generic_extraction_service()
+    return await service.get_production_quality(schema_id, sample_size)
+
+
+@app.post("/api/admin/extraction-schemas/{schema_id}/deploy")
+async def deploy_schema(schema_id: str, data: dict = Body(...)):
+    from backend.services.prompt_testing import get_prompt_testing_service
+    service = get_prompt_testing_service()
+    try:
+        return await service.deploy_to_production(
+            schema_id, data["test_run_id"], data.get("require_passing_tests", True)
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/admin/extraction-schemas/{schema_id}/rollback")
+async def rollback_schema(schema_id: str, data: dict = Body(...)):
+    from backend.services.prompt_testing import get_prompt_testing_service
+    service = get_prompt_testing_service()
+    try:
+        return await service.rollback_to_previous(schema_id, data["reason"])
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# =====================
+# Prompt Testing
+# =====================
+
+
+@app.get("/api/admin/prompt-tests/datasets")
+async def list_test_datasets(
+    domain_id: Optional[str] = None,
+    category_id: Optional[str] = None,
+):
+    from backend.services.prompt_testing import get_prompt_testing_service
+    service = get_prompt_testing_service()
+    return {"datasets": await service.list_datasets(domain_id, category_id)}
+
+
+@app.post("/api/admin/prompt-tests/datasets")
+async def create_test_dataset(data: dict = Body(...)):
+    from backend.services.prompt_testing import get_prompt_testing_service
+    service = get_prompt_testing_service()
+    return await service.create_dataset(data)
+
+
+@app.get("/api/admin/prompt-tests/datasets/{dataset_id}")
+async def get_test_dataset(dataset_id: str):
+    from backend.services.prompt_testing import get_prompt_testing_service
+    service = get_prompt_testing_service()
+    result = await service.get_dataset(dataset_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    return result
+
+
+@app.get("/api/admin/prompt-tests/datasets/{dataset_id}/cases")
+async def list_test_cases(dataset_id: str):
+    from backend.services.prompt_testing import get_prompt_testing_service
+    service = get_prompt_testing_service()
+    return {"cases": await service.list_test_cases(dataset_id)}
+
+
+@app.post("/api/admin/prompt-tests/cases")
+async def create_test_case(data: dict = Body(...)):
+    from backend.services.prompt_testing import get_prompt_testing_service
+    service = get_prompt_testing_service()
+    return await service.create_test_case(data)
+
+
+@app.get("/api/admin/prompt-tests/runs")
+async def list_test_runs(
+    schema_id: Optional[str] = None,
+    dataset_id: Optional[str] = None,
+):
+    from backend.services.prompt_testing import get_prompt_testing_service
+    service = get_prompt_testing_service()
+    return {"runs": await service.list_test_runs(schema_id, dataset_id)}
+
+
+@app.get("/api/admin/prompt-tests/runs/{run_id}")
+async def get_test_run(run_id: str):
+    from backend.services.prompt_testing import get_prompt_testing_service
+    service = get_prompt_testing_service()
+    result = await service.get_test_run(run_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Test run not found")
+    return result
+
+
+@app.post("/api/admin/prompt-tests/run")
+async def execute_test_run(data: dict = Body(...)):
+    from backend.services.prompt_testing import get_prompt_testing_service
+    service = get_prompt_testing_service()
+    try:
+        return await service.run_test_suite(data["schema_id"], data["dataset_id"])
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# =====================
+# Recidivism & Analytics
+# =====================
+
+
+@app.get("/api/admin/recidivism/summary")
+async def get_recidivism_summary():
+    from backend.services.recidivism_service import get_recidivism_service
+    service = get_recidivism_service()
+    return await service.get_analytics_summary()
+
+
+@app.get("/api/admin/recidivism/actors")
+async def list_recidivists(
+    min_incidents: int = 2,
+    page: int = 1,
+    page_size: int = 50,
+):
+    from backend.services.recidivism_service import get_recidivism_service
+    service = get_recidivism_service()
+    return await service.list_recidivists(min_incidents, page, page_size)
+
+
+@app.get("/api/admin/recidivism/actors/{actor_id}")
+async def get_recidivism_profile(actor_id: str):
+    from backend.services.recidivism_service import get_recidivism_service
+    service = get_recidivism_service()
+    return await service.get_full_recidivism_profile(actor_id)
+
+
+@app.get("/api/admin/recidivism/actors/{actor_id}/history")
+async def get_actor_incident_history(actor_id: str):
+    from backend.services.recidivism_service import get_recidivism_service
+    service = get_recidivism_service()
+    return {"history": await service.get_actor_history(actor_id)}
+
+
+@app.get("/api/admin/recidivism/actors/{actor_id}/indicator")
+async def get_actor_recidivism_indicator(actor_id: str):
+    from backend.services.recidivism_service import get_recidivism_service
+    service = get_recidivism_service()
+    return await service.get_recidivism_indicator(actor_id)
+
+
+@app.get("/api/admin/recidivism/actors/{actor_id}/lifecycle")
+async def get_defendant_lifecycle(actor_id: str):
+    from backend.services.recidivism_service import get_recidivism_service
+    service = get_recidivism_service()
+    return {"lifecycle": await service.get_defendant_lifecycle(actor_id)}
+
+
+@app.post("/api/admin/recidivism/refresh")
+async def refresh_recidivism_analysis():
+    from backend.services.recidivism_service import get_recidivism_service
+    service = get_recidivism_service()
+    return await service.refresh_recidivism_analysis()
+
+
+# =====================
+# Import Sagas
+# =====================
+
+
+@app.get("/api/admin/import-sagas")
+async def list_import_sagas(
+    status: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 50,
+):
+    from backend.services.recidivism_service import get_recidivism_service
+    service = get_recidivism_service()
+    return await service.list_import_sagas(status, page, page_size)
+
+
+@app.post("/api/admin/import-sagas")
+async def create_import_saga(data: dict = Body(...)):
+    from backend.services.recidivism_service import get_recidivism_service
+    service = get_recidivism_service()
+    return await service.create_import_saga(data)
+
+
+@app.put("/api/admin/import-sagas/{saga_id}")
+async def update_import_saga(saga_id: str, data: dict = Body(...)):
+    from backend.services.recidivism_service import get_recidivism_service
+    service = get_recidivism_service()
+    result = await service.update_import_saga(saga_id, data)
+    if not result:
+        raise HTTPException(status_code=404, detail="Saga not found")
+    return result
+
+
+# =====================
 # Health Check
 # =====================
 
