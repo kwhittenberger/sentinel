@@ -329,8 +329,8 @@ async def load_incidents_from_db() -> list:
             sc.name as state_name,
             i.city,
             it.name as incident_type,
-            i.victim_category::text,
-            i.outcome_category::text,
+            vt.name as victim_category,
+            ot.name as outcome_category,
             i.victim_name,
             i.victim_age,
             i.notes,
@@ -354,6 +354,8 @@ async def load_incidents_from_db() -> list:
         FROM incidents i
         LEFT JOIN incident_types it ON i.incident_type_id = it.id
         LEFT JOIN state_codes sc ON i.state = sc.code
+        LEFT JOIN victim_types vt ON i.victim_type_id = vt.id
+        LEFT JOIN outcome_types ot ON i.outcome_type_id = ot.id
         WHERE i.curation_status = 'approved'
         ORDER BY i.date DESC
     """)

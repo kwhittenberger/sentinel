@@ -280,11 +280,12 @@ class EventService:
         if include_details:
             query = """
                 SELECT ie.*, i.date, i.state, i.city, i.category, i.description,
-                       i.victim_name, i.outcome_category, i.notes,
+                       i.victim_name, ot.name as outcome_category, i.notes,
                        it.name as incident_type, it.display_name as incident_type_display
                 FROM incident_events ie
                 JOIN incidents i ON ie.incident_id = i.id
                 LEFT JOIN incident_types it ON i.incident_type_id = it.id
+                LEFT JOIN outcome_types ot ON i.outcome_type_id = ot.id
                 WHERE ie.event_id = $1
                 ORDER BY ie.sequence_number, i.date
             """

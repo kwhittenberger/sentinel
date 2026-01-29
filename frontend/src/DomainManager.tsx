@@ -73,7 +73,7 @@ export function DomainManager() {
       const res = await fetch(`${API_BASE}/api/admin/domains?include_inactive=true`);
       if (!res.ok) throw new Error('Failed to load domains');
       const data = await res.json();
-      setDomains(data);
+      setDomains(data.domains || data);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load domains');
     } finally {
@@ -86,7 +86,7 @@ export function DomainManager() {
       const res = await fetch(`${API_BASE}/api/admin/domains/${domainSlug}/categories?include_inactive=true`);
       if (!res.ok) throw new Error('Failed to load categories');
       const data = await res.json();
-      setCategories(prev => ({ ...prev, [domainSlug]: data }));
+      setCategories(prev => ({ ...prev, [domainSlug]: data.categories || data }));
     } catch (err) {
       console.error('Failed to load categories:', err);
     }
