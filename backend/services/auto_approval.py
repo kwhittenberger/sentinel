@@ -265,6 +265,17 @@ class AutoApprovalService:
         """Common evaluation logic used by both sync and async methods."""
         detected_category = details.get('category')
 
+        # Check if article is marked as not relevant
+        is_relevant = extracted.get('is_relevant', True)
+        if not is_relevant:
+            if config.enable_auto_reject:
+                return ApprovalDecision(
+                    decision='auto_reject',
+                    confidence=confidence,
+                    reason='Article marked as not relevant to immigration enforcement or immigrant crimes',
+                    details={**details, 'is_relevant': False}
+                )
+
         # Check if below reject threshold
         if confidence < config.auto_reject_below:
             if config.enable_auto_reject:

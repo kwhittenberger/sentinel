@@ -279,7 +279,8 @@ class JobExecutor:
 
             try:
                 full_text = f"{article['title']}\n\n{article['content']}" if article['title'] else article['content']
-                result = extractor.extract_universal(full_text or "")
+                # Use async version for tracking
+                result = await extractor.extract_universal_async(full_text or "")
 
                 if result.get('success', True):
                     await execute("""

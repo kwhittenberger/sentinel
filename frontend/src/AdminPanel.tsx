@@ -15,16 +15,16 @@ import { IncidentBrowser } from './IncidentBrowser';
 import { JobManager } from './JobManager';
 import { AnalyticsDashboard } from './AnalyticsDashboard';
 import { BatchProcessing } from './BatchProcessing';
-import { CurationQueue } from './CurationQueue';
 import { QueueManager } from './QueueManager';
 import { IncidentTypeManager } from './IncidentTypeManager';
 import { PromptManager } from './PromptManager';
 import { EventBrowser } from './EventBrowser';
 import { ActorBrowser } from './ActorBrowser';
 import { EnrichmentPanel } from './EnrichmentPanel';
+import { ArticleAudit } from './ArticleAudit';
 import './AdminPanel.css';
 
-type AdminView = 'dashboard' | 'queue' | 'queuemanager' | 'batch' | 'pipeline' | 'sources' | 'incidents' | 'jobs' | 'analytics' | 'settings' | 'types' | 'prompts' | 'events' | 'actors' | 'enrichment';
+type AdminView = 'dashboard' | 'queuemanager' | 'batch' | 'pipeline' | 'sources' | 'incidents' | 'jobs' | 'analytics' | 'settings' | 'types' | 'prompts' | 'events' | 'actors' | 'enrichment' | 'audit';
 
 interface QueueStats {
   pending: number;
@@ -92,6 +92,13 @@ export function AdminPanel({ onClose, onRefresh }: AdminPanelProps) {
     loadDashboard();
   }, [loadDashboard]);
 
+  // Refresh stats when switching to queue-related views
+  useEffect(() => {
+    if (view === 'queuemanager' || view === 'batch') {
+      loadDashboard();
+    }
+  }, [view, loadDashboard]);
+
   const handleOperation = async (
     operation: string,
     fn: () => Promise<PipelineResult>
@@ -155,18 +162,18 @@ export function AdminPanel({ onClose, onRefresh }: AdminPanelProps) {
             )}
           </button>
           <button
-            className={`admin-nav-item ${view === 'queue' ? 'active' : ''}`}
-            onClick={() => setView('queue')}
-          >
-            <span className="nav-icon">📋</span>
-            Review Items
-          </button>
-          <button
             className={`admin-nav-item ${view === 'batch' ? 'active' : ''}`}
             onClick={() => setView('batch')}
           >
             <span className="nav-icon">🤖</span>
             Batch Approve
+          </button>
+          <button
+            className={`admin-nav-item ${view === 'audit' ? 'active' : ''}`}
+            onClick={() => setView('audit')}
+          >
+            <span className="nav-icon">🔍</span>
+            Article Audit
           </button>
 
           {/* Data Section */}
@@ -317,7 +324,7 @@ export function AdminPanel({ onClose, onRefresh }: AdminPanelProps) {
                     <div className="stat-value">{status?.total_incidents || 0}</div>
                     <div className="stat-label">Total Incidents</div>
                   </div>
-                  <div className="stat-card highlight clickable" onClick={() => setView('queue')}>
+                  <div className="stat-card highlight clickable" onClick={() => setView('batch')}>
                     <div className="stat-value">{queueStats?.pending || 0}</div>
                     <div className="stat-label">Pending Review</div>
                   </div>
@@ -379,11 +386,6 @@ export function AdminPanel({ onClose, onRefresh }: AdminPanelProps) {
               </div>
             )}
           </div>
-        )}
-
-        {/* Curation Queue View */}
-        {view === 'queue' && (
-          <CurationQueue onRefresh={loadDashboard} />
         )}
 
         {/* Queue Manager View */}
@@ -598,6 +600,11 @@ export function AdminPanel({ onClose, onRefresh }: AdminPanelProps) {
         {/* Enrichment View */}
         {view === 'enrichment' && (
           <EnrichmentPanel />
+        )}
+
+        {/* Article Audit View */}
+        {view === 'audit' && (
+          <ArticleAudit />
         )}
       </main>
     </div>

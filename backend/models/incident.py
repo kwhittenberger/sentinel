@@ -41,25 +41,10 @@ class IncidentScale(str, Enum):
     MASS = "mass"      # 200+ affected
 
 
-class OutcomeCategory(str, Enum):
-    """Outcome category."""
-    DEATH = "death"
-    SERIOUS_INJURY = "serious_injury"
-    MINOR_INJURY = "minor_injury"
-    NO_INJURY = "no_injury"
-    UNKNOWN = "unknown"
-
-
-class VictimCategory(str, Enum):
-    """Victim category for enforcement incidents."""
-    DETAINEE = "detainee"
-    ENFORCEMENT_TARGET = "enforcement_target"
-    PROTESTER = "protester"
-    JOURNALIST = "journalist"
-    BYSTANDER = "bystander"
-    US_CITIZEN_COLLATERAL = "us_citizen_collateral"
-    OFFICER = "officer"
-    MULTIPLE = "multiple"
+# Outcome and victim categories are now extensible (stored in outcome_types and victim_types tables)
+# These type aliases allow any string value (e.g., "death", "arrest", "detention", etc.)
+OutcomeCategory = str
+VictimCategory = str
 
 
 class IncidentBase(BaseModel):

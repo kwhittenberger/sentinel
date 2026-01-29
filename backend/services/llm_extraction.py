@@ -25,6 +25,7 @@ from .extraction_prompts import (
     get_required_fields,
     IncidentCategory,
 )
+from .prompt_manager import ExecutionResult
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +126,43 @@ class LLMExtractor:
         except Exception as e:
             logger.exception(f"Triage error: {e}")
             return {"success": False, "error": str(e), "recommendation": "review"}
+
+    async def extract_universal_async(self, article_text: str, max_tokens: int = 4000) -> dict:
+        """Async version of extract_universal with tracking support."""
+        result = self.extract_universal(article_text, max_tokens)
+
+        # Track usage if prompt manager available
+        if self._prompt_manager and result.get('_api_usage'):
+            try:
+                from uuid import UUID
+                import asyncio
+
+                # Get the universal extraction prompt
+                prompt = await self._prompt_manager.get_prompt(
+                    prompt_type='extraction',
+                    slug='universal_extraction'
+                )
+
+                if prompt:
+                    usage = result.get('_api_usage', {})
+                    execution_result = ExecutionResult(
+                        success=result.get('success', False),
+                        confidence_score=result.get('confidence', 0.0),
+                        input_tokens=usage.get('input_tokens'),
+                        output_tokens=usage.get('output_tokens'),
+                        latency_ms=usage.get('latency_ms'),
+                        result_data=result.get('incident') or result.get('actors'),
+                    )
+                    await self._prompt_manager.record_execution(
+                        prompt_id=prompt.id,
+                        result=execution_result,
+                    )
+            except Exception as e:
+                logger.warning(f"Failed to record universal extraction: {e}")
+
+        # Remove internal tracking data before returning
+        result.pop('_api_usage', None)
+        return result
 
     def extract_universal(self, article_text: str, max_tokens: int = 4000) -> dict:
         """
@@ -347,14 +385,16 @@ class LLMExtractor:
             # Record execution if using database prompts
             if db_prompt and self._prompt_manager:
                 try:
+                    execution_result = ExecutionResult(
+                        success=result.get("success", False),
+                        confidence_score=result.get("confidence", 0.0),
+                        input_tokens=message.usage.input_tokens if hasattr(message.usage, 'input_tokens') else None,
+                        output_tokens=message.usage.output_tokens if hasattr(message.usage, 'output_tokens') else None,
+                        result_data=result.get("extracted_data"),
+                    )
                     await self._prompt_manager.record_execution(
                         prompt_id=UUID(db_prompt["id"]),
-                        result={
-                            "success": result.get("success", False),
-                            "confidence": result.get("confidence", 0.0),
-                            "input_tokens": message.usage.input_tokens if hasattr(message.usage, 'input_tokens') else None,
-                            "output_tokens": message.usage.output_tokens if hasattr(message.usage, 'output_tokens') else None,
-                        }
+                        result=execution_result,
                     )
                 except Exception as e:
                     logger.warning(f"Failed to record prompt execution: {e}")

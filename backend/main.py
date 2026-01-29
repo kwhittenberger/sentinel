@@ -947,6 +947,135 @@ async def get_curation_queue(
     return {"items": items, "total": total}
 
 
+@app.get("/api/admin/articles/audit")
+async def get_article_audit(
+    status: Optional[str] = Query(None, description="Filter by status"),
+    format: Optional[str] = Query(None, description="Filter by extraction format"),
+    issues_only: bool = Query(False, description="Show only articles with issues"),
+    limit: int = Query(200, ge=1, le=500),
+):
+    """Get article audit data with extraction quality analysis."""
+    if not USE_DATABASE:
+        return {"articles": [], "stats": {}}
+
+    from backend.database import fetch
+
+    # Build WHERE clause
+    where_clauses = []
+    params = []
+    param_idx = 1
+
+    if status:
+        where_clauses.append(f"status = ${param_idx}")
+        params.append(status)
+        param_idx += 1
+
+    if format == 'llm':
+        where_clauses.append(f"extracted_data::text LIKE '%overall_confidence%'")
+    elif format == 'keyword_only':
+        where_clauses.append(f"extracted_data::text LIKE '%matchedKeywords%'")
+    elif format == 'none':
+        where_clauses.append(f"extracted_data IS NULL")
+
+    if issues_only:
+        where_clauses.append(
+            "(status = 'approved' AND incident_id IS NULL) OR "
+            "(status = 'approved' AND extracted_data::text LIKE '%matchedKeywords%')"
+        )
+
+    where_sql = " AND ".join(where_clauses) if where_clauses else "TRUE"
+
+    # Fetch articles
+    query = f"""
+        SELECT
+            id, title, source_name, source_url, status,
+            extraction_confidence, extracted_data, incident_id,
+            published_date, created_at, content
+        FROM ingested_articles
+        WHERE {where_sql}
+        ORDER BY created_at DESC
+        LIMIT ${param_idx}
+    """
+    params.append(limit)
+
+    rows = await fetch(query, *params)
+
+    # Required fields by category
+    REQUIRED_FIELDS = {
+        'enforcement': ['date', 'state', 'incident_type', 'victim_category', 'outcome_category'],
+        'crime': ['date', 'state', 'incident_type', 'immigration_status']
+    }
+
+    articles = []
+    for row in rows:
+        extracted_data = row.get("extracted_data") or {}
+
+        # Determine extraction format
+        if not extracted_data:
+            extraction_format = 'none'
+        elif 'matchedKeywords' in str(extracted_data):
+            extraction_format = 'keyword_only'
+        elif 'overall_confidence' in str(extracted_data) or 'incident' in str(extracted_data):
+            extraction_format = 'llm'
+        else:
+            extraction_format = 'unknown'
+
+        # Check for required fields
+        category = extracted_data.get('category', 'crime')
+        required = REQUIRED_FIELDS.get(category, ['date', 'state', 'incident_type'])
+        missing_fields = [f for f in required if not extracted_data.get(f)]
+        has_required_fields = len(missing_fields) == 0
+
+        articles.append({
+            "id": str(row["id"]),
+            "title": row.get("title"),
+            "source_name": row.get("source_name"),
+            "source_url": row.get("source_url"),
+            "status": row.get("status"),
+            "extraction_confidence": float(row["extraction_confidence"]) if row.get("extraction_confidence") else None,
+            "extraction_format": extraction_format,
+            "incident_id": str(row["incident_id"]) if row.get("incident_id") else None,
+            "has_required_fields": has_required_fields,
+            "missing_fields": missing_fields,
+            "published_date": str(row["published_date"]) if row.get("published_date") else None,
+            "created_at": str(row["created_at"]) if row.get("created_at") else None,
+            "extracted_data": extracted_data,
+            "content": row.get("content"),
+        })
+
+    # Calculate stats
+    stats_query = """
+        SELECT
+            COUNT(*) as total,
+            COUNT(*) FILTER (WHERE status = 'pending') as pending,
+            COUNT(*) FILTER (WHERE status = 'approved') as approved,
+            COUNT(*) FILTER (WHERE status = 'rejected') as rejected,
+            COUNT(*) FILTER (WHERE status = 'approved' AND incident_id IS NULL) as approved_without_incident,
+            COUNT(*) FILTER (WHERE status = 'approved' AND extracted_data::text LIKE '%matchedKeywords%') as approved_keyword_only
+        FROM ingested_articles
+    """
+    stats_rows = await fetch(stats_query)
+    stats_row = stats_rows[0] if stats_rows else {}
+
+    stats = {
+        "total": stats_row.get("total", 0),
+        "by_status": {
+            "pending": stats_row.get("pending", 0),
+            "approved": stats_row.get("approved", 0),
+            "rejected": stats_row.get("rejected", 0),
+        },
+        "by_format": {
+            "llm": sum(1 for a in articles if a["extraction_format"] == "llm"),
+            "keyword_only": sum(1 for a in articles if a["extraction_format"] == "keyword_only"),
+            "none": sum(1 for a in articles if a["extraction_format"] == "none"),
+        },
+        "approved_without_incident": stats_row.get("approved_without_incident", 0),
+        "approved_keyword_only": stats_row.get("approved_keyword_only", 0),
+    }
+
+    return {"articles": articles, "stats": stats}
+
+
 @app.post("/api/admin/queue/submit")
 async def submit_article_for_curation(
     url: str = Body(..., embed=True),
@@ -1864,17 +1993,27 @@ async def approve_article(
         )
 
     # Determine outcome category from universal or flat format
-    outcome_category = extracted_data.get("outcome_category")
-    if not outcome_category and outcome_info.get("severity"):
-        outcome_category = outcome_info["severity"]
-    if not outcome_category and extracted_data.get("involves_fatality"):
-        outcome_category = "death"
+    outcome_category_name = extracted_data.get("outcome_category")
+    if not outcome_category_name and outcome_info.get("severity"):
+        outcome_category_name = outcome_info["severity"]
+    if not outcome_category_name and extracted_data.get("involves_fatality"):
+        outcome_category_name = "death"
+
+    # Get or create outcome type ID
+    outcome_type_id = None
+    if outcome_category_name:
+        outcome_result = await fetch(
+            "SELECT get_or_create_outcome_type($1) as id",
+            outcome_category_name
+        )
+        if outcome_result:
+            outcome_type_id = outcome_result[0]["id"]
 
     # Extract actor details from universal format for incident fields
     actors_list = extracted_data.get("actors", [])
     victim_name = extracted_data.get("victim_name")
     victim_age = extracted_data.get("victim_age")
-    victim_category = extracted_data.get("victim_category")
+    victim_category_name = extracted_data.get("victim_category")
     offender_immigration_status = extracted_data.get("offender_immigration_status")
     prior_deportations = extracted_data.get("prior_deportations", 0)
     gang_affiliated = extracted_data.get("gang_affiliated", False)
@@ -1891,12 +2030,22 @@ async def approve_article(
                 if actor.get("gang_affiliation"):
                     gang_affiliated = True
 
+    # Get or create victim type ID
+    victim_type_id = None
+    if victim_category_name:
+        victim_result = await fetch(
+            "SELECT get_or_create_victim_type($1) as id",
+            victim_category_name
+        )
+        if victim_result:
+            victim_type_id = victim_result[0]["id"]
+
     insert_query = """
         INSERT INTO incidents (
             id, category, date, state, city, incident_type_id,
             description, source_url, source_tier, curation_status,
-            extraction_confidence, victim_name, victim_age, victim_category,
-            outcome_category, offender_immigration_status,
+            extraction_confidence, victim_name, victim_age, victim_type_id,
+            outcome_type_id, offender_immigration_status,
             prior_deportations, gang_affiliated, created_at
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
         RETURNING id
@@ -1917,8 +2066,8 @@ async def approve_article(
         float(article["extraction_confidence"]) if article.get("extraction_confidence") else None,
         victim_name,
         victim_age,
-        victim_category,
-        outcome_category,
+        victim_type_id,
+        outcome_type_id,
         offender_immigration_status,
         prior_deportations or 0,
         gang_affiliated or False,
@@ -3539,6 +3688,87 @@ async def get_prompt_executions(prompt_id: str, days: int = 30):
 
     stats = await prompt_manager.get_execution_stats(prompt_uuid, days=days)
     return stats
+
+
+@app.get("/api/admin/prompts/token-usage")
+async def get_token_usage_summary(days: int = 30):
+    """Get token usage and cost summary across all prompts."""
+    if not USE_DATABASE:
+        raise HTTPException(status_code=501, detail="Database not enabled")
+
+    from backend.database import fetch
+
+    # Overall token usage
+    overall_query = """
+        SELECT
+            COUNT(*) as total_executions,
+            SUM(input_tokens) as total_input_tokens,
+            SUM(output_tokens) as total_output_tokens,
+            SUM(input_tokens + output_tokens) as total_tokens,
+            AVG(confidence_score) as avg_confidence,
+            MIN(created_at) as first_execution,
+            MAX(created_at) as last_execution
+        FROM prompt_executions
+        WHERE created_at >= CURRENT_DATE - INTERVAL '%s days'
+    """ % days
+
+    overall_rows = await fetch(overall_query)
+    overall = dict(overall_rows[0]) if overall_rows else {}
+
+    # By prompt breakdown (from view)
+    by_prompt_query = """
+        SELECT * FROM token_cost_summary
+        ORDER BY estimated_cost_usd DESC
+        LIMIT 20
+    """
+    by_prompt_rows = await fetch(by_prompt_query)
+
+    # Daily usage (from view)
+    daily_query = """
+        SELECT * FROM token_usage_by_day
+        ORDER BY date DESC
+        LIMIT 30
+    """
+    daily_rows = await fetch(daily_query)
+
+    # Format results
+    return {
+        "overall": {
+            "total_executions": overall.get("total_executions", 0),
+            "total_input_tokens": int(overall.get("total_input_tokens") or 0),
+            "total_output_tokens": int(overall.get("total_output_tokens") or 0),
+            "total_tokens": int(overall.get("total_tokens") or 0),
+            "avg_confidence": float(overall.get("avg_confidence") or 0),
+            "first_execution": str(overall.get("first_execution")) if overall.get("first_execution") else None,
+            "last_execution": str(overall.get("last_execution")) if overall.get("last_execution") else None,
+        },
+        "by_prompt": [
+            {
+                "slug": row["slug"],
+                "version": row["version"],
+                "model_name": row["model_name"],
+                "executions": row["executions"],
+                "total_input_tokens": int(row["total_input_tokens"] or 0),
+                "total_output_tokens": int(row["total_output_tokens"] or 0),
+                "estimated_cost_usd": float(row["estimated_cost_usd"] or 0),
+            }
+            for row in by_prompt_rows
+        ],
+        "daily": [
+            {
+                "date": str(row["date"]),
+                "slug": row["slug"],
+                "version": row["version"],
+                "prompt_type": row["prompt_type"],
+                "executions": row["executions"],
+                "total_input_tokens": int(row["total_input_tokens"] or 0),
+                "total_output_tokens": int(row["total_output_tokens"] or 0),
+                "total_tokens": int(row["total_tokens"] or 0),
+                "avg_confidence": float(row["avg_confidence"] or 0) if row.get("avg_confidence") else None,
+            }
+            for row in daily_rows
+        ],
+    }
 
 
 # =====================

@@ -21,10 +21,11 @@ ENRICHABLE_FIELDS = {
     "county": {"column": "address", "type": "text"},  # stored in address if no county column
     "description": {"column": "description", "type": "text"},
     "victim_name": {"column": "victim_name", "type": "text"},
-    "outcome_category": {"column": "outcome_category", "type": "text"},
+    "outcome_category": {"column": "outcome_type_id", "type": "uuid", "converter": "get_or_create_outcome_type"},
     "outcome_description": {"column": "outcome_detail", "type": "text"},
     "latitude": {"column": "latitude", "type": "numeric"},
     "longitude": {"column": "longitude", "type": "numeric"},
+    "victim_category": {"column": "victim_type_id", "type": "uuid", "converter": "get_or_create_victim_type"},
 }
 
 # Fields that can be sourced from cross-incident merge
@@ -182,12 +183,13 @@ class EnrichmentService:
 
         query = f"""
             SELECT i.id, i.date, i.state, i.city, i.category, i.title, i.description,
-                   i.victim_name, i.outcome_category, i.outcome_detail,
+                   i.victim_name, ot.name as outcome_category, i.outcome_detail,
                    i.address, i.latitude, i.longitude, i.curation_status,
                    (SELECT COUNT(*) FROM ingested_articles WHERE incident_id = i.id AND content IS NOT NULL) as article_count,
                    (SELECT COUNT(*) FROM incident_actors WHERE incident_id = i.id) as actor_count,
                    ({missing_count_expr}) as missing_count
             FROM incidents i
+            LEFT JOIN outcome_types ot ON i.outcome_type_id = ot.id
             WHERE ({missing_count_expr}) > 0
             ORDER BY ({missing_count_expr}) DESC, i.date DESC
             LIMIT $1 OFFSET $2
@@ -524,9 +526,20 @@ class EnrichmentService:
         if check and check[0][col] is not None:
             return False
 
+        # Convert value if needed (e.g., text to UUID for outcome_category/victim_category)
+        value = log_entry["new_value"]
+        if field_info.get("type") == "uuid" and field_info.get("converter"):
+            converter_func = field_info["converter"]
+            result = await fetch(f"SELECT {converter_func}($1) as id", value)
+            if result:
+                value = result[0]["id"]
+            else:
+                logger.warning(f"Failed to convert value '{value}' using {converter_func}")
+                return False
+
         await execute(f"""
             UPDATE incidents SET {col} = $1 WHERE id = $2
-        """, log_entry["new_value"], log_entry["incident_id"])
+        """, value, log_entry["incident_id"])
 
         await execute("""
             UPDATE enrichment_log SET applied = TRUE WHERE id = $1

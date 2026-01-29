@@ -2692,3 +2692,69 @@ mark.field-highlight {
   border-bottom: 2px solid #3b82f6;
   cursor: help;
 }
+
+/* Article Audit View */
+.article-audit-page .batch-item.warning {
+  border-left: 3px solid #ef4444;
+  background: rgba(239, 68, 68, 0.05);
+}
+
+.article-audit-page .warning-icon {
+  font-size: 16px;
+  margin-left: 8px;
+}
+
+.article-audit-page .item-issues {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-color);
+}
+
+.article-audit-page .issue-tag {
+  font-size: 11px;
+  color: #ef4444;
+  margin: 2px 0;
+}
+
+.article-audit-page .stat-card.warning {
+  border-left: 3px solid #eab308;
+  background: rgba(234, 179, 8, 0.05);
+}
+
+.article-audit-page .warning-section {
+  background: rgba(239, 68, 68, 0.05);
+  border-left: 3px solid #ef4444;
+  padding: 12px;
+}
+
+.article-audit-page .warning-section ul {
+  margin: 8px 0;
+  padding-left: 20px;
+}
+
+.article-audit-page .warning-section li {
+  margin: 4px 0;
+  color: #ef4444;
+}
+
+.article-audit-page .detail-badges {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.article-audit-page .badge.large {
+  padding: 6px 12px;
+  font-size: 12px;
+}
+
+.article-audit-page .extraction-summary p {
+  margin: 6px 0;
+  font-size: 13px;
+}
+
+.article-audit-page .extraction-summary strong {
+  display: inline-block;
+  min-width: 120px;
+  color: var(--text-secondary);
+}
