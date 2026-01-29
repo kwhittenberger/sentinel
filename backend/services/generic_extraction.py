@@ -27,6 +27,7 @@ class GenericExtractionService:
         is_active: Optional[bool] = True,
         page: int = 1,
         page_size: int = 50,
+        schema_type: Optional[str] = None,
     ) -> Dict[str, Any]:
         from backend.database import fetch, fetchrow
 
@@ -45,6 +46,10 @@ class GenericExtractionService:
         if is_active is not None:
             conditions.append(f"es.is_active = ${idx}")
             params.append(is_active)
+            idx += 1
+        if schema_type:
+            conditions.append(f"es.schema_type = ${idx}")
+            params.append(schema_type)
             idx += 1
 
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
@@ -206,8 +211,19 @@ class GenericExtractionService:
         schema_id: Optional[str] = None,
         domain_id: Optional[str] = None,
         category_id: Optional[str] = None,
+        stage1_output: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Extract structured data using the appropriate schema."""
+        """Extract structured data using the appropriate schema.
+
+        Args:
+            article_text: Raw article text.
+            schema_id: Specific schema to use.
+            domain_id: Domain to find production schema for.
+            category_id: Category to find production schema for.
+            stage1_output: Optional Stage 1 IR JSON string for two-stage extraction.
+                           When provided, the user_prompt_template is rendered with both
+                           {stage1_output} and {article_text} placeholders.
+        """
         from backend.services.llm_provider import get_llm_router
 
         if schema_id:
@@ -220,6 +236,8 @@ class GenericExtractionService:
 
         system_prompt = schema["system_prompt"]
         user_prompt = schema["user_prompt_template"].replace("{article_text}", article_text)
+        if stage1_output is not None:
+            user_prompt = user_prompt.replace("{stage1_output}", stage1_output)
 
         router = get_llm_router()
         response = await router.call(

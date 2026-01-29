@@ -28,9 +28,10 @@ import { ProsecutorDashboard } from './ProsecutorDashboard';
 import { ExtractionSchemaManager } from './ExtractionSchemaManager';
 import { PromptTestRunner } from './PromptTestRunner';
 import { RecidivismDashboard } from './RecidivismDashboard';
+import { TwoStageExtractionView } from './TwoStageExtractionView';
 import './AdminPanel.css';
 
-type AdminView = 'dashboard' | 'queuemanager' | 'batch' | 'pipeline' | 'sources' | 'incidents' | 'jobs' | 'analytics' | 'settings' | 'types' | 'prompts' | 'events' | 'actors' | 'enrichment' | 'audit' | 'domains' | 'cases' | 'prosecutors' | 'extraction-schemas' | 'prompt-tests' | 'recidivism';
+type AdminView = 'dashboard' | 'queuemanager' | 'batch' | 'pipeline' | 'sources' | 'incidents' | 'jobs' | 'analytics' | 'settings' | 'types' | 'prompts' | 'events' | 'actors' | 'enrichment' | 'audit' | 'domains' | 'cases' | 'prosecutors' | 'extraction-schemas' | 'prompt-tests' | 'recidivism' | 'two-stage';
 
 interface QueueStats {
   pending: number;
@@ -246,6 +247,13 @@ export function AdminPanel({ onClose, onRefresh }: AdminPanelProps) {
           >
             <span className="nav-icon">🧪</span>
             Prompt Tests
+          </button>
+          <button
+            className={`admin-nav-item ${view === 'two-stage' ? 'active' : ''}`}
+            onClick={() => setView('two-stage')}
+          >
+            <span className="nav-icon">🔬</span>
+            Two-Stage
           </button>
 
           {/* Pipeline Section */}
@@ -688,6 +696,11 @@ export function AdminPanel({ onClose, onRefresh }: AdminPanelProps) {
         {/* Recidivism Dashboard View */}
         {view === 'recidivism' && (
           <RecidivismDashboard />
+        )}
+
+        {/* Two-Stage Extraction View */}
+        {view === 'two-stage' && (
+          <TwoStageExtractionView />
         )}
       </main>
     </div>

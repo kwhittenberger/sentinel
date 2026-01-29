@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { SplitPane } from './SplitPane';
 import type { Prompt, PromptType, PromptStatus, PromptExecutionStats } from './types';
 
 interface PromptManagerProps {
@@ -217,8 +218,12 @@ export function PromptManager({ onRefresh }: PromptManagerProps) {
         </select>
       </div>
 
-      <div className="split-view">
-        {/* Prompts List */}
+      <SplitPane
+        storageKey="prompts"
+        defaultLeftWidth={420}
+        minLeftWidth={280}
+        maxLeftWidth={700}
+        left={
         <div className="list-panel">
           <div className="list-header">
             <h3>Prompts ({prompts.length})</h3>
@@ -245,8 +250,8 @@ export function PromptManager({ onRefresh }: PromptManagerProps) {
             )}
           </div>
         </div>
-
-        {/* Prompt Details */}
+        }
+        right={
         <div className="detail-panel">
           {selectedPrompt ? (
             <>
@@ -413,7 +418,8 @@ export function PromptManager({ onRefresh }: PromptManagerProps) {
             </div>
           )}
         </div>
-      </div>
+        }
+      />
 
       {/* Create Prompt Modal */}
       {showCreateForm && (
@@ -544,274 +550,6 @@ export function PromptManager({ onRefresh }: PromptManagerProps) {
         </div>
       )}
 
-      <style>{`
-        .filter-bar {
-          display: flex;
-          gap: 1rem;
-          margin-bottom: 1rem;
-        }
-
-        .filter-bar select {
-          padding: 0.5rem 1rem;
-          border-radius: 4px;
-          border: 1px solid var(--border-color);
-          background: var(--bg-secondary);
-        }
-
-        .split-view {
-          display: grid;
-          grid-template-columns: 280px 1fr;
-          gap: 1rem;
-        }
-
-        .list-panel {
-          background: var(--bg-secondary);
-          border-radius: 8px;
-          overflow: hidden;
-        }
-
-        .list-header {
-          padding: 0.75rem 1rem;
-          border-bottom: 1px solid var(--border-color);
-        }
-
-        .list-items {
-          max-height: calc(100vh - 350px);
-          overflow-y: auto;
-        }
-
-        .list-item {
-          padding: 0.75rem 1rem;
-          cursor: pointer;
-          border-bottom: 1px solid var(--border-color);
-        }
-
-        .list-item:hover {
-          background: var(--bg-hover);
-        }
-
-        .list-item.selected {
-          background: var(--bg-active);
-          border-left: 3px solid var(--primary-color);
-        }
-
-        .item-title {
-          font-weight: 500;
-          margin-bottom: 0.25rem;
-        }
-
-        .item-meta {
-          display: flex;
-          gap: 0.5rem;
-          font-size: 0.75rem;
-          align-items: center;
-        }
-
-        .detail-panel {
-          background: var(--bg-secondary);
-          border-radius: 8px;
-          padding: 1rem;
-        }
-
-        .detail-header {
-          display: flex;
-          justify-content: space-between;
-          align-items: flex-start;
-          margin-bottom: 1rem;
-        }
-
-        .prompt-meta {
-          display: flex;
-          gap: 0.5rem;
-          align-items: center;
-          margin-top: 0.5rem;
-        }
-
-        .slug {
-          font-family: monospace;
-          color: var(--text-secondary);
-          font-size: 0.8rem;
-        }
-
-        .detail-tabs {
-          display: flex;
-          gap: 0.5rem;
-          margin-bottom: 1rem;
-          border-bottom: 1px solid var(--border-color);
-          padding-bottom: 0.5rem;
-        }
-
-        .tab {
-          padding: 0.5rem 1rem;
-          background: none;
-          border: none;
-          color: var(--text-secondary);
-          cursor: pointer;
-          border-radius: 4px;
-        }
-
-        .tab:hover {
-          background: var(--bg-hover);
-        }
-
-        .tab.active {
-          background: var(--primary-color);
-          color: white;
-        }
-
-        .prompt-editor {
-          display: flex;
-          flex-direction: column;
-          gap: 1rem;
-        }
-
-        .code-editor {
-          font-family: monospace;
-          font-size: 0.85rem;
-          background: var(--bg-primary);
-          border: 1px solid var(--border-color);
-          padding: 0.75rem;
-          border-radius: 4px;
-          resize: vertical;
-        }
-
-        .template-hint {
-          font-size: 0.75rem;
-          color: var(--text-secondary);
-          margin-bottom: 0.25rem;
-        }
-
-        .editor-footer {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          margin-top: 1rem;
-          padding-top: 1rem;
-          border-top: 1px solid var(--border-color);
-        }
-
-        .model-info {
-          font-size: 0.8rem;
-          color: var(--text-secondary);
-        }
-
-        .versions-list {
-          display: flex;
-          flex-direction: column;
-          gap: 0.5rem;
-        }
-
-        .version-item {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          padding: 0.75rem;
-          background: var(--bg-primary);
-          border-radius: 6px;
-        }
-
-        .version-item.current {
-          border: 1px solid var(--primary-color);
-        }
-
-        .version-info {
-          display: flex;
-          gap: 0.5rem;
-          align-items: center;
-        }
-
-        .version-number {
-          font-weight: 600;
-        }
-
-        .version-date {
-          font-size: 0.8rem;
-          color: var(--text-secondary);
-        }
-
-        .stats-grid {
-          display: grid;
-          grid-template-columns: repeat(4, 1fr);
-          gap: 1rem;
-          margin-bottom: 1rem;
-        }
-
-        .stat-card {
-          background: var(--bg-primary);
-          padding: 1rem;
-          border-radius: 8px;
-          text-align: center;
-        }
-
-        .stat-value {
-          font-size: 1.5rem;
-          font-weight: 600;
-        }
-
-        .stat-label {
-          font-size: 0.8rem;
-          color: var(--text-secondary);
-          margin-top: 0.25rem;
-        }
-
-        .stat-card.success .stat-value {
-          color: #22c55e;
-        }
-
-        .token-stats {
-          text-align: center;
-          color: var(--text-secondary);
-          font-size: 0.85rem;
-        }
-
-        .badge {
-          display: inline-block;
-          padding: 0.125rem 0.5rem;
-          border-radius: 4px;
-          font-size: 0.7rem;
-          text-transform: uppercase;
-        }
-
-        .badge.extraction { background: #3b82f6; color: white; }
-        .badge.classification { background: #8b5cf6; color: white; }
-        .badge.entity_resolution { background: #06b6d4; color: white; }
-        .badge.pattern_detection { background: #f59e0b; color: white; }
-        .badge.summarization { background: #84cc16; color: white; }
-        .badge.analysis { background: #ec4899; color: white; }
-
-        .badge.status-draft { background: #6b7280; color: white; }
-        .badge.status-active { background: #22c55e; color: white; }
-        .badge.status-testing { background: #f59e0b; color: white; }
-        .badge.status-deprecated { background: #ef4444; color: white; }
-        .badge.status-archived { background: #374151; color: white; }
-
-        .form-row {
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 1rem;
-        }
-
-        .modal.large {
-          max-width: 800px;
-          width: 90%;
-        }
-
-        .empty-state, .empty-list {
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          height: 200px;
-          color: var(--text-secondary);
-        }
-
-        .error-banner {
-          background: #fee2e2;
-          color: #dc2626;
-          padding: 0.75rem 1rem;
-          border-radius: 6px;
-          margin-bottom: 1rem;
-        }
-      `}</style>
     </div>
   );
 }

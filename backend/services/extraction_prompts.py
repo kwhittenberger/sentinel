@@ -1,8 +1,10 @@
 """
 Prompts for LLM extraction of incident data from articles.
 Supports dual incident categories: enforcement (ICE/CBP actions) and crime (crimes by immigrants).
+Also supports two-stage extraction: Stage 1 (comprehensive IR) and Stage 2 (schema-specific).
 """
 
+import hashlib
 from typing import Literal
 
 IncidentCategory = Literal['enforcement', 'crime']
@@ -689,3 +691,192 @@ def get_universal_extraction_prompt(article_text: str) -> str:
         Formatted prompt string
     """
     return UNIVERSAL_EXTRACTION_PROMPT.format(article_text=article_text)
+
+
+# ============================================================================
+# TWO-STAGE EXTRACTION: Stage 1 IR Schema
+# ============================================================================
+
+STAGE1_IR_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "article_meta": {
+            "type": "object",
+            "properties": {
+                "primary_topic": {"type": "string"},
+                "article_type": {"type": "string", "enum": ["news", "court_document", "press_release", "opinion"]}
+            }
+        },
+        "classification_hints": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "domain_slug": {"type": "string"},
+                    "category_slug": {"type": "string"},
+                    "confidence": {"type": "number", "minimum": 0, "maximum": 1}
+                },
+                "required": ["domain_slug", "category_slug", "confidence"]
+            }
+        },
+        "entities": {
+            "type": "object",
+            "properties": {
+                "persons": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string"},
+                            "name": {"type": "string"},
+                            "roles": {"type": "array", "items": {"type": "string"}},
+                            "age": {"type": ["integer", "null"]},
+                            "gender": {"type": ["string", "null"]},
+                            "nationality": {"type": ["string", "null"]},
+                            "immigration_status": {"type": ["string", "null"]},
+                            "criminal_history": {
+                                "type": "object",
+                                "properties": {
+                                    "prior_arrests": {"type": ["integer", "null"]},
+                                    "prior_convictions": {"type": ["integer", "null"]},
+                                    "prior_deportations": {"type": ["integer", "null"]},
+                                    "gang_affiliation": {"type": ["string", "null"]}
+                                }
+                            },
+                            "mentioned_in_events": {"type": "array", "items": {"type": "string"}}
+                        },
+                        "required": ["id", "name", "roles"]
+                    }
+                },
+                "organizations": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string"},
+                            "name": {"type": "string"},
+                            "org_type": {"type": "string"},
+                            "mentioned_in_events": {"type": "array", "items": {"type": "string"}}
+                        },
+                        "required": ["id", "name"]
+                    }
+                },
+                "locations": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string"},
+                            "name": {"type": "string"},
+                            "city": {"type": ["string", "null"]},
+                            "county": {"type": ["string", "null"]},
+                            "state": {"type": ["string", "null"]},
+                            "address": {"type": ["string", "null"]},
+                            "location_type": {"type": ["string", "null"]},
+                            "mentioned_in_events": {"type": "array", "items": {"type": "string"}}
+                        },
+                        "required": ["id", "name"]
+                    }
+                }
+            }
+        },
+        "events": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "event_type": {"type": "string"},
+                    "date": {"type": ["string", "null"]},
+                    "date_approximate": {"type": "boolean"},
+                    "location_id": {"type": ["string", "null"]},
+                    "description": {"type": "string"},
+                    "participants": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "entity_id": {"type": "string"},
+                                "role": {"type": "string"}
+                            }
+                        }
+                    },
+                    "charges": {"type": "array", "items": {"type": "string"}},
+                    "outcome": {"type": ["string", "null"]},
+                    "is_primary_event": {"type": "boolean"}
+                },
+                "required": ["id", "event_type"]
+            }
+        },
+        "legal_data": {
+            "type": "object",
+            "properties": {
+                "case_numbers": {"type": "array", "items": {"type": "string"}},
+                "charges": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "charge": {"type": "string"},
+                            "severity": {"type": "string"},
+                            "statute": {"type": ["string", "null"]}
+                        }
+                    }
+                },
+                "dispositions": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "charge": {"type": "string"},
+                            "outcome": {"type": "string"}
+                        }
+                    }
+                },
+                "sentences": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "type": {"type": "string"},
+                            "duration": {"type": ["string", "null"]},
+                            "amount": {"type": ["string", "null"]}
+                        }
+                    }
+                }
+            }
+        },
+        "quotes": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string"},
+                    "speaker": {"type": "string"},
+                    "speaker_entity_id": {"type": ["string", "null"]}
+                }
+            }
+        },
+        "policy_context": {
+            "type": "object",
+            "properties": {
+                "sanctuary_jurisdiction": {"type": ["boolean", "null"]},
+                "ice_detainer_status": {"type": ["string", "null"]},
+                "relevant_policies": {"type": "array", "items": {"type": "string"}}
+            }
+        },
+        "source_attributions": {"type": "array", "items": {"type": "string"}},
+        "extraction_confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "extraction_notes": {"type": "string"}
+    },
+    "required": ["entities", "events", "classification_hints"]
+}
+
+# Current Stage 1 schema version - bump when prompt changes materially
+STAGE1_SCHEMA_VERSION = 1
+
+
+def compute_prompt_hash(system_prompt: str, user_prompt_template: str) -> str:
+    """Compute SHA256 hash of Stage 1 prompts for staleness detection."""
+    content = f"{system_prompt}\n---\n{user_prompt_template}"
+    return hashlib.sha256(content.encode()).hexdigest()

@@ -147,7 +147,7 @@ class EnrichmentService:
 
         return result
 
-    def _build_missing_count_expr(self, target_fields: Optional[List[str]] = None):
+    def _build_missing_count_expr(self, target_fields: Optional[List[str]] = None, table_alias: str = "i"):
         """Build SQL expression and validated field list for missing field counting."""
         if not target_fields:
             target_fields = list(ENRICHABLE_FIELDS.keys())
@@ -157,7 +157,7 @@ class EnrichmentService:
             field_info = ENRICHABLE_FIELDS.get(field_name)
             if field_info:
                 col = field_info["column"]
-                null_conditions.append(f"CASE WHEN {col} IS NULL THEN 1 ELSE 0 END")
+                null_conditions.append(f"CASE WHEN {table_alias}.{col} IS NULL THEN 1 ELSE 0 END")
 
         if not null_conditions:
             return None, target_fields
@@ -210,7 +210,7 @@ class EnrichmentService:
 
         query = f"""
             SELECT COUNT(*)
-            FROM incidents
+            FROM incidents i
             WHERE ({missing_count_expr}) > 0
         """
         return await fetchval(query)

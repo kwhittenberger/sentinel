@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { SplitPane } from './SplitPane';
 import type { IncidentType, FieldType, PipelineStage } from './types';
 
 interface IncidentTypeManagerProps {
@@ -205,8 +206,12 @@ export function IncidentTypeManager({ onRefresh }: IncidentTypeManagerProps) {
 
       {error && <div className="error-banner">{error}</div>}
 
-      <div className="split-view">
-        {/* Types List */}
+      <SplitPane
+        storageKey="incident-types"
+        defaultLeftWidth={420}
+        minLeftWidth={280}
+        maxLeftWidth={700}
+        left={
         <div className="list-panel">
           <div className="list-header">
             <h3>Types ({types.length})</h3>
@@ -233,8 +238,8 @@ export function IncidentTypeManager({ onRefresh }: IncidentTypeManagerProps) {
             ))}
           </div>
         </div>
-
-        {/* Type Details */}
+        }
+        right={
         <div className="detail-panel">
           {selectedType ? (
             <>
@@ -478,7 +483,8 @@ export function IncidentTypeManager({ onRefresh }: IncidentTypeManagerProps) {
             </div>
           )}
         </div>
-      </div>
+        }
+      />
 
       {/* Create Type Modal */}
       {showCreateForm && (
@@ -684,337 +690,6 @@ export function IncidentTypeManager({ onRefresh }: IncidentTypeManagerProps) {
         </div>
       )}
 
-      <style>{`
-        .split-view {
-          display: grid;
-          grid-template-columns: 300px 1fr;
-          gap: 1rem;
-          margin-top: 1rem;
-        }
-
-        .list-panel {
-          background: var(--bg-secondary);
-          border-radius: 8px;
-          overflow: hidden;
-        }
-
-        .list-header {
-          padding: 0.75rem 1rem;
-          border-bottom: 1px solid var(--border-color);
-        }
-
-        .list-items {
-          max-height: calc(100vh - 300px);
-          overflow-y: auto;
-        }
-
-        .list-item {
-          display: flex;
-          align-items: center;
-          gap: 0.75rem;
-          padding: 0.75rem 1rem;
-          cursor: pointer;
-          border-bottom: 1px solid var(--border-color);
-        }
-
-        .list-item:hover {
-          background: var(--bg-hover);
-        }
-
-        .list-item.selected {
-          background: var(--bg-active);
-          border-left: 3px solid var(--primary-color);
-        }
-
-        .item-icon {
-          width: 32px;
-          height: 32px;
-          border-radius: 6px;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          color: white;
-          font-weight: bold;
-          font-size: 0.9rem;
-        }
-
-        .item-content {
-          flex: 1;
-          min-width: 0;
-        }
-
-        .item-title {
-          font-weight: 500;
-          margin-bottom: 0.25rem;
-        }
-
-        .item-meta {
-          display: flex;
-          gap: 0.5rem;
-          font-size: 0.75rem;
-          color: var(--text-secondary);
-        }
-
-        .detail-panel {
-          background: var(--bg-secondary);
-          border-radius: 8px;
-          padding: 1rem;
-        }
-
-        .detail-header {
-          display: flex;
-          align-items: center;
-          gap: 1rem;
-          margin-bottom: 1rem;
-        }
-
-        .detail-tabs {
-          display: flex;
-          gap: 0.5rem;
-          margin-bottom: 1rem;
-          border-bottom: 1px solid var(--border-color);
-          padding-bottom: 0.5rem;
-        }
-
-        .tab {
-          padding: 0.5rem 1rem;
-          background: none;
-          border: none;
-          color: var(--text-secondary);
-          cursor: pointer;
-          border-radius: 4px;
-        }
-
-        .tab:hover {
-          background: var(--bg-hover);
-        }
-
-        .tab.active {
-          background: var(--primary-color);
-          color: white;
-        }
-
-        .detail-section {
-          padding: 0.5rem 0;
-        }
-
-        .section-header {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          margin-bottom: 1rem;
-        }
-
-        .fields-list {
-          display: flex;
-          flex-direction: column;
-          gap: 0.75rem;
-        }
-
-        .field-item {
-          background: var(--bg-primary);
-          border-radius: 6px;
-          padding: 0.75rem;
-        }
-
-        .field-header {
-          display: flex;
-          align-items: center;
-          gap: 0.5rem;
-          margin-bottom: 0.25rem;
-        }
-
-        .field-name {
-          font-family: monospace;
-          font-weight: 500;
-        }
-
-        .field-type {
-          font-size: 0.75rem;
-          color: var(--text-secondary);
-          background: var(--bg-secondary);
-          padding: 0.125rem 0.375rem;
-          border-radius: 3px;
-        }
-
-        .field-meta {
-          font-size: 0.85rem;
-          color: var(--text-secondary);
-        }
-
-        .extraction-hint {
-          font-size: 0.75rem;
-          color: var(--text-tertiary);
-          margin-top: 0.5rem;
-          font-style: italic;
-        }
-
-        .pipeline-stages {
-          display: flex;
-          flex-direction: column;
-          gap: 0.5rem;
-        }
-
-        .pipeline-stage {
-          display: flex;
-          align-items: center;
-          gap: 1rem;
-          padding: 0.75rem;
-          background: var(--bg-primary);
-          border-radius: 6px;
-          opacity: 1;
-        }
-
-        .pipeline-stage.disabled {
-          opacity: 0.5;
-        }
-
-        .stage-info {
-          flex: 1;
-        }
-
-        .stage-name {
-          font-weight: 500;
-        }
-
-        .stage-description {
-          display: block;
-          font-size: 0.75rem;
-          color: var(--text-secondary);
-        }
-
-        .stage-order {
-          font-size: 0.75rem;
-          color: var(--text-secondary);
-        }
-
-        .threshold-form {
-          display: grid;
-          grid-template-columns: repeat(2, 1fr);
-          gap: 1rem;
-        }
-
-        .threshold-form .form-group {
-          position: relative;
-        }
-
-        .input-suffix {
-          position: absolute;
-          right: 0.5rem;
-          top: 50%;
-          transform: translateY(50%);
-          color: var(--text-secondary);
-        }
-
-        .badge {
-          display: inline-block;
-          padding: 0.125rem 0.5rem;
-          border-radius: 4px;
-          font-size: 0.7rem;
-          text-transform: uppercase;
-        }
-
-        .badge.enforcement {
-          background: #3b82f6;
-          color: white;
-        }
-
-        .badge.crime {
-          background: #ef4444;
-          color: white;
-        }
-
-        .badge.required {
-          background: #f59e0b;
-          color: white;
-        }
-
-        .badge.inactive {
-          background: var(--text-tertiary);
-          color: white;
-        }
-
-        .form-row {
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 1rem;
-        }
-
-        .toggle {
-          position: relative;
-          display: inline-block;
-          width: 40px;
-          height: 22px;
-        }
-
-        .toggle input {
-          opacity: 0;
-          width: 0;
-          height: 0;
-        }
-
-        .toggle .slider {
-          position: absolute;
-          cursor: pointer;
-          top: 0;
-          left: 0;
-          right: 0;
-          bottom: 0;
-          background-color: var(--text-tertiary);
-          transition: 0.3s;
-          border-radius: 22px;
-        }
-
-        .toggle .slider:before {
-          position: absolute;
-          content: "";
-          height: 16px;
-          width: 16px;
-          left: 3px;
-          bottom: 3px;
-          background-color: white;
-          transition: 0.3s;
-          border-radius: 50%;
-        }
-
-        .toggle input:checked + .slider {
-          background-color: var(--primary-color);
-        }
-
-        .toggle input:checked + .slider:before {
-          transform: translateX(18px);
-        }
-
-        .toggle.small {
-          width: 32px;
-          height: 18px;
-        }
-
-        .toggle.small .slider:before {
-          height: 12px;
-          width: 12px;
-        }
-
-        .toggle.small input:checked + .slider:before {
-          transform: translateX(14px);
-        }
-
-        .empty-state {
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          height: 200px;
-          color: var(--text-secondary);
-        }
-
-        .error-banner {
-          background: #fee2e2;
-          color: #dc2626;
-          padding: 0.75rem 1rem;
-          border-radius: 6px;
-          margin-bottom: 1rem;
-        }
-      `}</style>
     </div>
   );
 }

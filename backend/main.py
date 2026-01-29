@@ -5023,12 +5023,13 @@ async def list_extraction_schemas(
     domain_id: Optional[str] = None,
     category_id: Optional[str] = None,
     is_active: Optional[bool] = True,
+    schema_type: Optional[str] = None,
     page: int = 1,
     page_size: int = 50,
 ):
     from backend.services.generic_extraction import get_generic_extraction_service
     service = get_generic_extraction_service()
-    return await service.list_schemas(domain_id, category_id, is_active, page, page_size)
+    return await service.list_schemas(domain_id, category_id, is_active, page, page_size, schema_type=schema_type)
 
 
 @app.get("/api/admin/extraction-schemas/{schema_id}")
@@ -5095,6 +5096,92 @@ async def rollback_schema(schema_id: str, data: dict = Body(...)):
         return await service.rollback_to_previous(schema_id, data["reason"])
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+# =====================
+# Two-Stage Extraction
+# =====================
+
+
+@app.post("/api/admin/two-stage/extract-stage1")
+async def two_stage_extract_stage1(data: dict = Body(...)):
+    """Run Stage 1 comprehensive extraction on an article."""
+    from backend.services.two_stage_extraction import get_two_stage_service
+    service = get_two_stage_service()
+    try:
+        return await service.run_stage1(
+            article_id=data["article_id"],
+            force=data.get("force", False),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/admin/two-stage/extract-stage2")
+async def two_stage_extract_stage2(data: dict = Body(...)):
+    """Run Stage 2 schema extractions against a Stage 1 result."""
+    from backend.services.two_stage_extraction import get_two_stage_service
+    service = get_two_stage_service()
+    try:
+        return {
+            "results": await service.run_stage2(
+                article_extraction_id=data["article_extraction_id"],
+                schema_ids=data.get("schema_ids"),
+            )
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/admin/two-stage/extract-full")
+async def two_stage_extract_full(data: dict = Body(...)):
+    """Run full two-stage pipeline (Stage 1 + Stage 2) on an article."""
+    from backend.services.two_stage_extraction import get_two_stage_service
+    service = get_two_stage_service()
+    try:
+        return await service.run_full_pipeline(
+            article_id=data["article_id"],
+            force_stage1=data.get("force_stage1", False),
+            schema_ids=data.get("schema_ids"),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/admin/two-stage/reextract")
+async def two_stage_reextract(data: dict = Body(...)):
+    """Re-run a single Stage 2 extraction without re-running Stage 1."""
+    from backend.services.two_stage_extraction import get_two_stage_service
+    service = get_two_stage_service()
+    try:
+        return await service.reextract_stage2(
+            article_extraction_id=data["article_extraction_id"],
+            schema_id=data["schema_id"],
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/admin/two-stage/status/{article_id}")
+async def two_stage_status(article_id: str):
+    """Get extraction pipeline status for an article."""
+    from backend.services.two_stage_extraction import get_two_stage_service
+    service = get_two_stage_service()
+    try:
+        return await service.get_extraction_status(article_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.get("/api/admin/two-stage/extractions/{extraction_id}")
+async def two_stage_extraction_detail(extraction_id: str):
+    """Get full Stage 1 extraction with linked Stage 2 results."""
+    from backend.services.two_stage_extraction import get_two_stage_service
+    service = get_two_stage_service()
+    try:
+        return await service.get_extraction_detail(extraction_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 # =====================

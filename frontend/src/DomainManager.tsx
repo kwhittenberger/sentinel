@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { SplitPane } from './SplitPane';
 
 const API_BASE = '';
 
@@ -247,8 +248,12 @@ export function DomainManager() {
 
       {error && <div className="error-banner">{error}</div>}
 
-      <div className="split-view">
-        {/* Domains & Categories Tree */}
+      <SplitPane
+        storageKey="domains"
+        defaultLeftWidth={420}
+        minLeftWidth={280}
+        maxLeftWidth={700}
+        left={
         <div className="list-panel">
           <div className="list-header">
             <h3>Domains ({domains.length})</h3>
@@ -312,8 +317,8 @@ export function DomainManager() {
             ))}
           </div>
         </div>
-
-        {/* Detail Panel */}
+        }
+        right={
         <div className="detail-panel">
           {selected?.type === 'domain' && (
             <DomainDetail
@@ -335,7 +340,8 @@ export function DomainManager() {
             </div>
           )}
         </div>
-      </div>
+        }
+      />
 
       {/* Create Domain Modal */}
       {showCreateDomain && (

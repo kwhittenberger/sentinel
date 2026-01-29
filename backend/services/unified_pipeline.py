@@ -130,6 +130,7 @@ class UnifiedPipeline:
         skip_approval: bool = False,
         incident_type_id: Optional[UUID] = None,
         use_orchestrator: bool = None,
+        extraction_pipeline: Optional[str] = None,
     ) -> PipelineResult:
         """
         Process a single article through the pipeline.
@@ -142,6 +143,7 @@ class UnifiedPipeline:
             skip_approval: Skip auto-approval evaluation
             incident_type_id: Optional incident type ID for type-specific processing
             use_orchestrator: Override instance setting for orchestrator use
+            extraction_pipeline: 'legacy' or 'two_stage' (overrides article's setting)
 
         Returns:
             PipelineResult with all step results
@@ -152,6 +154,11 @@ class UnifiedPipeline:
         # Use orchestrator if available and requested
         if should_use_orchestrator and self._orchestrator and incident_type_id:
             return await self.process_with_orchestrator(article, incident_type_id)
+
+        # Check for two-stage pipeline
+        pipeline_mode = extraction_pipeline or article.get('extraction_pipeline', 'legacy')
+        if pipeline_mode == 'two_stage' and not skip_extraction:
+            return await self._process_two_stage(article, existing_articles, skip_duplicate_check, skip_approval)
 
         result = PipelineResult(
             success=True,
@@ -203,6 +210,71 @@ class UnifiedPipeline:
 
         except Exception as e:
             logger.exception(f"Error processing article {result.article_id}: {e}")
+            result.success = False
+            result.error = str(e)
+            return result
+
+    async def _process_two_stage(
+        self,
+        article: dict,
+        existing_articles: List[dict] = None,
+        skip_duplicate_check: bool = False,
+        skip_approval: bool = False,
+    ) -> PipelineResult:
+        """Process article using the two-stage extraction pipeline."""
+        from .two_stage_extraction import get_two_stage_service
+
+        result = PipelineResult(
+            success=True,
+            article_id=str(article.get('id', 'unknown'))
+        )
+
+        try:
+            # Step 1: Duplicate Detection (same as legacy)
+            if not skip_duplicate_check and existing_articles:
+                dup_result = self.detector.check_duplicate(article, existing_articles)
+                if dup_result:
+                    result.duplicate_result = dup_result
+                    result.final_decision = 'duplicate'
+                    result.steps_completed.append('duplicate_detection')
+                    return result
+                result.steps_completed.append('duplicate_detection')
+
+            # Step 2: Two-stage extraction
+            article_id = str(article.get('id', ''))
+            if article_id:
+                service = get_two_stage_service()
+                pipeline_result = await service.run_full_pipeline(article_id)
+                result.extraction_result = {
+                    'success': True,
+                    'pipeline': 'two_stage',
+                    'stage1': {
+                        'id': pipeline_result['stage1']['id'],
+                        'entity_count': pipeline_result['stage1'].get('entity_count'),
+                        'event_count': pipeline_result['stage1'].get('event_count'),
+                        'confidence': pipeline_result['stage1'].get('overall_confidence'),
+                    },
+                    'stage2_count': len(pipeline_result.get('stage2_results', [])),
+                }
+                result.steps_completed.append('two_stage_extraction')
+
+            # Step 3: Auto-Approval (uses best Stage 2 confidence)
+            if not skip_approval:
+                extraction_data = article.get('extracted_data')
+                approval = self.approver.evaluate(article, extraction_data)
+                result.approval_result = {
+                    'decision': approval.decision,
+                    'confidence': approval.confidence,
+                    'reason': approval.reason,
+                    'details': approval.details
+                }
+                result.final_decision = approval.decision
+                result.steps_completed.append('auto_approval')
+
+            return result
+
+        except Exception as e:
+            logger.exception("Error in two-stage pipeline for article %s: %s", result.article_id, e)
             result.success = False
             result.error = str(e)
             return result

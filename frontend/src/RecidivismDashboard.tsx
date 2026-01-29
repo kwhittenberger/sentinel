@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { SplitPane } from './SplitPane';
 
 const API_BASE = '';
 
@@ -173,8 +174,12 @@ export function RecidivismDashboard() {
         </div>
       )}
 
-      <div className="split-view">
-        {/* Actor List */}
+      <SplitPane
+        storageKey="recidivism"
+        defaultLeftWidth={420}
+        minLeftWidth={280}
+        maxLeftWidth={700}
+        left={
         <div className="list-panel">
           <div className="list-header">
             <h3>Repeat Offenders ({actors.length})</h3>
@@ -218,8 +223,8 @@ export function RecidivismDashboard() {
             </div>
           )}
         </div>
-
-        {/* Detail Panel */}
+        }
+        right={
         <div className="detail-panel">
           {selectedActor ? (
             <>
@@ -253,18 +258,18 @@ export function RecidivismDashboard() {
                 )}
 
                 {/* Stats Grid */}
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 16 }}>
-                  <div className="stat-card" style={{ padding: 10, textAlign: 'center' }}>
-                    <div style={{ fontSize: 20, fontWeight: 700 }}>{selectedActor.total_incidents}</div>
-                    <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Total Incidents</div>
+                <div className="schema-metrics-grid" style={{ marginBottom: 16 }}>
+                  <div className="stat-card">
+                    <div className="stat-value">{selectedActor.total_incidents}</div>
+                    <div className="stat-label">Total Incidents</div>
                   </div>
-                  <div className="stat-card" style={{ padding: 10, textAlign: 'center' }}>
-                    <div style={{ fontSize: 20, fontWeight: 700 }}>{formatDays(selectedActor.avg_days_between_incidents)}</div>
-                    <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Avg Gap</div>
+                  <div className="stat-card">
+                    <div className="stat-value">{formatDays(selectedActor.avg_days_between_incidents)}</div>
+                    <div className="stat-label">Avg Gap</div>
                   </div>
-                  <div className="stat-card" style={{ padding: 10, textAlign: 'center' }}>
-                    <div style={{ fontSize: 20, fontWeight: 700 }}>{formatDays(selectedActor.total_days_span)}</div>
-                    <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Total Span</div>
+                  <div className="stat-card">
+                    <div className="stat-value">{formatDays(selectedActor.total_days_span)}</div>
+                    <div className="stat-label">Total Span</div>
                   </div>
                 </div>
 
@@ -286,17 +291,12 @@ export function RecidivismDashboard() {
                 )}
 
                 {/* Tabs */}
-                <div style={{ display: 'flex', gap: 0, borderBottom: '1px solid var(--border-color)', marginBottom: 12 }}>
+                <div className="detail-tabs">
                   {(['history', 'lifecycle'] as DetailTab[]).map(t => (
                     <button
                       key={t}
+                      className={`tab ${detailTab === t ? 'active' : ''}`}
                       onClick={() => setDetailTab(t)}
-                      style={{
-                        padding: '6px 16px', fontSize: 12, fontWeight: detailTab === t ? 600 : 400,
-                        background: 'none', border: 'none',
-                        borderBottom: detailTab === t ? '2px solid var(--accent-color)' : '2px solid transparent',
-                        cursor: 'pointer', color: detailTab === t ? 'var(--text-primary)' : 'var(--text-muted)',
-                      }}
                     >
                       {t === 'history' ? 'Incident History' : 'Lifecycle Timeline'}
                     </button>
@@ -371,7 +371,8 @@ export function RecidivismDashboard() {
             <div className="empty-state"><p>Select an actor to view recidivism details</p></div>
           )}
         </div>
-      </div>
+        }
+      />
     </div>
   );
 }

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { SplitPane } from './SplitPane';
 
 const API_BASE = '';
 
@@ -292,8 +293,12 @@ export function CaseManager() {
         </div>
       </div>
 
-      <div className="split-view">
-        {/* Cases List */}
+      <SplitPane
+        storageKey="cases"
+        defaultLeftWidth={420}
+        minLeftWidth={280}
+        maxLeftWidth={700}
+        left={
         <div className="list-panel">
           <div className="list-items">
             {cases.map((c) => (
@@ -327,8 +332,8 @@ export function CaseManager() {
             </div>
           )}
         </div>
-
-        {/* Detail Panel */}
+        }
+        right={
         <div className="detail-panel">
           {selectedCase ? (
             <>
@@ -559,7 +564,8 @@ export function CaseManager() {
             </div>
           )}
         </div>
-      </div>
+        }
+      />
 
       {/* Create Case Modal */}
       {showCreateCase && (

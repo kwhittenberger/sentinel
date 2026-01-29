@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { SplitPane } from './SplitPane';
 
 const API_BASE = '';
 
@@ -28,6 +29,8 @@ interface ExtractionSchema {
   deployed_at: string | null;
   created_at: string;
   updated_at: string;
+  schema_type: 'stage1' | 'stage2' | 'legacy' | null;
+  input_format: 'article_text' | 'stage1_output' | 'both' | null;
 }
 
 interface Domain {
@@ -52,12 +55,14 @@ export function ExtractionSchemaManager() {
   const [showCreate, setShowCreate] = useState(false);
   const [editMode, setEditMode] = useState(false);
   const [filterDomain, setFilterDomain] = useState('');
+  const [filterSchemaType, setFilterSchemaType] = useState('');
 
   const loadSchemas = useCallback(async () => {
     setLoading(true);
     try {
       const params = new URLSearchParams();
       if (filterDomain) params.set('domain_id', filterDomain);
+      if (filterSchemaType) params.set('schema_type', filterSchemaType);
       const res = await fetch(`${API_BASE}/api/admin/extraction-schemas?${params}`);
       if (!res.ok) throw new Error('Failed to load schemas');
       const data = await res.json();
@@ -67,7 +72,7 @@ export function ExtractionSchemaManager() {
     } finally {
       setLoading(false);
     }
-  }, [filterDomain]);
+  }, [filterDomain, filterSchemaType]);
 
   const loadDomains = useCallback(async () => {
     try {
@@ -135,9 +140,19 @@ export function ExtractionSchemaManager() {
         <h2>Extraction Schemas</h2>
         <div className="page-actions">
           <select
+            className="filter-select"
+            value={filterSchemaType}
+            onChange={(e) => setFilterSchemaType(e.target.value)}
+          >
+            <option value="">All Types</option>
+            <option value="stage1">Stage 1</option>
+            <option value="stage2">Stage 2</option>
+            <option value="legacy">Legacy</option>
+          </select>
+          <select
+            className="filter-select"
             value={filterDomain}
             onChange={(e) => setFilterDomain(e.target.value)}
-            style={{ marginRight: 8, padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border-color)', fontSize: 13 }}
           >
             <option value="">All Domains</option>
             {domains.map(d => (
@@ -152,87 +167,100 @@ export function ExtractionSchemaManager() {
 
       {error && <div className="error-banner">{error}</div>}
 
-      <div className="split-view">
-        {/* Schema List */}
-        <div className="list-panel">
-          <div className="list-header">
-            <h3>Schemas ({schemas.length})</h3>
-          </div>
-          {schemas.length === 0 ? (
-            <div className="empty-state"><p>No extraction schemas found.</p></div>
-          ) : (
-            <div className="table-container" style={{ border: 'none' }}>
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Name</th>
-                    <th>Domain</th>
-                    <th>Model</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {schemas.map(s => (
-                    <tr
-                      key={s.id}
-                      className={selectedSchema?.id === s.id ? 'selected' : ''}
-                      onClick={() => { setSelectedSchema(s); setEditMode(false); }}
-                      style={{ cursor: 'pointer' }}
-                    >
-                      <td style={{ fontWeight: 500 }}>{s.name}</td>
-                      <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                        {s.domain_name || '—'}{s.category_name ? ` / ${s.category_name}` : ''}
-                      </td>
-                      <td style={{ fontSize: 12 }}>{s.model_name}</td>
-                      <td>
-                        {s.is_production ? (
-                          <span style={{ background: '#22c55e', color: '#fff', padding: '2px 8px', borderRadius: 12, fontSize: 11, fontWeight: 600 }}>PROD</span>
-                        ) : s.is_active ? (
-                          <span style={{ background: '#3b82f6', color: '#fff', padding: '2px 8px', borderRadius: 12, fontSize: 11 }}>Active</span>
-                        ) : (
-                          <span style={{ background: '#6b7280', color: '#fff', padding: '2px 8px', borderRadius: 12, fontSize: 11 }}>Inactive</span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+      <SplitPane
+        storageKey="extraction-schemas"
+        defaultLeftWidth={420}
+        minLeftWidth={280}
+        maxLeftWidth={700}
+        left={
+          <div className="list-panel">
+            <div className="list-header">
+              <h3>Schemas ({schemas.length})</h3>
             </div>
-          )}
-        </div>
-
-        {/* Schema Detail */}
-        <div className="detail-panel">
-          {selectedSchema ? (
-            <div>
-              <div className="detail-header">
-                <h3>{selectedSchema.name}</h3>
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <button className="action-btn" onClick={() => setEditMode(!editMode)}>
-                    {editMode ? 'Cancel' : 'Edit'}
-                  </button>
+            {schemas.length === 0 ? (
+              <div className="empty-state"><p>No extraction schemas found.</p></div>
+            ) : (
+              <div className="table-container" style={{ border: 'none' }}>
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Name</th>
+                      <th>Type</th>
+                      <th>Domain</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {schemas.map(s => (
+                      <tr
+                        key={s.id}
+                        className={selectedSchema?.id === s.id ? 'selected' : ''}
+                        onClick={() => { setSelectedSchema(s); setEditMode(false); }}
+                        style={{ cursor: 'pointer' }}
+                      >
+                        <td style={{ fontWeight: 500 }}>{s.name}</td>
+                        <td>
+                          {s.schema_type === 'stage1' ? (
+                            <span className="badge" style={{ background: '#8b5cf6', color: 'white', fontSize: 10 }}>S1</span>
+                          ) : s.schema_type === 'stage2' ? (
+                            <span className="badge" style={{ background: '#3b82f6', color: 'white', fontSize: 10 }}>S2</span>
+                          ) : (
+                            <span className="badge inactive" style={{ fontSize: 10 }}>Legacy</span>
+                          )}
+                        </td>
+                        <td className="detail-label" style={{ fontSize: 12 }}>
+                          {s.domain_name || '—'}{s.category_name ? ` / ${s.category_name}` : ''}
+                        </td>
+                        <td>
+                          {s.is_production ? (
+                            <span className="badge status-active">PROD</span>
+                          ) : s.is_active ? (
+                            <span className="badge extraction">Active</span>
+                          ) : (
+                            <span className="badge inactive">Inactive</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        }
+        right={
+          <div className="detail-panel">
+            {selectedSchema ? (
+              <div>
+                <div className="detail-header">
+                  <h3>{selectedSchema.name}</h3>
+                  <div className="page-actions">
+                    <button className="action-btn" onClick={() => setEditMode(!editMode)}>
+                      {editMode ? 'Cancel' : 'Edit'}
+                    </button>
+                  </div>
+                </div>
+                <div className="detail-content">
+                  {editMode ? (
+                    <SchemaForm
+                      initial={selectedSchema}
+                      domains={domains}
+                      onSubmit={handleUpdate}
+                      onCancel={() => setEditMode(false)}
+                      onDomainChange={loadCategories}
+                      categories={categories}
+                    />
+                  ) : (
+                    <SchemaDetail schema={selectedSchema} />
+                  )}
                 </div>
               </div>
-              <div className="detail-content">
-                {editMode ? (
-                  <SchemaForm
-                    initial={selectedSchema}
-                    domains={domains}
-                    onSubmit={handleUpdate}
-                    onCancel={() => setEditMode(false)}
-                    onDomainChange={loadCategories}
-                    categories={categories}
-                  />
-                ) : (
-                  <SchemaDetail schema={selectedSchema} />
-                )}
-              </div>
-            </div>
-          ) : (
-            <div className="empty-state"><p>Select a schema to view details</p></div>
-          )}
-        </div>
-      </div>
+            ) : (
+              <div className="empty-state"><p>Select a schema to view details</p></div>
+            )}
+          </div>
+        }
+      />
 
       {/* Create Modal */}
       {showCreate && (
@@ -259,60 +287,75 @@ function SchemaDetail({ schema }: { schema: ExtractionSchema }) {
     <>
       <div className="detail-section">
         <h4>Configuration</h4>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, fontSize: 13 }}>
-          <div><span style={{ color: 'var(--text-muted)' }}>Version:</span> {schema.schema_version}</div>
-          <div><span style={{ color: 'var(--text-muted)' }}>Model:</span> {schema.model_name}</div>
-          <div><span style={{ color: 'var(--text-muted)' }}>Temperature:</span> {schema.temperature}</div>
-          <div><span style={{ color: 'var(--text-muted)' }}>Max Tokens:</span> {schema.max_tokens}</div>
-          <div><span style={{ color: 'var(--text-muted)' }}>Min F1:</span> {schema.min_quality_threshold}</div>
-          <div><span style={{ color: 'var(--text-muted)' }}>Deployed:</span> {schema.deployed_at ? new Date(schema.deployed_at).toLocaleDateString() : 'Never'}</div>
+        <div className="schema-config-grid">
+          <div className="detail-kv"><span className="detail-label">Version</span><span className="detail-value">{schema.schema_version}</span></div>
+          <div className="detail-kv">
+            <span className="detail-label">Schema Type</span>
+            <span className="detail-value">
+              {schema.schema_type === 'stage1' ? (
+                <span className="badge" style={{ background: '#8b5cf6', color: 'white' }}>Stage 1</span>
+              ) : schema.schema_type === 'stage2' ? (
+                <span className="badge" style={{ background: '#3b82f6', color: 'white' }}>Stage 2</span>
+              ) : (
+                <span className="badge inactive">Legacy</span>
+              )}
+            </span>
+          </div>
+          {schema.input_format && (
+            <div className="detail-kv"><span className="detail-label">Input Format</span><span className="detail-value">{schema.input_format}</span></div>
+          )}
+          <div className="detail-kv"><span className="detail-label">Model</span><span className="detail-value">{schema.model_name}</span></div>
+          <div className="detail-kv"><span className="detail-label">Temperature</span><span className="detail-value">{schema.temperature}</span></div>
+          <div className="detail-kv"><span className="detail-label">Max Tokens</span><span className="detail-value">{schema.max_tokens}</span></div>
+          <div className="detail-kv"><span className="detail-label">Min F1</span><span className="detail-value">{schema.min_quality_threshold}</span></div>
+          <div className="detail-kv"><span className="detail-label">Deployed</span><span className="detail-value">{schema.deployed_at ? new Date(schema.deployed_at).toLocaleDateString() : 'Never'}</span></div>
         </div>
       </div>
 
       {Object.keys(qm).length > 0 && (
-        <div className="detail-section" style={{ marginTop: 16 }}>
+        <div className="detail-section">
           <h4>Quality Metrics</h4>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
-            <div className="stat-card" style={{ padding: 12, textAlign: 'center' }}>
-              <div style={{ fontSize: 20, fontWeight: 700 }}>{(qm.precision * 100)?.toFixed(1) || '—'}%</div>
-              <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Precision</div>
+          <div className="schema-metrics-grid">
+            <div className="stat-card">
+              <div className="stat-value">{(qm.precision * 100)?.toFixed(1) || '—'}%</div>
+              <div className="stat-label">Precision</div>
             </div>
-            <div className="stat-card" style={{ padding: 12, textAlign: 'center' }}>
-              <div style={{ fontSize: 20, fontWeight: 700 }}>{(qm.recall * 100)?.toFixed(1) || '—'}%</div>
-              <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Recall</div>
+            <div className="stat-card">
+              <div className="stat-value">{(qm.recall * 100)?.toFixed(1) || '—'}%</div>
+              <div className="stat-label">Recall</div>
             </div>
-            <div className="stat-card" style={{ padding: 12, textAlign: 'center' }}>
-              <div style={{ fontSize: 20, fontWeight: 700 }}>{(qm.f1_score * 100)?.toFixed(1) || '—'}%</div>
-              <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>F1 Score</div>
+            <div className="stat-card">
+              <div className="stat-value">{(qm.f1_score * 100)?.toFixed(1) || '—'}%</div>
+              <div className="stat-label">F1 Score</div>
             </div>
           </div>
         </div>
       )}
 
-      <div className="detail-section" style={{ marginTop: 16 }}>
+      <div className="detail-section">
         <h4>Fields</h4>
-        <div style={{ fontSize: 13 }}>
-          <div style={{ marginBottom: 8 }}>
-            <span style={{ fontWeight: 600 }}>Required:</span>{' '}
-            {(schema.required_fields || []).join(', ') || 'None'}
+        <div className="schema-fields-info">
+          <div className="detail-kv">
+            <span className="detail-label">Required</span>
+            <span className="detail-value">{(schema.required_fields || []).join(', ') || 'None'}</span>
           </div>
-          <div>
-            <span style={{ fontWeight: 600 }}>Optional:</span>{' '}
-            {(schema.optional_fields || []).join(', ') || 'None'}
+          <div className="detail-kv">
+            <span className="detail-label">Optional</span>
+            <span className="detail-value">{(schema.optional_fields || []).join(', ') || 'None'}</span>
           </div>
         </div>
       </div>
 
-      <div className="detail-section" style={{ marginTop: 16 }}>
+      <div className="detail-section">
         <h4>System Prompt</h4>
-        <pre style={{ fontSize: 12, whiteSpace: 'pre-wrap', background: 'var(--bg-secondary)', padding: 12, borderRadius: 6, maxHeight: 200, overflow: 'auto' }}>
+        <pre className="schema-prompt-preview">
           {schema.system_prompt}
         </pre>
       </div>
 
-      <div className="detail-section" style={{ marginTop: 16 }}>
+      <div className="detail-section">
         <h4>User Prompt Template</h4>
-        <pre style={{ fontSize: 12, whiteSpace: 'pre-wrap', background: 'var(--bg-secondary)', padding: 12, borderRadius: 6, maxHeight: 200, overflow: 'auto' }}>
+        <pre className="schema-prompt-preview">
           {schema.user_prompt_template}
         </pre>
       </div>

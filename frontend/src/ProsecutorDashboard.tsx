@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { SplitPane } from './SplitPane';
 
 const API_BASE = '';
 
@@ -115,9 +116,13 @@ export function ProsecutorDashboard() {
             </div>
           </div>
 
-          <div className="split-view">
-            {/* Prosecutors Table */}
-            <div className="list-panel" style={{ minWidth: 400 }}>
+          <SplitPane
+            storageKey="prosecutors"
+            defaultLeftWidth={450}
+            minLeftWidth={300}
+            maxLeftWidth={700}
+            left={
+            <div className="list-panel">
               <div className="list-header">
                 <h3>Prosecutors ({stats.length})</h3>
               </div>
@@ -151,8 +156,8 @@ export function ProsecutorDashboard() {
                 </table>
               </div>
             </div>
-
-            {/* Prosecutor Detail */}
+            }
+            right={
             <div className="detail-panel">
               {selectedProsecutor ? (
                 <>
@@ -255,7 +260,8 @@ export function ProsecutorDashboard() {
                 </div>
               )}
             </div>
-          </div>
+            }
+          />
         </>
       )}
     </div>

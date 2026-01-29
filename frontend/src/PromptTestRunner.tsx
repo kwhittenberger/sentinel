@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { SplitPane } from './SplitPane';
 
 const API_BASE = '';
 
@@ -195,16 +196,12 @@ export function PromptTestRunner() {
       {error && <div className="error-banner">{error}</div>}
 
       {/* Tabs */}
-      <div style={{ display: 'flex', gap: 0, borderBottom: '1px solid var(--border-color)', marginBottom: 16 }}>
+      <div className="detail-tabs">
         {(['datasets', 'runs'] as Tab[]).map(t => (
           <button
             key={t}
+            className={`tab ${tab === t ? 'active' : ''}`}
             onClick={() => { setTab(t); setSelectedRun(null); }}
-            style={{
-              padding: '8px 20px', fontSize: 13, fontWeight: tab === t ? 600 : 400,
-              background: 'none', border: 'none', borderBottom: tab === t ? '2px solid var(--accent-color)' : '2px solid transparent',
-              cursor: 'pointer', color: tab === t ? 'var(--text-primary)' : 'var(--text-muted)',
-            }}
           >
             {t === 'datasets' ? `Datasets (${datasets.length})` : `Test Runs (${runs.length})`}
           </button>
@@ -212,8 +209,12 @@ export function PromptTestRunner() {
       </div>
 
       {tab === 'datasets' ? (
-        <div className="split-view">
-          {/* Dataset List */}
+        <SplitPane
+          storageKey="prompt-test-datasets"
+          defaultLeftWidth={420}
+          minLeftWidth={280}
+          maxLeftWidth={700}
+          left={
           <div className="list-panel">
             <div className="list-header"><h3>Datasets</h3></div>
             {datasets.length === 0 ? (
@@ -243,8 +244,8 @@ export function PromptTestRunner() {
               </div>
             )}
           </div>
-
-          {/* Dataset Detail */}
+          }
+          right={
           <div className="detail-panel">
             {selectedDataset ? (
               <>
@@ -289,10 +290,16 @@ export function PromptTestRunner() {
               <div className="empty-state"><p>Select a dataset to view test cases</p></div>
             )}
           </div>
-        </div>
+          }
+        />
       ) : (
         /* Test Runs Tab */
-        <div className="split-view">
+        <SplitPane
+          storageKey="prompt-test-runs"
+          defaultLeftWidth={420}
+          minLeftWidth={280}
+          maxLeftWidth={700}
+          left={
           <div className="list-panel">
             <div className="list-header"><h3>Test Runs</h3></div>
             {runs.length === 0 ? (
@@ -327,7 +334,8 @@ export function PromptTestRunner() {
               </div>
             )}
           </div>
-
+          }
+          right={
           <div className="detail-panel">
             {selectedRun ? (
               <>
@@ -335,30 +343,28 @@ export function PromptTestRunner() {
                   <h3>Test Run: {selectedRun.schema_name || 'Unknown'}</h3>
                 </div>
                 <div className="detail-content">
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 20 }}>
-                    <div className="stat-card" style={{ padding: 12, textAlign: 'center' }}>
-                      <div style={{ fontSize: 24, fontWeight: 700 }}>{formatPct(selectedRun.precision)}</div>
-                      <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Precision</div>
+                  <div className="schema-metrics-grid" style={{ marginBottom: 20 }}>
+                    <div className="stat-card">
+                      <div className="stat-value">{formatPct(selectedRun.precision)}</div>
+                      <div className="stat-label">Precision</div>
                     </div>
-                    <div className="stat-card" style={{ padding: 12, textAlign: 'center' }}>
-                      <div style={{ fontSize: 24, fontWeight: 700 }}>{formatPct(selectedRun.recall)}</div>
-                      <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Recall</div>
+                    <div className="stat-card">
+                      <div className="stat-value">{formatPct(selectedRun.recall)}</div>
+                      <div className="stat-label">Recall</div>
                     </div>
-                    <div className="stat-card" style={{ padding: 12, textAlign: 'center' }}>
-                      <div style={{ fontSize: 24, fontWeight: 700 }}>{formatPct(selectedRun.f1_score)}</div>
-                      <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>F1 Score</div>
+                    <div className="stat-card">
+                      <div className="stat-value">{formatPct(selectedRun.f1_score)}</div>
+                      <div className="stat-label">F1 Score</div>
                     </div>
                   </div>
-                  <div style={{ display: 'flex', gap: 24, fontSize: 13, marginBottom: 16 }}>
-                    <div><span style={{ color: 'var(--text-muted)' }}>Dataset:</span> {selectedRun.dataset_name || '—'}</div>
-                    <div><span style={{ color: 'var(--text-muted)' }}>Cases:</span> {selectedRun.total_cases}</div>
-                    <div><span style={{ color: 'var(--text-muted)' }}>Passed:</span> {selectedRun.passed_cases ?? '—'}</div>
-                    <div><span style={{ color: 'var(--text-muted)' }}>Failed:</span> {selectedRun.failed_cases ?? '—'}</div>
+                  <div className="detail-section">
+                    <div className="detail-kv"><span className="detail-label">Dataset</span><span className="detail-value">{selectedRun.dataset_name || '—'}</span></div>
+                    <div className="detail-kv"><span className="detail-label">Cases</span><span className="detail-value">{selectedRun.total_cases}</span></div>
+                    <div className="detail-kv"><span className="detail-label">Passed</span><span className="detail-value">{selectedRun.passed_cases ?? '—'}</span></div>
+                    <div className="detail-kv"><span className="detail-label">Failed</span><span className="detail-value">{selectedRun.failed_cases ?? '—'}</span></div>
                   </div>
                   {selectedRun.completed_at && (
-                    <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                      Completed: {new Date(selectedRun.completed_at).toLocaleString()}
-                    </div>
+                    <div className="detail-kv"><span className="detail-label">Completed</span><span className="detail-value">{new Date(selectedRun.completed_at).toLocaleString()}</span></div>
                   )}
                 </div>
               </>
@@ -366,7 +372,8 @@ export function PromptTestRunner() {
               <div className="empty-state"><p>Select a test run to view results</p></div>
             )}
           </div>
-        </div>
+          }
+        />
       )}
 
       {/* Create Dataset Modal */}
