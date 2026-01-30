@@ -1,5 +1,11 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { SplitPane } from './SplitPane';
+import {
+  Stage1SummaryBar,
+  Stage2ComparisonGrid,
+  BestExtractionDiff,
+  GoldenExtractionView,
+} from './CalibrationReviewComponents';
 
 const API_BASE = '';
 
@@ -1718,8 +1724,6 @@ function CalibrationReviewModal({ article, comparison, onSave, onCancel }: {
   const [notes, setNotes] = useState(article.reviewer_notes || '');
   const [editing, setEditing] = useState(false);
   const [jsonError, setJsonError] = useState<string | null>(null);
-  const [showStage1, setShowStage1] = useState(false);
-  const [showStage2, setShowStage2] = useState(false);
   const isPipeline = (comparison.comparison_type || 'schema') === 'pipeline';
 
   const chooseConfig = (config: string) => {
@@ -1746,14 +1750,22 @@ function CalibrationReviewModal({ article, comparison, onSave, onCancel }: {
 
   const inputStyle = { width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border-color)', fontSize: 13, background: 'var(--bg-primary)' };
 
-  const stage1A = article.config_a_stage1;
-  const stage1B = article.config_b_stage1;
-  const stage2A = article.config_a_stage2_results || [];
-  const stage2B = article.config_b_stage2_results || [];
+  const parseJsonbField = (val: unknown): any => {
+    if (val == null) return null;
+    if (typeof val === 'string') { try { return JSON.parse(val); } catch { return val; } }
+    return val;
+  };
+  const stage1A = parseJsonbField(article.config_a_stage1);
+  const stage1B = parseJsonbField(article.config_b_stage1);
+  const stage2A = parseJsonbField(article.config_a_stage2_results) || [];
+  const stage2B = parseJsonbField(article.config_b_stage2_results) || [];
+
+  const configALabel = `${comparison.config_a_provider}/${comparison.config_a_model.split('/').pop()}`;
+  const configBLabel = `${comparison.config_b_provider}/${comparison.config_b_model.split('/').pop()}`;
 
   return (
     <div className="modal-overlay" onClick={onCancel}>
-      <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: 900 }}>
+      <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: 1100 }}>
         <h3>Review Article</h3>
 
         {/* Article info */}
@@ -1775,199 +1787,34 @@ function CalibrationReviewModal({ article, comparison, onSave, onCancel }: {
           </div>
         </div>
 
-        {/* Pipeline: Stage 1 IR Comparison (collapsible) */}
-        {isPipeline && (stage1A || stage1B) && (
-          <div style={{ marginBottom: 12 }}>
-            <button
-              className="action-btn"
-              onClick={() => setShowStage1(v => !v)}
-              style={{ fontSize: 12, marginBottom: 6 }}
-            >
-              {showStage1 ? '\u25BE' : '\u25B8'} Stage 1 IR Comparison
-            </button>
-            {showStage1 && (
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                <div style={{ padding: 8, background: 'var(--bg-secondary)', borderRadius: 6 }}>
-                  <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 4 }}>Config A</div>
-                  {stage1A ? (
-                    <>
-                      <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                        Entities: {stage1A.entity_count ?? '\u2014'} | Events: {stage1A.event_count ?? '\u2014'} | Conf: {stage1A.overall_confidence != null ? `${(stage1A.overall_confidence * 100).toFixed(0)}%` : '\u2014'}
-                      </div>
-                      <pre style={{ fontSize: 10, maxHeight: 150, overflow: 'auto', margin: '4px 0 0', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                        {JSON.stringify(stage1A.extraction_data || stage1A, null, 2).substring(0, 2000)}
-                      </pre>
-                    </>
-                  ) : <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>No data</div>}
-                </div>
-                <div style={{ padding: 8, background: 'var(--bg-secondary)', borderRadius: 6 }}>
-                  <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 4 }}>Config B</div>
-                  {stage1B ? (
-                    <>
-                      <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                        Entities: {stage1B.entity_count ?? '\u2014'} | Events: {stage1B.event_count ?? '\u2014'} | Conf: {stage1B.overall_confidence != null ? `${(stage1B.overall_confidence * 100).toFixed(0)}%` : '\u2014'}
-                      </div>
-                      <pre style={{ fontSize: 10, maxHeight: 150, overflow: 'auto', margin: '4px 0 0', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                        {JSON.stringify(stage1B.extraction_data || stage1B, null, 2).substring(0, 2000)}
-                      </pre>
-                    </>
-                  ) : <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>No data</div>}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
+        {/* Pipeline: Stage 1 IR Comparison */}
+        {isPipeline && <Stage1SummaryBar stage1A={stage1A} stage1B={stage1B} />}
 
-        {/* Pipeline: Stage 2 Results (collapsible) */}
-        {isPipeline && (stage2A.length > 0 || stage2B.length > 0) && (
-          <div style={{ marginBottom: 12 }}>
-            <button
-              className="action-btn"
-              onClick={() => setShowStage2(v => !v)}
-              style={{ fontSize: 12, marginBottom: 6 }}
-            >
-              {showStage2 ? '\u25BE' : '\u25B8'} Stage 2 Results ({Math.max(stage2A.length, stage2B.length)} schemas)
-            </button>
-            {showStage2 && (
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                <div style={{ padding: 8, background: 'var(--bg-secondary)', borderRadius: 6 }}>
-                  <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 4 }}>Config A ({stage2A.length})</div>
-                  {stage2A.map((r: any, i: number) => (
-                    <div key={i} style={{ fontSize: 10, padding: '4px 0', borderBottom: '1px solid var(--border-color)' }}>
-                      <span style={{ fontWeight: 600 }}>{r.schema_name || `Schema ${i + 1}`}</span>
-                      {': '}conf {r.confidence != null ? `${(r.confidence * 100).toFixed(0)}%` : '\u2014'}
-                      {r.status && r.status !== 'completed' && ` (${r.status})`}
-                    </div>
-                  ))}
-                  {stage2A.length === 0 && <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>No results</div>}
-                </div>
-                <div style={{ padding: 8, background: 'var(--bg-secondary)', borderRadius: 6 }}>
-                  <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 4 }}>Config B ({stage2B.length})</div>
-                  {stage2B.map((r: any, i: number) => (
-                    <div key={i} style={{ fontSize: 10, padding: '4px 0', borderBottom: '1px solid var(--border-color)' }}>
-                      <span style={{ fontWeight: 600 }}>{r.schema_name || `Schema ${i + 1}`}</span>
-                      {': '}conf {r.confidence != null ? `${(r.confidence * 100).toFixed(0)}%` : '\u2014'}
-                      {r.status && r.status !== 'completed' && ` (${r.status})`}
-                    </div>
-                  ))}
-                  {stage2B.length === 0 && <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>No results</div>}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
+        {/* Pipeline: Stage 2 Results */}
+        {isPipeline && <Stage2ComparisonGrid stage2A={stage2A} stage2B={stage2B} />}
 
-        {/* Side-by-side best extractions */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
-          <div style={{
-            padding: 12, borderRadius: 8,
-            border: chosenConfig === 'A' ? '2px solid #3b82f6' : '1px solid var(--border-color)',
-            background: chosenConfig === 'A' ? 'rgba(59,130,246,0.05)' : undefined,
-          }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-              <div>
-                <span style={{ fontWeight: 700, fontSize: 13 }}>Config A</span>
-                <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 6 }}>
-                  {comparison.config_a_provider}/{comparison.config_a_model.split('/').pop()}
-                </span>
-              </div>
-              {article.config_a_confidence != null && (
-                <span style={{ fontSize: 11, fontWeight: 600 }}>
-                  {(article.config_a_confidence * 100).toFixed(0)}%
-                </span>
-              )}
-            </div>
-            {article.config_a_error ? (
-              <div style={{ color: '#ef4444', fontSize: 12 }}>Error: {article.config_a_error}</div>
-            ) : (
-              <pre style={{
-                fontSize: 11, maxHeight: 200, overflow: 'auto', margin: 0,
-                background: 'var(--bg-secondary)', padding: 8, borderRadius: 4,
-                whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-              }}>
-                {article.config_a_extraction ? JSON.stringify(article.config_a_extraction, null, 2) : 'No extraction'}
-              </pre>
-            )}
-            <button
-              className="action-btn"
-              onClick={() => chooseConfig('A')}
-              disabled={!article.config_a_extraction}
-              style={{ marginTop: 8, width: '100%' }}
-            >
-              {chosenConfig === 'A' ? 'Chosen' : 'Choose A'}
-            </button>
-          </div>
-
-          <div style={{
-            padding: 12, borderRadius: 8,
-            border: chosenConfig === 'B' ? '2px solid #3b82f6' : '1px solid var(--border-color)',
-            background: chosenConfig === 'B' ? 'rgba(59,130,246,0.05)' : undefined,
-          }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-              <div>
-                <span style={{ fontWeight: 700, fontSize: 13 }}>Config B</span>
-                <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 6 }}>
-                  {comparison.config_b_provider}/{comparison.config_b_model.split('/').pop()}
-                </span>
-              </div>
-              {article.config_b_confidence != null && (
-                <span style={{ fontSize: 11, fontWeight: 600 }}>
-                  {(article.config_b_confidence * 100).toFixed(0)}%
-                </span>
-              )}
-            </div>
-            {article.config_b_error ? (
-              <div style={{ color: '#ef4444', fontSize: 12 }}>Error: {article.config_b_error}</div>
-            ) : (
-              <pre style={{
-                fontSize: 11, maxHeight: 200, overflow: 'auto', margin: 0,
-                background: 'var(--bg-secondary)', padding: 8, borderRadius: 4,
-                whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-              }}>
-                {article.config_b_extraction ? JSON.stringify(article.config_b_extraction, null, 2) : 'No extraction'}
-              </pre>
-            )}
-            <button
-              className="action-btn"
-              onClick={() => chooseConfig('B')}
-              disabled={!article.config_b_extraction}
-              style={{ marginTop: 8, width: '100%' }}
-            >
-              {chosenConfig === 'B' ? 'Chosen' : 'Choose B'}
-            </button>
-          </div>
-        </div>
+        {/* Best extraction diff */}
+        <BestExtractionDiff
+          configALabel={configALabel}
+          configBLabel={configBLabel}
+          extractionA={article.config_a_extraction}
+          extractionB={article.config_b_extraction}
+          confidenceA={article.config_a_confidence}
+          confidenceB={article.config_b_confidence}
+          errorA={article.config_a_error}
+          errorB={article.config_b_error}
+          chosenConfig={chosenConfig}
+          onChoose={chooseConfig}
+        />
 
         {/* Golden extraction */}
-        <div style={{ marginBottom: 12 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-            <label style={{ fontSize: 12, fontWeight: 600 }}>Golden Extraction</label>
-            <button
-              className="action-btn"
-              onClick={() => setEditing(v => !v)}
-              style={{ fontSize: 11, padding: '2px 8px' }}
-            >
-              {editing ? 'View' : 'Edit'}
-            </button>
-          </div>
-          {editing ? (
-            <textarea
-              value={goldenJson}
-              onChange={e => { setGoldenJson(e.target.value); setJsonError(null); }}
-              rows={10}
-              style={{ ...inputStyle, fontFamily: 'monospace', resize: 'vertical' }}
-            />
-          ) : (
-            <pre style={{
-              fontSize: 11, maxHeight: 200, overflow: 'auto', margin: 0,
-              background: 'var(--bg-secondary)', padding: 8, borderRadius: 6,
-              whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-            }}>
-              {goldenJson || '(none \u2014 choose A or B, or edit manually)'}
-            </pre>
-          )}
-          {jsonError && <div style={{ color: '#ef4444', fontSize: 11, marginTop: 4 }}>{jsonError}</div>}
-        </div>
+        <GoldenExtractionView
+          goldenJson={goldenJson}
+          editing={editing}
+          onToggleEdit={() => setEditing(v => !v)}
+          onJsonChange={v => { setGoldenJson(v); setJsonError(null); }}
+          jsonError={jsonError}
+        />
 
         {/* Notes */}
         <div style={{ marginBottom: 16 }}>

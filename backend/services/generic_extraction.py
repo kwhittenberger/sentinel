@@ -151,11 +151,11 @@ class GenericExtractionService:
             data.get("model_name", "claude-sonnet-4-5"),
             data.get("temperature", 0.7),
             data.get("max_tokens", 4000),
-            json.dumps(data.get("required_fields", [])),
-            json.dumps(data.get("optional_fields", [])),
-            json.dumps(data.get("field_definitions", {})),
-            json.dumps(data.get("validation_rules", {})),
-            json.dumps(data.get("confidence_thresholds", {})),
+            data.get("required_fields", []),
+            data.get("optional_fields", []),
+            data.get("field_definitions", {}),
+            data.get("validation_rules", {}),
+            data.get("confidence_thresholds", {}),
             data.get("min_quality_threshold", 0.80),
             data.get("git_commit_sha"),
             data.get("previous_version_id"),
@@ -187,7 +187,7 @@ class GenericExtractionService:
         for field in json_fields:
             if field in data:
                 sets.append(f"{field} = ${idx}::jsonb")
-                params.append(json.dumps(data[field]))
+                params.append(data[field])
                 idx += 1
 
         if not sets:
@@ -367,7 +367,7 @@ class GenericExtractionService:
                RETURNING *""",
             schema_id,
             article_id,
-            json.dumps(extracted_data),
+            extracted_data,
             confidence,
         )
         return self._serialize_quality_sample(row)
@@ -389,7 +389,7 @@ class GenericExtractionService:
                WHERE id = $1::uuid RETURNING *""",
             sample_id,
             review_passed,
-            json.dumps(corrections) if corrections else None,
+            corrections if corrections else None,
         )
         return self._serialize_quality_sample(row) if row else None
 

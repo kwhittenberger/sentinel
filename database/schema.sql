@@ -341,6 +341,7 @@ CREATE TABLE ingested_articles (
     -- Article content
     title VARCHAR(500),
     content TEXT,
+    content_hash VARCHAR(32),  -- md5(content) for dedup of syndicated copies
     published_date DATE,
     fetched_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
 
@@ -370,6 +371,7 @@ CREATE INDEX idx_ingested_status ON ingested_articles(status);
 CREATE INDEX idx_ingested_source ON ingested_articles(source_id);
 CREATE INDEX idx_ingested_date ON ingested_articles(published_date);
 CREATE INDEX idx_ingested_relevance ON ingested_articles(relevance_score DESC);
+CREATE INDEX idx_ingested_content_hash ON ingested_articles(content_hash) WHERE content_hash IS NOT NULL;
 
 -- ============================================================================
 -- ADMIN TABLES

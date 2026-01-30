@@ -24,6 +24,9 @@ logger = logging.getLogger(__name__)
 # Minimum classification confidence to auto-route to a Stage 2 schema
 CLASSIFICATION_CONFIDENCE_THRESHOLD = 0.3
 
+# Default timeout (seconds) for individual LLM calls
+LLM_CALL_TIMEOUT_SECONDS = 120
+
 
 class TwoStageExtractionService:
     """Orchestrates two-stage extraction pipeline."""
@@ -116,7 +119,10 @@ class TwoStageExtractionService:
             )
             if provider_override:
                 call_kwargs["provider_name"] = provider_override
-            response = await asyncio.to_thread(router.call, **call_kwargs)
+            response = await asyncio.wait_for(
+                asyncio.to_thread(router.call, **call_kwargs),
+                timeout=LLM_CALL_TIMEOUT_SECONDS,
+            )
 
             extraction_data = self._parse_json(response.text)
 
@@ -151,8 +157,8 @@ class TwoStageExtractionService:
                    WHERE id = $1::uuid
                    RETURNING *""",
                 extraction_id,
-                json.dumps(extraction_data),
-                json.dumps(classification_hints),
+                extraction_data,
+                classification_hints,
                 entity_count,
                 event_count,
                 overall_confidence,
@@ -333,7 +339,10 @@ class TwoStageExtractionService:
             )
             if provider_override:
                 call_kwargs["provider_name"] = provider_override
-            response = await asyncio.to_thread(router.call, **call_kwargs)
+            response = await asyncio.wait_for(
+                asyncio.to_thread(router.call, **call_kwargs),
+                timeout=LLM_CALL_TIMEOUT_SECONDS,
+            )
 
             extracted_data = self._parse_json(response.text)
 
@@ -366,9 +375,9 @@ class TwoStageExtractionService:
                    WHERE id = $1::uuid
                    RETURNING *""",
                 result_id,
-                json.dumps(validated),
+                validated,
                 confidence,
-                json.dumps(validation_errors),
+                validation_errors,
                 response.provider,
                 response.model,
                 response.input_tokens,

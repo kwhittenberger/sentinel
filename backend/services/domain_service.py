@@ -212,7 +212,8 @@ class DomainService:
         for jsonb_field in ("required_fields", "optional_fields", "field_definitions"):
             if jsonb_field in data:
                 sets.append(f"{jsonb_field} = ${idx}::jsonb")
-                params.append(json.dumps(data[jsonb_field]) if not isinstance(data[jsonb_field], str) else data[jsonb_field])
+                val = data[jsonb_field]
+                params.append(json.loads(val) if isinstance(val, str) else val)
                 idx += 1
 
         if data.get("parent_category_id") is not None:

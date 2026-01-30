@@ -118,7 +118,7 @@ class PromptTestingService:
                VALUES ($1::uuid, $2, $3::jsonb, $4, $5) RETURNING *""",
             data["dataset_id"],
             data["article_text"],
-            json.dumps(data["expected_extraction"]),
+            data["expected_extraction"],
             data.get("importance", "medium"),
             data.get("notes"),
         )
@@ -274,7 +274,7 @@ class PromptTestingService:
             avg_f1,
             total_input_tokens,
             total_output_tokens,
-            json.dumps([asdict(r) for r in results]),
+            [asdict(r) for r in results],
         )
 
         # Update schema quality metrics
@@ -727,7 +727,7 @@ class PromptTestingService:
                SET summary_stats = $2::jsonb
                WHERE id = $1::uuid""",
             comparison_id,
-            json.dumps(summary),
+            summary,
         )
 
     async def list_comparisons(self, limit: int = 50) -> List[Dict[str, Any]]:
@@ -808,7 +808,7 @@ class PromptTestingService:
             data["config_b_provider"],
             data["config_b_model"],
             article_count,
-            json.dumps(filters),
+            filters,
         )
         return self._serialize(row)
 
@@ -937,11 +937,11 @@ class PromptTestingService:
                     article.get("content"),
                     article.get("source_url"),
                     article.get("published_date"),
-                    json.dumps(result_a["extraction"]) if result_a["extraction"] else None,
+                    result_a["extraction"] if result_a["extraction"] else None,
                     result_a.get("confidence"),
                     result_a.get("duration_ms"),
                     result_a.get("error"),
-                    json.dumps(result_b["extraction"]) if result_b["extraction"] else None,
+                    result_b["extraction"] if result_b["extraction"] else None,
                     result_b.get("confidence"),
                     result_b.get("duration_ms"),
                     result_b.get("error"),
@@ -1070,7 +1070,7 @@ class PromptTestingService:
                WHERE id = $1::uuid""",
             article_id,
             chosen_config,
-            json.dumps(golden_extraction) if golden_extraction else None,
+            golden_extraction if golden_extraction else None,
             notes,
         )
 
@@ -1143,7 +1143,7 @@ class PromptTestingService:
                    VALUES ($1::uuid, $2, $3::jsonb, 'medium', $4)""",
                 dataset_id,
                 article.get("article_content") or "",
-                json.dumps(golden),
+                golden,
                 article.get("reviewer_notes"),
             )
 
@@ -1182,7 +1182,7 @@ class PromptTestingService:
             data["config_b_provider"],
             data["config_b_model"],
             article_count,
-            json.dumps(filters),
+            filters,
         )
         return self._serialize(row)
 
@@ -1324,19 +1324,19 @@ class PromptTestingService:
                     article.get("source_url"),
                     article.get("published_date"),
                     # Flat extraction: best Stage 2 result
-                    json.dumps(best_a["extracted_data"]) if best_a else None,
+                    best_a["extracted_data"] if best_a else None,
                     best_a.get("confidence") if best_a else None,
                     result_a.get("total_latency_ms"),
                     result_a.get("error"),
-                    json.dumps(best_b["extracted_data"]) if best_b else None,
+                    best_b["extracted_data"] if best_b else None,
                     best_b.get("confidence") if best_b else None,
                     result_b.get("total_latency_ms"),
                     result_b.get("error"),
                     # Pipeline-specific columns
-                    json.dumps(result_a.get("stage1")) if result_a.get("stage1") else None,
-                    json.dumps(result_b.get("stage1")) if result_b.get("stage1") else None,
-                    json.dumps(result_a.get("stage2_results", [])),
-                    json.dumps(result_b.get("stage2_results", [])),
+                    result_a.get("stage1") or None,
+                    result_b.get("stage1") or None,
+                    result_a.get("stage2_results", []),
+                    result_b.get("stage2_results", []),
                     result_a.get("total_tokens"),
                     result_b.get("total_tokens"),
                     result_a.get("total_latency_ms"),

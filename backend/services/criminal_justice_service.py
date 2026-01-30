@@ -109,7 +109,7 @@ class CriminalJusticeService:
             data.get("status", "active"),
             data.get("domain_id"),
             data.get("category_id"),
-            json.dumps(data.get("custom_fields", {})),
+            data.get("custom_fields", {}),
             data.get("data_classification", "public"),
             data.get("notes"),
         )
@@ -138,7 +138,8 @@ class CriminalJusticeService:
 
         if "custom_fields" in data:
             sets.append(f"custom_fields = ${idx}::jsonb")
-            params.append(json.dumps(data["custom_fields"]) if not isinstance(data["custom_fields"], str) else data["custom_fields"])
+            val = data["custom_fields"]
+            params.append(json.loads(val) if isinstance(val, str) else val)
             idx += 1
 
         row = await fetchrow(f"""
@@ -458,12 +459,12 @@ class CriminalJusticeService:
             data.get("probation_days"),
             data.get("probation_start_date"),
             data.get("probation_end_date"),
-            json.dumps(data["probation_conditions"]) if data.get("probation_conditions") else None,
+            data.get("probation_conditions"),
             data.get("fine_amount"),
             data.get("restitution_amount"),
             data.get("court_costs"),
             data.get("community_service_hours"),
-            json.dumps(data["ordered_programs"]) if data.get("ordered_programs") else None,
+            data.get("ordered_programs"),
             data.get("substance_abuse_treatment_ordered", False),
             data.get("mental_health_treatment_ordered", False),
             data.get("compliance_status", "pending"),

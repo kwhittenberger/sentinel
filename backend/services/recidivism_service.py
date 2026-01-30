@@ -246,12 +246,12 @@ class RecidivismService:
 
         if "error_details" in data:
             sets.append(f"error_details = ${idx}::jsonb")
-            params.append(json.dumps(data["error_details"]))
+            params.append(data["error_details"])
             idx += 1
 
         if "steps_completed" in data:
             sets.append(f"steps_completed = ${idx}::jsonb")
-            params.append(json.dumps(data["steps_completed"]))
+            params.append(data["steps_completed"])
             idx += 1
 
         if data.get("status") in ("completed", "failed", "cancelled", "rolled_back"):

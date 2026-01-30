@@ -1,0 +1,223 @@
+/* CalibrationReview — structured diff components (crc- prefix) */
+
+/* 3-column diff row: label | value A | value B */
+.crc-diff-row {
+  display: grid;
+  grid-template-columns: 140px 1fr 1fr;
+  gap: 0;
+  font-size: 12px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.crc-diff-row:last-child {
+  border-bottom: none;
+}
+
+.crc-diff-label {
+  padding: 4px 8px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+  display: flex;
+  align-items: center;
+  word-break: break-word;
+}
+
+.crc-diff-cell {
+  padding: 4px 8px;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+/* Single-column variant for golden view */
+.crc-diff-row.crc-single-col {
+  grid-template-columns: 140px 1fr;
+}
+
+/* Diff status background tints */
+.crc-match .crc-diff-cell {
+  background: transparent;
+}
+
+.crc-mismatch .crc-diff-cell {
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.crc-missing-a .crc-diff-cell:first-of-type {
+  background: rgba(239, 68, 68, 0.06);
+  color: var(--text-muted);
+}
+
+.crc-missing-b .crc-diff-cell:last-of-type {
+  background: rgba(239, 68, 68, 0.06);
+  color: var(--text-muted);
+}
+
+.crc-both-absent .crc-diff-cell {
+  color: var(--text-muted);
+}
+
+/* Confidence badge */
+.crc-confidence-badge {
+  display: inline-block;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 8px;
+  margin-left: 4px;
+  font-weight: 600;
+  background: rgba(59, 130, 246, 0.12);
+  color: #3b82f6;
+}
+
+/* Stage 1 summary bar */
+.crc-stage1-summary {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.crc-stage1-col {
+  padding: 8px 10px;
+  background: var(--bg-secondary);
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.crc-stage1-col h4 {
+  margin: 0 0 6px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+}
+
+.crc-stage1-stats {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+.crc-stage1-stat {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.crc-stage1-stat strong {
+  color: var(--text-primary);
+}
+
+.crc-pills {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.crc-pill {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 9px;
+  background: rgba(59, 130, 246, 0.10);
+  color: var(--text-secondary);
+}
+
+/* Stage 2 schema accordion */
+.crc-schema-accordion {
+  margin-bottom: 12px;
+}
+
+.crc-schema-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  background: var(--bg-secondary);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  user-select: none;
+}
+
+.crc-schema-header:hover {
+  background: var(--bg-hover, var(--bg-secondary));
+}
+
+.crc-schema-name {
+  font-weight: 600;
+  flex: 1;
+}
+
+.crc-schema-meta {
+  font-size: 10px;
+  color: var(--text-muted);
+  display: flex;
+  gap: 8px;
+}
+
+.crc-schema-body {
+  border: 1px solid var(--border-color);
+  border-top: none;
+  border-radius: 0 0 6px 6px;
+  overflow: hidden;
+}
+
+/* Config column in best extraction diff */
+.crc-config-col {
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.crc-config-col.crc-chosen {
+  border: 2px solid #3b82f6;
+  background: rgba(59, 130, 246, 0.05);
+}
+
+.crc-config-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.crc-config-label {
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.crc-config-model {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-left: 6px;
+}
+
+/* Diff table wrapper */
+.crc-diff-table {
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+/* Collapsible raw JSON fallback */
+.crc-raw-json {
+  font-size: 10px;
+  max-height: 150px;
+  overflow: auto;
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--bg-secondary);
+  padding: 6px;
+  border-radius: 4px;
+}
+
+/* Section toggle button */
+.crc-section-toggle {
+  font-size: 12px;
+  margin-bottom: 6px;
+  cursor: pointer;
+}
