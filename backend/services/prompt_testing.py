@@ -6,8 +6,10 @@ Supports golden dataset test suites, per-case metrics (precision/recall/F1),
 deploy-to-production workflow, rollback, and production quality monitoring.
 """
 
+import asyncio
 import json
 import logging
+import math
 import time
 from typing import Optional, Dict, Any, List
 from decimal import Decimal
@@ -171,10 +173,20 @@ class PromptTestingService:
         return self._serialize(row) if row else None
 
     async def run_test_suite(
-        self, schema_id: str, dataset_id: str
+        self,
+        schema_id: str,
+        dataset_id: str,
+        provider_name: Optional[str] = None,
+        model_name: Optional[str] = None,
+        comparison_id: Optional[str] = None,
+        iteration_number: Optional[int] = None,
+        config_label: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Execute the full test suite for an extraction schema against a golden dataset.
+        Optionally override the provider/model for A/B comparison testing.
+        When called as part of a comparison, comparison_id/iteration_number/config_label
+        are set to link the run back to the parent comparison.
         Returns the test_run record with aggregate metrics.
         """
         from backend.database import fetch, fetchrow, execute
@@ -194,13 +206,25 @@ class PromptTestingService:
 
         schema = dict(schema)
 
-        # Create test run record
+        # Resolve effective provider/model
+        effective_provider = provider_name or "anthropic"
+        effective_model = model_name or schema.get("model_name", "claude-sonnet-4-20250514")
+
+        # Create test run record with provider info and optional comparison link
         run_row = await fetchrow(
-            """INSERT INTO prompt_test_runs (schema_id, dataset_id, total_cases, status)
-               VALUES ($1::uuid, $2::uuid, $3, 'running') RETURNING *""",
+            """INSERT INTO prompt_test_runs
+                   (schema_id, dataset_id, total_cases, status, provider_name, model_name,
+                    comparison_id, iteration_number, config_label)
+               VALUES ($1::uuid, $2::uuid, $3, 'running', $4, $5,
+                       $6::uuid, $7, $8) RETURNING *""",
             schema_id,
             dataset_id,
             len(test_cases),
+            effective_provider,
+            effective_model,
+            comparison_id,
+            iteration_number,
+            config_label,
         )
         test_run_id = str(run_row["id"])
 
@@ -211,7 +235,11 @@ class PromptTestingService:
 
         for tc in test_cases:
             tc = dict(tc)
-            result = await self._test_single_case(schema, tc, router)
+            result = await self._test_single_case(
+                schema, tc, router,
+                provider_name=effective_provider,
+                model_name=effective_model,
+            )
             results.append(result)
 
         passed_cases = sum(1 for r in results if r.passed)
@@ -271,24 +299,35 @@ class PromptTestingService:
         return await self.get_test_run(test_run_id)
 
     async def _test_single_case(
-        self, schema: Dict[str, Any], test_case: Dict[str, Any], router
+        self,
+        schema: Dict[str, Any],
+        test_case: Dict[str, Any],
+        router,
+        provider_name: Optional[str] = None,
+        model_name: Optional[str] = None,
     ) -> TestCaseResult:
-        """Test extraction on a single test case."""
+        """Test extraction on a single test case, optionally overriding provider/model."""
         system_prompt = schema["system_prompt"]
         user_prompt = schema["user_prompt_template"].replace(
             "{article_text}", test_case["article_text"]
         )
 
+        effective_model = model_name or schema.get("model_name", "claude-sonnet-4-20250514")
+        effective_provider = provider_name or "anthropic"
+
         try:
-            response = await router.call(
+            response = router.call(
                 system_prompt=system_prompt,
                 user_message=user_prompt,
-                model=schema.get("model_name", "claude-sonnet-4-5"),
+                model=effective_model,
                 max_tokens=schema.get("max_tokens", 4000),
+                provider_name=effective_provider,
+                fallback_provider=None,  # No fallback during comparison tests
             )
             extracted_data = self._parse_llm_response(response.text)
         except Exception as e:
-            logger.error("LLM call failed for test case %s: %s", test_case["id"], e)
+            logger.error("LLM call failed for test case %s (%s/%s): %s",
+                         test_case["id"], effective_provider, effective_model, e)
             extracted_data = {}
 
         expected_data = test_case["expected_extraction"]
@@ -463,6 +502,918 @@ class PromptTestingService:
         )
 
         return {"success": True, "rolled_back_from": schema_id, "restored_version": prev_id}
+
+    # --- Model Comparisons ---
+
+    async def create_comparison(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Create a new model comparison record."""
+        from backend.database import fetchrow
+
+        iterations = data.get("iterations_per_config", 3)
+        total = iterations * 2  # A + B
+
+        row = await fetchrow(
+            """INSERT INTO prompt_test_comparisons
+                   (schema_id, dataset_id,
+                    config_a_provider, config_a_model,
+                    config_b_provider, config_b_model,
+                    iterations_per_config, total_iterations)
+               VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8) RETURNING *""",
+            data["schema_id"],
+            data["dataset_id"],
+            data["config_a_provider"],
+            data["config_a_model"],
+            data["config_b_provider"],
+            data["config_b_model"],
+            iterations,
+            total,
+        )
+        return self._serialize(row)
+
+    async def run_comparison(self, comparison_id: str) -> None:
+        """
+        Core executor for a model comparison.
+        Loops through iterations, running Config A + Config B concurrently,
+        updates progress, and computes summary stats on completion.
+        """
+        from backend.database import fetchrow, execute
+
+        comp = await fetchrow(
+            "SELECT * FROM prompt_test_comparisons WHERE id = $1::uuid",
+            comparison_id,
+        )
+        if not comp:
+            return
+        comp = dict(comp)
+
+        await execute(
+            """UPDATE prompt_test_comparisons
+               SET status = 'running', started_at = NOW(), message = 'Running iterations...'
+               WHERE id = $1::uuid""",
+            comparison_id,
+        )
+
+        iterations = comp["iterations_per_config"]
+        a_run_ids: List[str] = []
+        b_run_ids: List[str] = []
+
+        try:
+            for i in range(1, iterations + 1):
+                # Run Config A and Config B concurrently for this iteration
+                result_a, result_b = await asyncio.gather(
+                    self._run_comparison_iteration(comp, "A", i, comparison_id),
+                    self._run_comparison_iteration(comp, "B", i, comparison_id),
+                )
+                a_run_ids.append(result_a["id"])
+                b_run_ids.append(result_b["id"])
+
+                # Update progress (2 runs per iteration)
+                progress = i * 2
+                await execute(
+                    """UPDATE prompt_test_comparisons
+                       SET progress = $2, message = $3
+                       WHERE id = $1::uuid""",
+                    comparison_id,
+                    progress,
+                    f"Completed iteration {i}/{iterations}",
+                )
+
+            # Compute summary statistics
+            await self._compute_comparison_summary(
+                comparison_id, a_run_ids, b_run_ids, comp
+            )
+
+            await execute(
+                """UPDATE prompt_test_comparisons
+                   SET status = 'completed', completed_at = NOW(),
+                       message = 'Comparison complete'
+                   WHERE id = $1::uuid""",
+                comparison_id,
+            )
+        except Exception as e:
+            logger.error("Comparison %s failed: %s", comparison_id, e)
+            await execute(
+                """UPDATE prompt_test_comparisons
+                   SET status = 'failed', completed_at = NOW(),
+                       error = $2, message = 'Comparison failed'
+                   WHERE id = $1::uuid""",
+                comparison_id,
+                str(e),
+            )
+
+    async def _run_comparison_iteration(
+        self,
+        comp: Dict[str, Any],
+        label: str,
+        iter_num: int,
+        comparison_id: str,
+    ) -> Dict[str, Any]:
+        """Run a single iteration for one config (A or B) within a comparison."""
+        provider = comp[f"config_{label.lower()}_provider"]
+        model = comp[f"config_{label.lower()}_model"]
+
+        return await self.run_test_suite(
+            schema_id=str(comp["schema_id"]),
+            dataset_id=str(comp["dataset_id"]),
+            provider_name=provider,
+            model_name=model,
+            comparison_id=comparison_id,
+            iteration_number=iter_num,
+            config_label=label,
+        )
+
+    async def _compute_comparison_summary(
+        self,
+        comparison_id: str,
+        a_ids: List[str],
+        b_ids: List[str],
+        comp: Dict[str, Any],
+    ) -> None:
+        """Compute aggregate statistics across all runs for each config."""
+        from backend.database import fetch, execute
+
+        def _stats_for_values(values: List[float]) -> Dict[str, float]:
+            if not values:
+                return {"mean": 0, "std": 0, "min": 0, "max": 0}
+            n = len(values)
+            mean = sum(values) / n
+            variance = sum((x - mean) ** 2 for x in values) / n if n > 1 else 0
+            return {
+                "mean": round(mean, 4),
+                "std": round(math.sqrt(variance), 4),
+                "min": round(min(values), 4),
+                "max": round(max(values), 4),
+            }
+
+        def _build_config_stats(
+            runs: list, provider: str, model: str
+        ) -> Dict[str, Any]:
+            precisions = [float(r["precision"] or 0) for r in runs]
+            recalls = [float(r["recall"] or 0) for r in runs]
+            f1s = [float(r["f1_score"] or 0) for r in runs]
+            durations = []
+            for r in runs:
+                if r["started_at"] and r["completed_at"]:
+                    started = r["started_at"]
+                    completed = r["completed_at"]
+                    if isinstance(started, str):
+                        started = datetime.fromisoformat(started)
+                    if isinstance(completed, str):
+                        completed = datetime.fromisoformat(completed)
+                    ms = (completed - started).total_seconds() * 1000
+                    durations.append(ms)
+
+            total_passed = sum(1 for r in runs if r["status"] == "passed")
+            total_tokens = sum(
+                int(r.get("total_input_tokens") or 0) + int(r.get("total_output_tokens") or 0)
+                for r in runs
+            )
+
+            return {
+                "label": f"{provider} / {model}",
+                "precision": _stats_for_values(precisions),
+                "recall": _stats_for_values(recalls),
+                "f1_score": _stats_for_values(f1s),
+                "duration_ms": _stats_for_values(durations),
+                "passed_rate": round(total_passed / len(runs), 3) if runs else 0,
+                "total_tokens": total_tokens,
+            }
+
+        # Fetch all runs for each config
+        a_runs = await fetch(
+            """SELECT * FROM prompt_test_runs
+               WHERE comparison_id = $1::uuid AND config_label = 'A'
+               ORDER BY iteration_number""",
+            comparison_id,
+        )
+        b_runs = await fetch(
+            """SELECT * FROM prompt_test_runs
+               WHERE comparison_id = $1::uuid AND config_label = 'B'
+               ORDER BY iteration_number""",
+            comparison_id,
+        )
+
+        a_stats = _build_config_stats(
+            [dict(r) for r in a_runs],
+            comp["config_a_provider"], comp["config_a_model"],
+        )
+        b_stats = _build_config_stats(
+            [dict(r) for r in b_runs],
+            comp["config_b_provider"], comp["config_b_model"],
+        )
+
+        a_f1_mean = a_stats["f1_score"]["mean"]
+        b_f1_mean = b_stats["f1_score"]["mean"]
+        f1_delta = round(abs(a_f1_mean - b_f1_mean), 4)
+        winner = "config_a" if a_f1_mean >= b_f1_mean else "config_b"
+
+        # Simple significance check: non-overlapping confidence intervals (mean ± 2*std)
+        a_lower = a_f1_mean - 2 * a_stats["f1_score"]["std"]
+        b_upper = b_f1_mean + 2 * b_stats["f1_score"]["std"]
+        b_lower = b_f1_mean - 2 * b_stats["f1_score"]["std"]
+        a_upper = a_f1_mean + 2 * a_stats["f1_score"]["std"]
+        statistically_significant = (a_lower > b_upper) or (b_lower > a_upper)
+
+        summary = {
+            "config_a": a_stats,
+            "config_b": b_stats,
+            "winner": winner,
+            "f1_delta": f1_delta,
+            "statistically_significant": statistically_significant,
+        }
+
+        await execute(
+            """UPDATE prompt_test_comparisons
+               SET summary_stats = $2::jsonb
+               WHERE id = $1::uuid""",
+            comparison_id,
+            json.dumps(summary),
+        )
+
+    async def list_comparisons(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """List comparisons with schema/dataset names."""
+        from backend.database import fetch
+
+        rows = await fetch(
+            """SELECT c.*, es.name as schema_name, ptd.name as dataset_name
+               FROM prompt_test_comparisons c
+               LEFT JOIN extraction_schemas es ON c.schema_id = es.id
+               LEFT JOIN prompt_test_datasets ptd ON c.dataset_id = ptd.id
+               ORDER BY c.created_at DESC
+               LIMIT $1""",
+            limit,
+        )
+        return [self._serialize(r) for r in rows]
+
+    async def get_comparison(self, comparison_id: str) -> Optional[Dict[str, Any]]:
+        """Get a single comparison with schema/dataset names."""
+        from backend.database import fetchrow
+
+        row = await fetchrow(
+            """SELECT c.*, es.name as schema_name, ptd.name as dataset_name
+               FROM prompt_test_comparisons c
+               LEFT JOIN extraction_schemas es ON c.schema_id = es.id
+               LEFT JOIN prompt_test_datasets ptd ON c.dataset_id = ptd.id
+               WHERE c.id = $1::uuid""",
+            comparison_id,
+        )
+        return self._serialize(row) if row else None
+
+    async def get_comparison_runs(
+        self, comparison_id: str
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """Get all runs for a comparison, grouped by config label."""
+        from backend.database import fetch
+
+        rows = await fetch(
+            """SELECT tr.*, es.name as schema_name, ptd.name as dataset_name
+               FROM prompt_test_runs tr
+               LEFT JOIN extraction_schemas es ON tr.schema_id = es.id
+               LEFT JOIN prompt_test_datasets ptd ON tr.dataset_id = ptd.id
+               WHERE tr.comparison_id = $1::uuid
+               ORDER BY tr.config_label, tr.iteration_number""",
+            comparison_id,
+        )
+        config_a = []
+        config_b = []
+        for r in rows:
+            serialized = self._serialize(r)
+            if serialized.get("config_label") == "A":
+                config_a.append(serialized)
+            else:
+                config_b.append(serialized)
+        return {"config_a": config_a, "config_b": config_b}
+
+    # --- Calibration Mode ---
+
+    async def create_calibration_comparison(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Create a comparison in calibration mode (no dataset required)."""
+        from backend.database import fetchrow
+
+        article_count = data.get("article_count", 20)
+        filters = data.get("article_filters", {})
+
+        row = await fetchrow(
+            """INSERT INTO prompt_test_comparisons
+                   (schema_id, dataset_id,
+                    config_a_provider, config_a_model,
+                    config_b_provider, config_b_model,
+                    iterations_per_config, total_iterations,
+                    mode, article_count, article_filters, total_articles)
+               VALUES ($1::uuid, NULL, $2, $3, $4, $5, 1, 0,
+                       'calibration', $6, $7::jsonb, 0) RETURNING *""",
+            data["schema_id"],
+            data["config_a_provider"],
+            data["config_a_model"],
+            data["config_b_provider"],
+            data["config_b_model"],
+            article_count,
+            json.dumps(filters),
+        )
+        return self._serialize(row)
+
+    async def run_calibration(self, comparison_id: str) -> None:
+        """
+        Fetch articles matching filters, run both configs per article,
+        store results in comparison_articles, update progress.
+        """
+        from backend.database import fetch, fetchrow, execute
+
+        comp = await fetchrow(
+            "SELECT * FROM prompt_test_comparisons WHERE id = $1::uuid",
+            comparison_id,
+        )
+        if not comp:
+            return
+        comp = dict(comp)
+
+        await execute(
+            """UPDATE prompt_test_comparisons
+               SET status = 'running', started_at = NOW(), message = 'Fetching articles...'
+               WHERE id = $1::uuid""",
+            comparison_id,
+        )
+
+        try:
+            # Fetch schema for prompt templates
+            schema = await fetchrow(
+                "SELECT * FROM extraction_schemas WHERE id = $1::uuid",
+                str(comp["schema_id"]),
+            )
+            if not schema:
+                raise ValueError("Schema not found")
+            schema = dict(schema)
+
+            # Build article query from filters
+            filters = comp.get("article_filters") or {}
+            if isinstance(filters, str):
+                filters = json.loads(filters)
+            article_count = comp.get("article_count") or 20
+
+            conditions = []
+            params: list = []
+            idx = 1
+
+            status_filter = filters.get("status")
+            if status_filter:
+                conditions.append(f"status = ${idx}")
+                params.append(status_filter)
+                idx += 1
+
+            min_date = filters.get("min_date")
+            if min_date:
+                conditions.append(f"published_date >= ${idx}::date")
+                params.append(min_date)
+                idx += 1
+
+            max_date = filters.get("max_date")
+            if max_date:
+                conditions.append(f"published_date <= ${idx}::date")
+                params.append(max_date)
+                idx += 1
+
+            # Require content to be present
+            conditions.append("content IS NOT NULL")
+            conditions.append("content != ''")
+
+            where = f"WHERE {' AND '.join(conditions)}" if conditions else "WHERE content IS NOT NULL AND content != ''"
+
+            params.append(article_count)
+            articles = await fetch(
+                f"""SELECT id, title, content, source_url, published_date
+                    FROM ingested_articles
+                    {where}
+                    ORDER BY fetched_at DESC
+                    LIMIT ${idx}""",
+                *params,
+            )
+
+            if not articles:
+                raise ValueError("No articles matched the filters")
+
+            total = len(articles)
+            await execute(
+                """UPDATE prompt_test_comparisons
+                   SET total_articles = $2, total_iterations = $2,
+                       message = $3
+                   WHERE id = $1::uuid""",
+                comparison_id,
+                total,
+                f"Processing 0/{total} articles...",
+            )
+
+            from backend.services.llm_provider import get_llm_router
+            router = get_llm_router()
+
+            for i, article in enumerate(articles):
+                article = dict(article)
+
+                # Run both configs concurrently
+                result_a, result_b = await asyncio.gather(
+                    self._run_single_extraction(
+                        schema, article, router,
+                        comp["config_a_provider"], comp["config_a_model"],
+                    ),
+                    self._run_single_extraction(
+                        schema, article, router,
+                        comp["config_b_provider"], comp["config_b_model"],
+                    ),
+                )
+
+                # Insert comparison_article row
+                await execute(
+                    """INSERT INTO comparison_articles
+                           (comparison_id, article_id,
+                            article_title, article_content, article_source_url, article_published_date,
+                            config_a_extraction, config_a_confidence, config_a_duration_ms, config_a_error,
+                            config_b_extraction, config_b_confidence, config_b_duration_ms, config_b_error)
+                       VALUES ($1::uuid, $2::uuid,
+                               $3, $4, $5, $6,
+                               $7::jsonb, $8, $9, $10,
+                               $11::jsonb, $12, $13, $14)""",
+                    comparison_id,
+                    str(article["id"]),
+                    article.get("title"),
+                    article.get("content"),
+                    article.get("source_url"),
+                    article.get("published_date"),
+                    json.dumps(result_a["extraction"]) if result_a["extraction"] else None,
+                    result_a.get("confidence"),
+                    result_a.get("duration_ms"),
+                    result_a.get("error"),
+                    json.dumps(result_b["extraction"]) if result_b["extraction"] else None,
+                    result_b.get("confidence"),
+                    result_b.get("duration_ms"),
+                    result_b.get("error"),
+                )
+
+                # Update progress
+                progress = i + 1
+                await execute(
+                    """UPDATE prompt_test_comparisons
+                       SET progress = $2, message = $3
+                       WHERE id = $1::uuid""",
+                    comparison_id,
+                    progress,
+                    f"Processing {progress}/{total} articles...",
+                )
+
+            await execute(
+                """UPDATE prompt_test_comparisons
+                   SET status = 'completed', completed_at = NOW(),
+                       message = 'Calibration complete'
+                   WHERE id = $1::uuid""",
+                comparison_id,
+            )
+        except Exception as e:
+            logger.error("Calibration %s failed: %s", comparison_id, e)
+            await execute(
+                """UPDATE prompt_test_comparisons
+                   SET status = 'failed', completed_at = NOW(),
+                       error = $2, message = 'Calibration failed'
+                   WHERE id = $1::uuid""",
+                comparison_id,
+                str(e),
+            )
+
+    async def _run_single_extraction(
+        self,
+        schema: Dict[str, Any],
+        article: Dict[str, Any],
+        router,
+        provider: str,
+        model: str,
+    ) -> Dict[str, Any]:
+        """
+        Build prompt from schema template + article content, call LLM,
+        parse response, return {extraction, confidence, duration_ms, error}.
+        """
+        system_prompt = schema["system_prompt"]
+        content = article.get("content") or ""
+        user_prompt = schema["user_prompt_template"].replace(
+            "{article_text}", content
+        )
+
+        start_ms = time.monotonic_ns() // 1_000_000
+        try:
+            response = router.call(
+                system_prompt=system_prompt,
+                user_message=user_prompt,
+                model=model,
+                max_tokens=schema.get("max_tokens", 4000),
+                provider_name=provider,
+                fallback_provider=None,
+            )
+            duration_ms = (time.monotonic_ns() // 1_000_000) - start_ms
+            extraction = self._parse_llm_response(response.text)
+            confidence = extraction.get("overall_confidence") or extraction.get("confidence")
+            if isinstance(confidence, (int, float)):
+                confidence = round(confidence / 100, 2) if confidence > 1 else round(confidence, 2)
+            else:
+                confidence = None
+            return {
+                "extraction": extraction,
+                "confidence": confidence,
+                "duration_ms": duration_ms,
+                "error": None,
+            }
+        except Exception as e:
+            duration_ms = (time.monotonic_ns() // 1_000_000) - start_ms
+            logger.error("Calibration extraction failed (%s/%s): %s", provider, model, e)
+            return {
+                "extraction": None,
+                "confidence": None,
+                "duration_ms": duration_ms,
+                "error": str(e),
+            }
+
+    async def list_calibration_articles(
+        self, comparison_id: str
+    ) -> List[Dict[str, Any]]:
+        """List all articles for a calibration comparison."""
+        from backend.database import fetch
+
+        rows = await fetch(
+            """SELECT * FROM comparison_articles
+               WHERE comparison_id = $1::uuid
+               ORDER BY created_at""",
+            comparison_id,
+        )
+        return [self._serialize(r) for r in rows]
+
+    async def review_calibration_article(
+        self,
+        article_id: str,
+        chosen_config: Optional[str],
+        golden_extraction: Optional[Dict[str, Any]],
+        notes: Optional[str],
+    ) -> Dict[str, Any]:
+        """Submit a review for one calibration article."""
+        from backend.database import fetchrow, execute
+
+        row = await fetchrow(
+            "SELECT * FROM comparison_articles WHERE id = $1::uuid",
+            article_id,
+        )
+        if not row:
+            raise ValueError("Calibration article not found")
+
+        was_already_reviewed = row["review_status"] == "reviewed"
+
+        await execute(
+            """UPDATE comparison_articles SET
+                   review_status = 'reviewed',
+                   chosen_config = $2,
+                   golden_extraction = $3::jsonb,
+                   reviewer_notes = $4,
+                   reviewed_at = NOW()
+               WHERE id = $1::uuid""",
+            article_id,
+            chosen_config,
+            json.dumps(golden_extraction) if golden_extraction else None,
+            notes,
+        )
+
+        # Increment parent reviewed_count only for newly reviewed articles
+        if not was_already_reviewed:
+            await execute(
+                """UPDATE prompt_test_comparisons
+                   SET reviewed_count = reviewed_count + 1
+                   WHERE id = $1::uuid""",
+                str(row["comparison_id"]),
+            )
+
+        updated = await fetchrow(
+            "SELECT * FROM comparison_articles WHERE id = $1::uuid",
+            article_id,
+        )
+        return self._serialize(updated)
+
+    async def save_calibration_as_dataset(
+        self,
+        comparison_id: str,
+        name: str,
+        description: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Create a prompt_test_dataset + insert prompt_test_cases
+        from reviewed calibration articles, set output_dataset_id.
+        """
+        from backend.database import fetch, fetchrow, execute
+
+        comp = await fetchrow(
+            "SELECT * FROM prompt_test_comparisons WHERE id = $1::uuid",
+            comparison_id,
+        )
+        if not comp:
+            raise ValueError("Comparison not found")
+
+        # Get reviewed articles with golden extractions
+        reviewed = await fetch(
+            """SELECT * FROM comparison_articles
+               WHERE comparison_id = $1::uuid
+                 AND review_status = 'reviewed'
+                 AND golden_extraction IS NOT NULL
+               ORDER BY created_at""",
+            comparison_id,
+        )
+
+        if not reviewed:
+            raise ValueError("No reviewed articles with golden extractions to save")
+
+        # Create dataset
+        dataset = await fetchrow(
+            """INSERT INTO prompt_test_datasets (name, description, domain_id, category_id)
+               VALUES ($1, $2, NULL, NULL) RETURNING *""",
+            name,
+            description,
+        )
+        dataset_id = str(dataset["id"])
+
+        # Insert test cases from reviewed articles
+        for article in reviewed:
+            article = dict(article)
+            golden = article["golden_extraction"]
+            if isinstance(golden, str):
+                golden = json.loads(golden)
+
+            await execute(
+                """INSERT INTO prompt_test_cases
+                       (dataset_id, article_text, expected_extraction, importance, notes)
+                   VALUES ($1::uuid, $2, $3::jsonb, 'medium', $4)""",
+                dataset_id,
+                article.get("article_content") or "",
+                json.dumps(golden),
+                article.get("reviewer_notes"),
+            )
+
+        # Link dataset to comparison
+        await execute(
+            """UPDATE prompt_test_comparisons
+               SET output_dataset_id = $2::uuid
+               WHERE id = $1::uuid""",
+            comparison_id,
+            dataset_id,
+        )
+
+        return self._serialize(dataset)
+
+    # --- Pipeline Comparisons ---
+
+    async def create_pipeline_comparison(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Create a comparison in pipeline mode (no schema, runs full two-stage pipeline)."""
+        from backend.database import fetchrow
+
+        article_count = data.get("article_count", 20)
+        filters = data.get("article_filters", {})
+
+        row = await fetchrow(
+            """INSERT INTO prompt_test_comparisons
+                   (schema_id, dataset_id,
+                    config_a_provider, config_a_model,
+                    config_b_provider, config_b_model,
+                    iterations_per_config, total_iterations,
+                    mode, article_count, article_filters, total_articles,
+                    comparison_type)
+               VALUES (NULL, NULL, $1, $2, $3, $4, 1, 0,
+                       'calibration', $5, $6::jsonb, 0, 'pipeline') RETURNING *""",
+            data["config_a_provider"],
+            data["config_a_model"],
+            data["config_b_provider"],
+            data["config_b_model"],
+            article_count,
+            json.dumps(filters),
+        )
+        return self._serialize(row)
+
+    async def run_pipeline_calibration(self, comparison_id: str) -> None:
+        """
+        Fetch articles matching filters, run the full two-stage pipeline
+        with both configs per article, store results in comparison_articles.
+        """
+        from backend.database import fetch, fetchrow, execute
+        from backend.services.two_stage_extraction import get_two_stage_service
+
+        comp = await fetchrow(
+            "SELECT * FROM prompt_test_comparisons WHERE id = $1::uuid",
+            comparison_id,
+        )
+        if not comp:
+            return
+        comp = dict(comp)
+
+        await execute(
+            """UPDATE prompt_test_comparisons
+               SET status = 'running', started_at = NOW(), message = 'Fetching articles...'
+               WHERE id = $1::uuid""",
+            comparison_id,
+        )
+
+        try:
+            # Build article query from filters
+            filters = comp.get("article_filters") or {}
+            if isinstance(filters, str):
+                filters = json.loads(filters)
+            article_count = comp.get("article_count") or 20
+
+            conditions = []
+            params: list = []
+            idx = 1
+
+            status_filter = filters.get("status")
+            if status_filter:
+                conditions.append(f"status = ${idx}")
+                params.append(status_filter)
+                idx += 1
+
+            min_date = filters.get("min_date")
+            if min_date:
+                conditions.append(f"published_date >= ${idx}::date")
+                params.append(min_date)
+                idx += 1
+
+            max_date = filters.get("max_date")
+            if max_date:
+                conditions.append(f"published_date <= ${idx}::date")
+                params.append(max_date)
+                idx += 1
+
+            conditions.append("content IS NOT NULL")
+            conditions.append("content != ''")
+
+            where = f"WHERE {' AND '.join(conditions)}" if conditions else "WHERE content IS NOT NULL AND content != ''"
+
+            params.append(article_count)
+            articles = await fetch(
+                f"""SELECT id, title, content, source_url, published_date
+                    FROM ingested_articles
+                    {where}
+                    ORDER BY fetched_at DESC
+                    LIMIT ${idx}""",
+                *params,
+            )
+
+            if not articles:
+                raise ValueError("No articles matched the filters")
+
+            total = len(articles)
+            await execute(
+                """UPDATE prompt_test_comparisons
+                   SET total_articles = $2, total_iterations = $2,
+                       message = $3
+                   WHERE id = $1::uuid""",
+                comparison_id,
+                total,
+                f"Processing 0/{total} articles...",
+            )
+
+            two_stage = get_two_stage_service()
+
+            for i, article in enumerate(articles):
+                article = dict(article)
+                article_id = str(article["id"])
+
+                # Run full pipeline with both configs concurrently
+                result_a, result_b = await asyncio.gather(
+                    self._run_pipeline_config(
+                        two_stage, article_id,
+                        comp["config_a_provider"], comp["config_a_model"],
+                    ),
+                    self._run_pipeline_config(
+                        two_stage, article_id,
+                        comp["config_b_provider"], comp["config_b_model"],
+                    ),
+                    return_exceptions=True,
+                )
+
+                # Handle exceptions from gather
+                if isinstance(result_a, Exception):
+                    logger.error("Pipeline config A failed for article %s: %s", article_id, result_a)
+                    result_a = {"stage1": None, "stage2_results": [], "error": str(result_a),
+                                "total_tokens": 0, "total_latency_ms": 0}
+                if isinstance(result_b, Exception):
+                    logger.error("Pipeline config B failed for article %s: %s", article_id, result_b)
+                    result_b = {"stage1": None, "stage2_results": [], "error": str(result_b),
+                                "total_tokens": 0, "total_latency_ms": 0}
+
+                # Pick best-confidence Stage 2 result for the flat extraction columns
+                best_a = self._pick_best_stage2(result_a.get("stage2_results", []))
+                best_b = self._pick_best_stage2(result_b.get("stage2_results", []))
+
+                await execute(
+                    """INSERT INTO comparison_articles
+                           (comparison_id, article_id,
+                            article_title, article_content, article_source_url, article_published_date,
+                            config_a_extraction, config_a_confidence, config_a_duration_ms, config_a_error,
+                            config_b_extraction, config_b_confidence, config_b_duration_ms, config_b_error,
+                            config_a_stage1, config_b_stage1,
+                            config_a_stage2_results, config_b_stage2_results,
+                            config_a_total_tokens, config_b_total_tokens,
+                            config_a_total_latency_ms, config_b_total_latency_ms)
+                       VALUES ($1::uuid, $2::uuid,
+                               $3, $4, $5, $6,
+                               $7::jsonb, $8, $9, $10,
+                               $11::jsonb, $12, $13, $14,
+                               $15::jsonb, $16::jsonb,
+                               $17::jsonb, $18::jsonb,
+                               $19, $20, $21, $22)""",
+                    comparison_id,
+                    article_id,
+                    article.get("title"),
+                    article.get("content"),
+                    article.get("source_url"),
+                    article.get("published_date"),
+                    # Flat extraction: best Stage 2 result
+                    json.dumps(best_a["extracted_data"]) if best_a else None,
+                    best_a.get("confidence") if best_a else None,
+                    result_a.get("total_latency_ms"),
+                    result_a.get("error"),
+                    json.dumps(best_b["extracted_data"]) if best_b else None,
+                    best_b.get("confidence") if best_b else None,
+                    result_b.get("total_latency_ms"),
+                    result_b.get("error"),
+                    # Pipeline-specific columns
+                    json.dumps(result_a.get("stage1")) if result_a.get("stage1") else None,
+                    json.dumps(result_b.get("stage1")) if result_b.get("stage1") else None,
+                    json.dumps(result_a.get("stage2_results", [])),
+                    json.dumps(result_b.get("stage2_results", [])),
+                    result_a.get("total_tokens"),
+                    result_b.get("total_tokens"),
+                    result_a.get("total_latency_ms"),
+                    result_b.get("total_latency_ms"),
+                )
+
+                progress = i + 1
+                await execute(
+                    """UPDATE prompt_test_comparisons
+                       SET progress = $2, message = $3
+                       WHERE id = $1::uuid""",
+                    comparison_id,
+                    progress,
+                    f"Processing {progress}/{total} articles...",
+                )
+
+            await execute(
+                """UPDATE prompt_test_comparisons
+                   SET status = 'completed', completed_at = NOW(),
+                       message = 'Pipeline calibration complete'
+                   WHERE id = $1::uuid""",
+                comparison_id,
+            )
+        except Exception as e:
+            logger.error("Pipeline calibration %s failed: %s", comparison_id, e)
+            await execute(
+                """UPDATE prompt_test_comparisons
+                   SET status = 'failed', completed_at = NOW(),
+                       error = $2, message = 'Pipeline calibration failed'
+                   WHERE id = $1::uuid""",
+                comparison_id,
+                str(e),
+            )
+
+    async def _run_pipeline_config(
+        self,
+        two_stage_service,
+        article_id: str,
+        provider: str,
+        model: str,
+    ) -> Dict[str, Any]:
+        """Run the full two-stage pipeline for one config, return structured results."""
+        start_ms = time.monotonic_ns() // 1_000_000
+        result = await two_stage_service.run_full_pipeline(
+            article_id,
+            force_stage1=True,
+            provider_override=provider,
+            model_override=model,
+        )
+        total_latency = (time.monotonic_ns() // 1_000_000) - start_ms
+
+        # Compute total tokens across stages
+        stage1 = result.get("stage1", {})
+        total_tokens = (stage1.get("input_tokens") or 0) + (stage1.get("output_tokens") or 0)
+        for s2 in result.get("stage2_results", []):
+            total_tokens += (s2.get("input_tokens") or 0) + (s2.get("output_tokens") or 0)
+
+        return {
+            "stage1": stage1,
+            "stage2_results": result.get("stage2_results", []),
+            "total_tokens": total_tokens,
+            "total_latency_ms": total_latency,
+            "error": None,
+        }
+
+    def _pick_best_stage2(self, stage2_results: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """Pick the Stage 2 result with the highest confidence."""
+        if not stage2_results:
+            return None
+        best = None
+        best_conf = -1.0
+        for r in stage2_results:
+            conf = r.get("confidence") or 0
+            if isinstance(conf, (int, float)) and conf > best_conf:
+                best_conf = conf
+                best = r
+        return best
 
     # --- Helpers ---
 

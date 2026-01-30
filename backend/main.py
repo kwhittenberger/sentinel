@@ -56,8 +56,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Unified Incident Tracker API",
-    description="API for ICE enforcement incidents and immigration-related crime cases",
+    title="Sentinel API",
+    description="Incident analysis and pattern detection platform",
     version="2.0.0",
     lifespan=lifespan
 )
@@ -544,6 +544,18 @@ def _apply_filters(
     return incidents
 
 
+async def _get_event_incident_ids(event_id: str) -> set:
+    """Get set of incident IDs linked to an event."""
+    from backend.database import get_pool
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT incident_id FROM incident_events WHERE event_id = $1",
+            __import__('uuid').UUID(event_id),
+        )
+    return {str(r["incident_id"]) for r in rows}
+
+
 @app.get("/api/incidents")
 async def get_incidents(
     tiers: Optional[str] = Query(None, description="Comma-separated tier numbers"),
@@ -557,6 +569,7 @@ async def get_incidents(
     gang_affiliated: Optional[bool] = Query(None, description="Filter by gang affiliation"),
     prior_deportations_min: Optional[int] = Query(None, description="Minimum prior deportations"),
     search: Optional[str] = Query(None, description="Full-text search"),
+    event_id: Optional[str] = Query(None, description="Filter to incidents linked to this event"),
 ):
     """Get filtered incidents."""
     if USE_DATABASE:
@@ -586,6 +599,11 @@ async def get_incidents(
             or search_lower in (i.get('city') or '').lower()
         ]
 
+    # Filter by event
+    if event_id and USE_DATABASE:
+        linked_ids = await _get_event_incident_ids(event_id)
+        incidents = [i for i in incidents if str(i.get('id', '')) in linked_ids]
+
     return {"incidents": incidents, "total": len(incidents)}
 
 
@@ -602,10 +620,14 @@ async def get_incident(incident_id: str):
 
         query = """
             SELECT i.*, it.name as incident_type, it.display_name as incident_type_display,
-                   sc.name as state_name
+                   sc.name as state_name,
+                   ed.name as domain_name, ed.slug as domain_slug,
+                   ec.name as category_name, ec.slug as category_slug
             FROM incidents i
             LEFT JOIN incident_types it ON i.incident_type_id = it.id
             LEFT JOIN state_codes sc ON i.state = sc.code
+            LEFT JOIN event_domains ed ON i.domain_id = ed.id
+            LEFT JOIN event_categories ec ON i.category_id = ec.id
             WHERE i.id = $1
         """
         rows = await fetch(query, incident_uuid)
@@ -640,6 +662,58 @@ async def get_incident(incident_id: str):
             for s in source_rows
         ]
 
+        # Fetch actors linked to this incident
+        actors_query = """
+            SELECT a.id, a.canonical_name, a.actor_type, a.aliases,
+                   a.gender, a.nationality, a.immigration_status, a.prior_deportations,
+                   a.is_law_enforcement, a.is_government_entity, a.description,
+                   ia.role, ia.role_detail, ia.is_primary,
+                   art.name as role_type_name, art.slug as role_type_slug
+            FROM actors a
+            JOIN incident_actors ia ON a.id = ia.actor_id
+            LEFT JOIN actor_role_types art ON ia.role_type_id = art.id
+            WHERE ia.incident_id = $1
+            ORDER BY ia.is_primary DESC NULLS LAST, ia.created_at ASC
+        """
+        actor_rows = await fetch(actors_query, incident_uuid)
+        row['actors'] = [
+            {
+                'id': str(a['id']),
+                'canonical_name': a['canonical_name'],
+                'actor_type': a['actor_type'],
+                'role': a['role'],
+                'role_type': a.get('role_type_slug'),
+                'role_type_name': a.get('role_type_name'),
+                'is_primary': a.get('is_primary', False),
+                'immigration_status': a.get('immigration_status'),
+                'nationality': a.get('nationality'),
+                'gender': a.get('gender'),
+                'is_law_enforcement': a.get('is_law_enforcement', False),
+                'prior_deportations': a.get('prior_deportations'),
+            }
+            for a in actor_rows
+        ]
+
+        # Fetch events linked to this incident
+        events_query = """
+            SELECT e.id, e.name, e.event_type, e.start_date, e.end_date, e.description
+            FROM events e
+            JOIN incident_events ie ON e.id = ie.event_id
+            WHERE ie.incident_id = $1
+            ORDER BY e.start_date ASC NULLS LAST
+        """
+        event_rows = await fetch(events_query, incident_uuid)
+        row['linked_events'] = [
+            {
+                'id': str(ev['id']),
+                'name': ev['name'],
+                'event_type': ev.get('event_type'),
+                'start_date': ev['start_date'].isoformat() if ev.get('start_date') else None,
+                'description': ev.get('description'),
+            }
+            for ev in event_rows
+        ]
+
         return row
 
     # Fallback to file-based
@@ -659,6 +733,7 @@ async def get_stats(
     death_only: bool = Query(False),
     date_start: Optional[str] = Query(None),
     date_end: Optional[str] = Query(None),
+    event_id: Optional[str] = Query(None, description="Filter to incidents linked to this event"),
 ):
     """Get summary statistics."""
     if USE_DATABASE:
@@ -669,6 +744,11 @@ async def get_stats(
     # Apply category filter if specified
     if category:
         incidents = [i for i in incidents if i.get('category', 'enforcement') == category]
+
+    # Filter by event
+    if event_id and USE_DATABASE:
+        linked_ids = await _get_event_incident_ids(event_id)
+        incidents = [i for i in incidents if str(i.get('id', '')) in linked_ids]
 
     # Calculate stats
     total = len(incidents)
@@ -706,7 +786,7 @@ async def get_stats(
         if t:
             by_type[t] = by_type.get(t, 0) + 1
 
-    return {
+    result = {
         "total_incidents": total,
         "total_deaths": deaths,
         "states_affected": states_affected,
@@ -717,6 +797,113 @@ async def get_stats(
         "by_state": by_state,
         "by_incident_type": by_type,
     }
+
+    # Add pipeline stats and incident stats when using database
+    if USE_DATABASE:
+        try:
+            from backend.database import get_pool
+            pool = await get_pool()
+            async with pool.acquire() as conn:
+                pipeline_row = await conn.fetchrow("""
+                    SELECT
+                        (SELECT count(*) FROM ingested_articles) AS articles_ingested,
+                        (SELECT count(*) FROM ingested_articles WHERE status = 'pending') AS pending_review,
+                        (SELECT count(*) FROM event_domains WHERE is_active = true AND archived_at IS NULL) AS domains_active,
+                        (SELECT count(*) FROM incident_events) AS events_tracked,
+                        (SELECT avg(overall_confidence) FROM article_extractions WHERE status = 'completed') AS avg_extraction_confidence
+                """)
+                result["pipeline_stats"] = {
+                    "articles_ingested": pipeline_row["articles_ingested"],
+                    "pending_review": pipeline_row["pending_review"],
+                    "domains_active": pipeline_row["domains_active"],
+                    "events_tracked": pipeline_row["events_tracked"],
+                    "avg_extraction_confidence": float(pipeline_row["avg_extraction_confidence"]) if pipeline_row["avg_extraction_confidence"] is not None else None,
+                }
+
+                # Incident-focused stats for dashboard
+                incident_stats_row = await conn.fetchrow("""
+                    SELECT
+                        (SELECT count(*) FROM incidents i JOIN outcome_types ot ON i.outcome_type_id = ot.id WHERE ot.name = 'death') AS fatal_outcomes,
+                        (SELECT count(*) FROM incidents i JOIN outcome_types ot ON i.outcome_type_id = ot.id WHERE ot.name = 'serious_injury') AS serious_injuries,
+                        (SELECT count(DISTINCT event_id) FROM incident_events) AS events_tracked,
+                        (SELECT avg(overall_confidence) FROM article_extractions WHERE status = 'completed') AS avg_confidence
+                """)
+                # Domain counts — incidents linked to domains via incidents.domain_id
+                domain_rows = await conn.fetch("""
+                    SELECT ed.name, count(*) AS cnt
+                    FROM event_domains ed
+                    JOIN incidents i ON i.domain_id = ed.id
+                    WHERE ed.is_active = true AND ed.archived_at IS NULL
+                    GROUP BY ed.name
+                    ORDER BY cnt DESC
+                """)
+                domain_counts = {r["name"]: r["cnt"] for r in domain_rows} if domain_rows else {}
+
+                result["incident_stats"] = {
+                    "fatal_outcomes": incident_stats_row["fatal_outcomes"],
+                    "serious_injuries": incident_stats_row["serious_injuries"],
+                    "domain_counts": domain_counts,
+                    "events_tracked": incident_stats_row["events_tracked"],
+                    "avg_confidence": float(incident_stats_row["avg_confidence"]) if incident_stats_row["avg_confidence"] is not None else None,
+                }
+        except Exception as e:
+            logger.warning(f"Failed to fetch pipeline stats: {e}")
+            result["pipeline_stats"] = None
+            result["incident_stats"] = None
+
+    return result
+
+
+@app.get("/api/incidents/{incident_id}/connections")
+async def get_incident_connections(incident_id: str):
+    """Get incidents connected via shared events or duplicate links."""
+    if not USE_DATABASE:
+        return {"incident_id": incident_id, "events": []}
+
+    from backend.database import get_pool
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # Find events this incident belongs to
+        event_rows = await conn.fetch("""
+            SELECT e.id, e.name, e.slug
+            FROM events e
+            JOIN incident_events ie ON ie.event_id = e.id
+            WHERE ie.incident_id = $1
+        """, uuid.UUID(incident_id))
+
+        events = []
+        for er in event_rows:
+            # Fetch sibling incidents in each event
+            siblings = await conn.fetch("""
+                SELECT i.id, i.date, i.city, i.state, it.name AS incident_type,
+                       ot.name AS outcome_category, i.victim_name
+                FROM incidents i
+                JOIN incident_events ie ON ie.incident_id = i.id
+                LEFT JOIN incident_types it ON i.incident_type_id = it.id
+                LEFT JOIN outcome_types ot ON i.outcome_type_id = ot.id
+                WHERE ie.event_id = $1 AND i.id != $2
+                ORDER BY i.date DESC
+                LIMIT 20
+            """, er["id"], uuid.UUID(incident_id))
+            events.append({
+                "event_id": str(er["id"]),
+                "event_name": er["name"],
+                "event_slug": er["slug"],
+                "incidents": [
+                    {
+                        "id": str(s["id"]),
+                        "date": s["date"].isoformat() if s["date"] else None,
+                        "city": s["city"],
+                        "state": s["state"],
+                        "incident_type": s["incident_type"],
+                        "outcome_category": s["outcome_category"],
+                        "victim_name": s["victim_name"],
+                    }
+                    for s in siblings
+                ],
+            })
+
+        return {"incident_id": incident_id, "events": events}
 
 
 @app.get("/api/filters")
@@ -738,6 +925,43 @@ def get_filter_options():
         "date_min": date_min,
         "date_max": date_max,
     }
+
+
+@app.get("/api/domains-summary")
+async def get_domains_summary():
+    """Get event domains with their categories for filter dropdowns."""
+    if not USE_DATABASE:
+        return {"domains": []}
+
+    from backend.database import get_pool
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        domain_rows = await conn.fetch("""
+            SELECT id, name, slug
+            FROM event_domains
+            WHERE is_active = true AND archived_at IS NULL
+            ORDER BY display_order, name
+        """)
+
+        domains = []
+        for d in domain_rows:
+            cat_rows = await conn.fetch("""
+                SELECT id, name, slug
+                FROM event_categories
+                WHERE domain_id = $1 AND is_active = true
+                ORDER BY name
+            """, d["id"])
+            domains.append({
+                "id": str(d["id"]),
+                "name": d["name"],
+                "slug": d["slug"],
+                "categories": [
+                    {"id": str(c["id"]), "name": c["name"], "slug": c["slug"]}
+                    for c in cat_rows
+                ],
+            })
+
+    return {"domains": domains}
 
 
 # =====================
@@ -1217,6 +1441,9 @@ async def bulk_approve(
     """
     rows = await fetch(query, limit)
 
+    from backend.services.incident_creation_service import get_incident_creation_service
+    svc = get_incident_creation_service()
+
     approved_count = 0
     incident_ids = []
 
@@ -1224,78 +1451,36 @@ async def bulk_approve(
         article_id = row["id"]
         extracted_data = row.get("extracted_data") or {}
 
-        # Handle universal extraction format (nested under 'incident')
-        incident_info = extracted_data.get("incident", {}) if isinstance(extracted_data, dict) else {}
-        location_info = incident_info.get("location", {}) if isinstance(incident_info, dict) else {}
-
-        # Extract fields, checking universal format first then flat format
-        date_str = incident_info.get("date") or extracted_data.get("date")
-        state_str = location_info.get("state") or extracted_data.get("state")
-        city_str = location_info.get("city") or extracted_data.get("city")
-        description = incident_info.get("summary") or extracted_data.get("description")
-
         # Determine category from extraction data
         categories = extracted_data.get("categories", [])
-        category = "crime"
+        row_category = category or "crime"
         if isinstance(categories, list):
             if "enforcement" in categories:
-                category = "enforcement"
+                row_category = "enforcement"
             elif "crime" in categories:
-                category = "crime"
+                row_category = "crime"
         if extracted_data.get("category"):
-            category = extracted_data["category"]
+            row_category = extracted_data["category"]
 
-        # Get incident types from universal or flat format
-        incident_types = incident_info.get("incident_types", [])
-        incident_type_name = incident_types[0] if incident_types else extracted_data.get("incident_type", "other")
-
-        # Create incident
-        incident_id = uuid.uuid4()
-        incident_date = None
-        if date_str:
-            try:
-                from datetime import date as date_type
-                incident_date = date_type.fromisoformat(date_str)
-            except Exception:
-                pass
-        if not incident_date:
-            incident_date = datetime.utcnow().date()
-
-        # Get or create incident_type_id
-        type_rows = await fetch("SELECT id FROM incident_types WHERE name = $1 LIMIT 1", incident_type_name)
-        if type_rows:
-            incident_type_id = type_rows[0]["id"]
-        else:
-            incident_type_id = uuid.uuid4()
-            await execute(
-                "INSERT INTO incident_types (id, name, category) VALUES ($1, $2, $3)",
-                incident_type_id, incident_type_name, category
+        try:
+            result = await svc.create_incident_from_extraction(
+                extracted_data=extracted_data,
+                article=dict(row),
+                category=row_category,
             )
+            incident_id = result["incident_id"]
 
-        await execute("""
-            INSERT INTO incidents (
-                id, category, date, state, city, incident_type_id,
-                description, source_url, source_tier, curation_status,
-                extraction_confidence, created_at
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-        """,
-            incident_id, category, incident_date,
-            normalize_state(state_str), city_str,
-            incident_type_id, description,
-            row.get("source_url"), "2", "approved",
-            float(row["extraction_confidence"]) if row.get("extraction_confidence") else None,
-            datetime.utcnow()
-        )
+            # Update article status
+            await execute("""
+                UPDATE ingested_articles
+                SET status = 'approved', incident_id = $1, reviewed_at = $2
+                WHERE id = $3
+            """, uuid.UUID(incident_id), datetime.utcnow(), article_id)
 
-        # Update article status
-        await execute("""
-            UPDATE ingested_articles
-            SET status = 'approved', incident_id = $1, reviewed_at = $2
-            WHERE id = $3
-        """, incident_id, datetime.utcnow(), article_id)
-
-        approved_count += 1
-        incident_ids.append(str(incident_id))
+            approved_count += 1
+            incident_ids.append(incident_id)
+        except Exception as e:
+            logger.error(f"Bulk approve failed for article {article_id}: {e}")
 
     return {
         "success": True,
@@ -1952,233 +2137,16 @@ async def approve_article(
                 "existing_source": matched.get('source_url'),
             }
 
-    # Create incident from extracted data
-    incident_id = str(uuid.uuid4())
-
-    # Handle universal extraction format (nested under 'incident')
-    incident_info = extracted_data.get("incident", {}) if isinstance(extracted_data, dict) else {}
-    location_info = incident_info.get("location", {}) if isinstance(incident_info, dict) else {}
-    outcome_info = incident_info.get("outcome", {}) if isinstance(incident_info, dict) else {}
-
-    # Extract fields, checking universal format first then flat format
-    date_str = incident_info.get("date") or extracted_data.get("date")
-    state_str = location_info.get("state") or extracted_data.get("state")
-    city_str = location_info.get("city") or extracted_data.get("city")
-    description = incident_info.get("summary") or extracted_data.get("description")
-
-    # Parse date - default to today if not provided
-    incident_date = None
-    if date_str:
-        try:
-            from datetime import date as date_type
-            incident_date = date_type.fromisoformat(date_str)
-        except Exception:
-            pass
-    if not incident_date:
-        incident_date = datetime.utcnow().date()
-
-    # Get incident types from universal or flat format
-    incident_types = incident_info.get("incident_types", [])
-    incident_type_name = incident_types[0] if incident_types else extracted_data.get("incident_type", "other")
-
-    # Get or create incident_type_id
-    type_query = "SELECT id FROM incident_types WHERE name = $1 LIMIT 1"
-    type_rows = await fetch(type_query, incident_type_name)
-    if type_rows:
-        incident_type_id = type_rows[0]["id"]
-    else:
-        import uuid as uuid_mod
-        incident_type_id = uuid_mod.uuid4()
-        await execute(
-            "INSERT INTO incident_types (id, name, category) VALUES ($1, $2, $3)",
-            incident_type_id, incident_type_name, category
-        )
-
-    # Determine outcome category from universal or flat format
-    outcome_category_name = extracted_data.get("outcome_category")
-    if not outcome_category_name and outcome_info.get("severity"):
-        outcome_category_name = outcome_info["severity"]
-    if not outcome_category_name and extracted_data.get("involves_fatality"):
-        outcome_category_name = "death"
-
-    # Get or create outcome type ID
-    outcome_type_id = None
-    if outcome_category_name:
-        outcome_result = await fetch(
-            "SELECT get_or_create_outcome_type($1) as id",
-            outcome_category_name
-        )
-        if outcome_result:
-            outcome_type_id = outcome_result[0]["id"]
-
-    # Extract actor details from universal format for incident fields
-    actors_list = extracted_data.get("actors", [])
-    victim_name = extracted_data.get("victim_name")
-    victim_age = extracted_data.get("victim_age")
-    victim_category_name = extracted_data.get("victim_category")
-    offender_immigration_status = extracted_data.get("offender_immigration_status")
-    prior_deportations = extracted_data.get("prior_deportations", 0)
-    gang_affiliated = extracted_data.get("gang_affiliated", False)
-
-    if actors_list and not victim_name:
-        for actor in actors_list:
-            roles = actor.get("roles", [])
-            if "victim" in roles:
-                victim_name = victim_name or actor.get("name")
-                victim_age = victim_age or actor.get("age")
-            if "offender" in roles or "defendant" in roles:
-                offender_immigration_status = offender_immigration_status or actor.get("immigration_status")
-                prior_deportations = prior_deportations or actor.get("prior_deportations", 0)
-                if actor.get("gang_affiliation"):
-                    gang_affiliated = True
-
-    # Get or create victim type ID
-    victim_type_id = None
-    if victim_category_name:
-        victim_result = await fetch(
-            "SELECT get_or_create_victim_type($1) as id",
-            victim_category_name
-        )
-        if victim_result:
-            victim_type_id = victim_result[0]["id"]
-
-    insert_query = """
-        INSERT INTO incidents (
-            id, category, date, state, city, incident_type_id,
-            description, source_url, source_tier, curation_status,
-            extraction_confidence, victim_name, victim_age, victim_type_id,
-            outcome_type_id, offender_immigration_status,
-            prior_deportations, gang_affiliated, created_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
-        RETURNING id
-    """
-
-    await execute(
-        insert_query,
-        uuid.UUID(incident_id),
-        category,
-        incident_date,
-        normalize_state(state_str),
-        city_str,
-        incident_type_id,
-        description,
-        article.get("source_url"),
-        "2",  # Default tier as string
-        "approved",
-        float(article["extraction_confidence"]) if article.get("extraction_confidence") else None,
-        victim_name,
-        victim_age,
-        victim_type_id,
-        outcome_type_id,
-        offender_immigration_status,
-        prior_deportations or 0,
-        gang_affiliated or False,
-        datetime.utcnow()
+    # Create incident via the creation service
+    from backend.services.incident_creation_service import get_incident_creation_service
+    svc = get_incident_creation_service()
+    result = await svc.create_incident_from_extraction(
+        extracted_data=extracted_data,
+        article=dict(article),
+        category=category,
+        overrides=overrides,
     )
-
-    # Create actors from extracted data and link to incident
-    created_actors = []
-
-    # Helper function to create or find actor
-    async def create_or_find_actor(name: str, actor_type: str, role: str, **kwargs) -> Optional[str]:
-        """Create a new actor or find existing one, return actor_id."""
-        if not name or len(name.strip()) < 2:
-            return None
-
-        name = name.strip()
-
-        # Check for existing actor with similar name
-        search_query = """
-            SELECT id, canonical_name FROM actors
-            WHERE LOWER(canonical_name) = LOWER($1)
-               OR $1 = ANY(aliases)
-            LIMIT 1
-        """
-        existing = await fetch(search_query, name)
-
-        if existing:
-            actor_id = str(existing[0]["id"])
-        else:
-            # Create new actor
-            actor_id = str(uuid.uuid4())
-            insert_actor = """
-                INSERT INTO actors (
-                    id, canonical_name, actor_type, aliases,
-                    nationality, immigration_status, prior_deportations,
-                    is_law_enforcement, is_government_entity, confidence_score,
-                    created_at, updated_at
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
-            """
-            await execute(
-                insert_actor,
-                uuid.UUID(actor_id),
-                name,
-                actor_type,
-                [],  # aliases
-                kwargs.get("nationality"),
-                kwargs.get("immigration_status"),
-                kwargs.get("prior_deportations", 0),
-                kwargs.get("is_law_enforcement", False),
-                kwargs.get("is_government_entity", False),
-                0.7  # default confidence
-            )
-            created_actors.append({"id": actor_id, "name": name, "type": actor_type, "role": role})
-
-        # Link actor to incident
-        link_query = """
-            INSERT INTO incident_actors (id, incident_id, actor_id, role, created_at)
-            VALUES ($1, $2, $3, $4, NOW())
-            ON CONFLICT (incident_id, actor_id, role) DO NOTHING
-        """
-        await execute(
-            link_query,
-            uuid.uuid4(),
-            uuid.UUID(incident_id),
-            uuid.UUID(actor_id),
-            role
-        )
-
-        return actor_id
-
-    # Create offender actor (for crime incidents)
-    offender_name = extracted_data.get("offender_name")
-    if offender_name:
-        await create_or_find_actor(
-            offender_name,
-            "person",
-            "offender",
-            nationality=extracted_data.get("offender_nationality") or extracted_data.get("offender_country_of_origin"),
-            immigration_status=extracted_data.get("offender_immigration_status"),
-            prior_deportations=extracted_data.get("prior_deportations", 0),
-        )
-
-    # Create victim actor (for enforcement incidents)
-    victim_name = extracted_data.get("victim_name")
-    if victim_name and category == "enforcement":
-        await create_or_find_actor(
-            victim_name,
-            "person",
-            "victim",
-        )
-
-    # Create agency actor if mentioned
-    agency_name = extracted_data.get("agency")
-    if agency_name:
-        # Normalize common agency names
-        agency_map = {
-            "ICE": "U.S. Immigration and Customs Enforcement",
-            "CBP": "U.S. Customs and Border Protection",
-            "USCIS": "U.S. Citizenship and Immigration Services",
-        }
-        normalized_agency = agency_map.get(agency_name.upper(), agency_name)
-
-        await create_or_find_actor(
-            normalized_agency,
-            "agency",
-            "arresting_agency" if category == "crime" else "reporting_agency",
-            is_law_enforcement=True,
-            is_government_entity=True,
-        )
+    incident_id = result["incident_id"]
 
     # Update article status
     update_query = """
@@ -2205,8 +2173,8 @@ async def approve_article(
     return {
         "success": True,
         "incident_id": incident_id,
-        "actors_created": created_actors,
-        "category": category
+        "actors_created": result.get("actors_created", []),
+        "category": result.get("category", category)
     }
 
 
@@ -2232,6 +2200,159 @@ async def reject_article(
     await execute(query, reason, datetime.utcnow(), uuid.UUID(article_id))
 
     return {"success": True}
+
+
+@app.post("/api/admin/reset-pipeline-data")
+async def reset_pipeline_data(
+    confirm: bool = Body(False, embed=True),
+    dry_run: bool = Body(True, embed=True),
+):
+    """Nuclear reset: delete all pipeline-generated data and reset articles
+    so they can be re-extracted and re-approved through the full pipeline.
+
+    Deletes: incidents (cascading incident_actors, incident_events,
+    incident_sources), orphaned actors, orphaned events.
+    Resets: ingested_articles status to 'pending', clears extracted_data.
+    """
+    if not USE_DATABASE:
+        raise HTTPException(status_code=501, detail="Database not enabled")
+
+    from backend.database import fetch, execute
+
+    # Gather counts for preview
+    counts = {}
+    count_rows = await fetch("SELECT COUNT(*) as n FROM incidents")
+    counts["incidents"] = count_rows[0]["n"]
+    count_rows = await fetch("SELECT COUNT(*) as n FROM actors")
+    counts["actors"] = count_rows[0]["n"]
+    count_rows = await fetch("SELECT COUNT(*) as n FROM events")
+    counts["events"] = count_rows[0]["n"]
+    count_rows = await fetch(
+        "SELECT COUNT(*) as n FROM ingested_articles WHERE status IN ('approved', 'linked', 'rejected')"
+    )
+    counts["articles_to_reset"] = count_rows[0]["n"]
+
+    if dry_run:
+        return {
+            "success": True,
+            "dry_run": True,
+            "will_delete": counts,
+            "message": "Pass dry_run=false and confirm=true to execute",
+        }
+
+    if not confirm:
+        return {
+            "success": False,
+            "error": "Must pass confirm=true to execute destructive reset",
+            "will_delete": counts,
+        }
+
+    # 1. Delete all incidents (cascades incident_actors, incident_events, incident_sources)
+    await execute("DELETE FROM incident_events")
+    await execute("DELETE FROM incident_actors")
+    await execute("DELETE FROM incident_sources")
+    await execute("DELETE FROM incidents")
+
+    # 2. Delete all actors (extraction-created, will be recreated)
+    await execute("DELETE FROM actor_relations")
+    await execute("DELETE FROM actors")
+
+    # 3. Delete all events (will be recreated from extraction)
+    await execute("DELETE FROM events")
+
+    # 4. Reset articles to pending so they re-enter the pipeline
+    await execute("""
+        UPDATE ingested_articles
+        SET status = 'pending',
+            incident_id = NULL,
+            extracted_data = NULL,
+            extraction_confidence = NULL,
+            relevance_score = NULL,
+            reviewed_at = NULL,
+            processed_at = NULL
+        WHERE status IN ('approved', 'linked', 'rejected')
+    """)
+
+    return {
+        "success": True,
+        "deleted": counts,
+        "message": "All pipeline data reset. Articles are pending re-extraction.",
+    }
+
+
+@app.post("/api/admin/backfill-actors-events")
+async def backfill_actors_events(
+    limit: int = Body(100, embed=True),
+    dry_run: bool = Body(False, embed=True),
+):
+    """Backfill actors, events, and domain/category for existing incidents
+    that have linked articles with extracted_data but are missing these fields."""
+    if not USE_DATABASE:
+        raise HTTPException(status_code=501, detail="Database not enabled")
+
+    from backend.database import fetch
+    from backend.services.incident_creation_service import get_incident_creation_service
+
+    # Find incidents with extraction data but missing domain/actors/events
+    query = """
+        SELECT i.id as incident_id, i.category,
+               ia2.extracted_data
+        FROM incidents i
+        JOIN ingested_articles ia2 ON ia2.incident_id = i.id
+        WHERE ia2.extracted_data IS NOT NULL
+          AND (
+              i.domain_id IS NULL
+              OR NOT EXISTS (
+                  SELECT 1 FROM incident_actors iac WHERE iac.incident_id = i.id
+              )
+              OR NOT EXISTS (
+                  SELECT 1 FROM incident_events ie WHERE ie.incident_id = i.id
+              )
+          )
+        ORDER BY i.created_at DESC
+        LIMIT $1
+    """
+    rows = await fetch(query, limit)
+
+    if dry_run:
+        return {
+            "success": True,
+            "dry_run": True,
+            "candidates": len(rows),
+        }
+
+    svc = get_incident_creation_service()
+    backfilled = 0
+    errors = 0
+    skipped = 0
+
+    for row in rows:
+        extracted_data = row.get("extracted_data") or {}
+        if not isinstance(extracted_data, dict):
+            skipped += 1
+            continue
+
+        # Unwrap nested extracted_data if present
+        if "extracted_data" in extracted_data:
+            extracted_data = extracted_data.get("extracted_data") or {}
+
+        try:
+            await svc.backfill_incident(
+                incident_id=row["incident_id"],
+                extracted_data=extracted_data,
+                category=row.get("category", "crime"),
+            )
+            backfilled += 1
+        except Exception as e:
+            logger.error(f"Backfill error for incident {row['incident_id']}: {e}")
+            errors += 1
+
+    return {
+        "success": True,
+        "backfilled": backfilled,
+        "errors": errors,
+        "skipped": skipped,
+    }
 
 
 # =====================
@@ -2818,9 +2939,13 @@ async def admin_get_incident(incident_id: str):
             raise HTTPException(status_code=400, detail="Invalid incident ID format")
 
         rows = await fetch("""
-            SELECT i.*, it.name as incident_type
+            SELECT i.*, it.name as incident_type,
+                   ed.name as domain_name, ed.slug as domain_slug,
+                   ec.name as category_name, ec.slug as category_slug
             FROM incidents i
             LEFT JOIN incident_types it ON i.incident_type_id = it.id
+            LEFT JOIN event_domains ed ON i.domain_id = ed.id
+            LEFT JOIN event_categories ec ON i.category_id = ec.id
             WHERE i.id = $1
         """, incident_uuid)
 
@@ -2851,6 +2976,58 @@ async def admin_get_incident(incident_id: str):
             for s in source_rows
         ]
 
+        # Fetch actors linked to this incident
+        actors_query = """
+            SELECT a.id, a.canonical_name, a.actor_type, a.aliases,
+                   a.gender, a.nationality, a.immigration_status, a.prior_deportations,
+                   a.is_law_enforcement, a.is_government_entity, a.description,
+                   ia.role, ia.role_detail, ia.is_primary,
+                   art.name as role_type_name, art.slug as role_type_slug
+            FROM actors a
+            JOIN incident_actors ia ON a.id = ia.actor_id
+            LEFT JOIN actor_role_types art ON ia.role_type_id = art.id
+            WHERE ia.incident_id = $1
+            ORDER BY ia.is_primary DESC NULLS LAST, ia.created_at ASC
+        """
+        actor_rows = await fetch(actors_query, incident_uuid)
+        row['actors'] = [
+            {
+                'id': str(a['id']),
+                'canonical_name': a['canonical_name'],
+                'actor_type': a['actor_type'],
+                'role': a['role'],
+                'role_type': a.get('role_type_slug'),
+                'role_type_name': a.get('role_type_name'),
+                'is_primary': a.get('is_primary', False),
+                'immigration_status': a.get('immigration_status'),
+                'nationality': a.get('nationality'),
+                'gender': a.get('gender'),
+                'is_law_enforcement': a.get('is_law_enforcement', False),
+                'prior_deportations': a.get('prior_deportations'),
+            }
+            for a in actor_rows
+        ]
+
+        # Fetch events linked to this incident
+        events_query = """
+            SELECT e.id, e.name, e.event_type, e.start_date, e.end_date, e.description
+            FROM events e
+            JOIN incident_events ie ON e.id = ie.event_id
+            WHERE ie.incident_id = $1
+            ORDER BY e.start_date ASC NULLS LAST
+        """
+        event_rows = await fetch(events_query, incident_uuid)
+        row['linked_events'] = [
+            {
+                'id': str(ev['id']),
+                'name': ev['name'],
+                'event_type': ev.get('event_type'),
+                'start_date': ev['start_date'].isoformat() if ev.get('start_date') else None,
+                'description': ev.get('description'),
+            }
+            for ev in event_rows
+        ]
+
         return row
     else:
         incidents = load_incidents()
@@ -2875,7 +3052,7 @@ async def admin_get_incident_articles(incident_id: str):
 
     rows = await fetch("""
         SELECT id, title, content, source_name, source_url, published_date, fetched_at,
-               relevance_score, extraction_confidence, status
+               relevance_score, extraction_confidence, status, extracted_data
         FROM ingested_articles
         WHERE incident_id = $1
         ORDER BY published_date DESC NULLS LAST, fetched_at DESC
@@ -2892,6 +3069,18 @@ async def admin_get_incident_articles(incident_id: str):
         for num_field in ("relevance_score", "extraction_confidence"):
             if article.get(num_field) is not None:
                 article[num_field] = float(article[num_field])
+        # Parse extracted_data JSON
+        ed = article.get("extracted_data")
+        if isinstance(ed, str):
+            import json as json_module
+            try:
+                ed = json_module.loads(ed)
+            except Exception:
+                ed = None
+        # Unwrap nested extracted_data key if present
+        if isinstance(ed, dict) and "extracted_data" in ed:
+            ed = ed["extracted_data"]
+        article["extracted_data"] = ed
         articles.append(article)
 
     return {"articles": articles, "total": len(articles)}
@@ -5255,9 +5444,120 @@ async def execute_test_run(data: dict = Body(...)):
     from backend.services.prompt_testing import get_prompt_testing_service
     service = get_prompt_testing_service()
     try:
-        return await service.run_test_suite(data["schema_id"], data["dataset_id"])
+        return await service.run_test_suite(
+            data["schema_id"],
+            data["dataset_id"],
+            provider_name=data.get("provider_name"),
+            model_name=data.get("model_name"),
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+# =====================
+# Model Comparisons
+# =====================
+
+
+@app.get("/api/admin/prompt-tests/comparisons")
+async def list_comparisons(limit: int = 50):
+    from backend.services.prompt_testing import get_prompt_testing_service
+    service = get_prompt_testing_service()
+    return {"comparisons": await service.list_comparisons(limit)}
+
+
+@app.get("/api/admin/prompt-tests/comparisons/{comparison_id}")
+async def get_comparison(comparison_id: str):
+    from backend.services.prompt_testing import get_prompt_testing_service
+    service = get_prompt_testing_service()
+    result = await service.get_comparison(comparison_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Comparison not found")
+    return result
+
+
+@app.get("/api/admin/prompt-tests/comparisons/{comparison_id}/runs")
+async def get_comparison_runs(comparison_id: str):
+    from backend.services.prompt_testing import get_prompt_testing_service
+    service = get_prompt_testing_service()
+    return await service.get_comparison_runs(comparison_id)
+
+
+@app.post("/api/admin/prompt-tests/comparisons")
+async def create_and_run_comparison(data: dict = Body(...)):
+    import asyncio
+    from backend.services.prompt_testing import get_prompt_testing_service
+    service = get_prompt_testing_service()
+    comparison = await service.create_comparison(data)
+    # Launch comparison execution in the background
+    asyncio.create_task(service.run_comparison(comparison["id"]))
+    return comparison
+
+
+# =====================
+# Calibration Mode
+# =====================
+
+
+@app.post("/api/admin/prompt-tests/calibrations")
+async def create_and_run_calibration(data: dict = Body(...)):
+    import asyncio
+    from backend.services.prompt_testing import get_prompt_testing_service
+    service = get_prompt_testing_service()
+    comparison = await service.create_calibration_comparison(data)
+    asyncio.create_task(service.run_calibration(comparison["id"]))
+    return comparison
+
+
+@app.post("/api/admin/prompt-tests/pipeline-calibrations")
+async def create_and_run_pipeline_calibration(data: dict = Body(...)):
+    import asyncio
+    from backend.services.prompt_testing import get_prompt_testing_service
+    service = get_prompt_testing_service()
+    comparison = await service.create_pipeline_comparison(data)
+    asyncio.create_task(service.run_pipeline_calibration(comparison["id"]))
+    return comparison
+
+
+@app.get("/api/admin/prompt-tests/calibrations/{comparison_id}/articles")
+async def list_calibration_articles(comparison_id: str):
+    from backend.services.prompt_testing import get_prompt_testing_service
+    service = get_prompt_testing_service()
+    articles = await service.list_calibration_articles(comparison_id)
+    return {"articles": articles}
+
+
+@app.post("/api/admin/prompt-tests/calibrations/{comparison_id}/articles/{article_id}/review")
+async def review_calibration_article(comparison_id: str, article_id: str, data: dict = Body(...)):
+    from backend.services.prompt_testing import get_prompt_testing_service
+    service = get_prompt_testing_service()
+    try:
+        result = await service.review_calibration_article(
+            article_id=article_id,
+            chosen_config=data.get("chosen_config"),
+            golden_extraction=data.get("golden_extraction"),
+            notes=data.get("reviewer_notes"),
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.post("/api/admin/prompt-tests/calibrations/{comparison_id}/save-dataset")
+async def save_calibration_as_dataset(comparison_id: str, data: dict = Body(...)):
+    from backend.services.prompt_testing import get_prompt_testing_service
+    service = get_prompt_testing_service()
+    try:
+        dataset = await service.save_calibration_as_dataset(
+            comparison_id=comparison_id,
+            name=data["name"],
+            description=data.get("description"),
+        )
+        return dataset
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except KeyError:
+        raise HTTPException(status_code=400, detail="'name' is required")
 
 
 # =====================

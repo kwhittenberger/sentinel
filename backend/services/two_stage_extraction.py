@@ -36,6 +36,8 @@ class TwoStageExtractionService:
         self,
         article_id: str,
         force: bool = False,
+        provider_override: Optional[str] = None,
+        model_override: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Run Stage 1 extraction on an article.
@@ -105,12 +107,16 @@ class TwoStageExtractionService:
         # Call LLM
         try:
             router = get_llm_router()
-            response = await router.call(
+            effective_model = model_override or stage1_schema.get("model_name", "claude-sonnet-4-5")
+            call_kwargs = dict(
                 system_prompt=system_prompt,
                 user_message=user_prompt,
-                model=stage1_schema.get("model_name", "claude-sonnet-4-5"),
+                model=effective_model,
                 max_tokens=stage1_schema.get("max_tokens", 8000),
             )
+            if provider_override:
+                call_kwargs["provider_name"] = provider_override
+            response = await asyncio.to_thread(router.call, **call_kwargs)
 
             extraction_data = self._parse_json(response.text)
 
@@ -190,6 +196,8 @@ class TwoStageExtractionService:
         self,
         article_extraction_id: str,
         schema_ids: Optional[List[str]] = None,
+        provider_override: Optional[str] = None,
+        model_override: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
         Run Stage 2 extraction against a completed Stage 1 extraction.
@@ -217,6 +225,8 @@ class TwoStageExtractionService:
 
         article_id = str(extraction["article_id"])
         extraction_data = extraction["extraction_data"]
+        if isinstance(extraction_data, str):
+            extraction_data = json.loads(extraction_data)
         stage1_json = json.dumps(extraction_data, indent=2)
 
         # Get article text for Stage 2 (provided alongside IR)
@@ -256,6 +266,8 @@ class TwoStageExtractionService:
                 stage1_json=stage1_json,
                 article_text=article_text,
                 stage1_version=extraction["stage1_schema_version"],
+                provider_override=provider_override,
+                model_override=model_override,
             )
             for s in schemas
         ]
@@ -277,6 +289,8 @@ class TwoStageExtractionService:
         stage1_json: str,
         article_text: str,
         stage1_version: int,
+        provider_override: Optional[str] = None,
+        model_override: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Run a single Stage 2 schema extraction."""
         from backend.database import fetchrow, execute
@@ -310,12 +324,16 @@ class TwoStageExtractionService:
 
         try:
             router = get_llm_router()
-            response = await router.call(
+            effective_model = model_override or schema.get("model_name", "claude-sonnet-4-5")
+            call_kwargs = dict(
                 system_prompt=system_prompt,
                 user_message=user_prompt,
-                model=schema.get("model_name", "claude-sonnet-4-5"),
+                model=effective_model,
                 max_tokens=schema.get("max_tokens", 4000),
             )
+            if provider_override:
+                call_kwargs["provider_name"] = provider_override
+            response = await asyncio.to_thread(router.call, **call_kwargs)
 
             extracted_data = self._parse_json(response.text)
 
@@ -399,11 +417,48 @@ class TwoStageExtractionService:
                WHERE es.schema_type = 'stage2' AND es.is_active = TRUE"""
         )
 
+        def normalize(slug: str) -> str:
+            return slug.replace("-", "_").lower()
+
+        normalized_pairs = [(normalize(d), normalize(c)) for d, c in pairs]
+
+        # Collect all hint domain slugs (including domain extracted from combined slugs)
+        hint_domains: set[str] = set()
+        for nd, _nc in normalized_pairs:
+            hint_domains.add(nd)
+
         matched = []
+        matched_ids: set[str] = set()
         for schema in all_schemas:
-            for domain_slug, category_slug in pairs:
-                if schema["domain_slug"] == domain_slug and schema["category_slug"] == category_slug:
+            sid = str(schema["id"]) if "id" in schema else f"{schema['domain_slug']}/{schema['category_slug']}"
+            sd = normalize(schema["domain_slug"])
+            sc = normalize(schema["category_slug"])
+            for nd, nc in normalized_pairs:
+                # Exact match
+                if sd == nd and sc == nc:
+                    if sid not in matched_ids:
+                        matched.append(schema)
+                        matched_ids.add(sid)
+                    break
+                # LLM combined domain+category into domain_slug
+                # e.g. hint "immigration_enforcement" matches domain="immigration" category="enforcement"
+                combined = f"{sd}_{sc}"
+                if combined == nd:
+                    if sid not in matched_ids:
+                        matched.append(schema)
+                        matched_ids.add(sid)
+                    break
+                # Domain-only match: hint domain matches schema domain
+                # (LLM may invent categories, but domain is usually correct)
+                if sd == nd and sid not in matched_ids:
                     matched.append(schema)
+                    matched_ids.add(sid)
+                    break
+                # Domain extracted from combined hint slug
+                # e.g. hint "civil_rights_bystander_detention" — check if it starts with domain
+                if nd.startswith(sd + "_") and sid not in matched_ids:
+                    matched.append(schema)
+                    matched_ids.add(sid)
                     break
 
         return matched
@@ -417,6 +472,8 @@ class TwoStageExtractionService:
         article_id: str,
         force_stage1: bool = False,
         schema_ids: Optional[List[str]] = None,
+        provider_override: Optional[str] = None,
+        model_override: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Run the complete two-stage pipeline: Stage 1 → Stage 2.
@@ -425,12 +482,22 @@ class TwoStageExtractionService:
             article_id: UUID of the article.
             force_stage1: Re-run Stage 1 even if cached.
             schema_ids: Optional schemas to run (auto-selects if None).
+            provider_override: Override the LLM provider for all stages.
+            model_override: Override the LLM model for all stages.
 
         Returns:
             Dict with stage1 result and stage2_results list.
         """
-        stage1 = await self.run_stage1(article_id, force=force_stage1)
-        stage2_results = await self.run_stage2(stage1["id"], schema_ids=schema_ids)
+        stage1 = await self.run_stage1(
+            article_id, force=force_stage1,
+            provider_override=provider_override,
+            model_override=model_override,
+        )
+        stage2_results = await self.run_stage2(
+            stage1["id"], schema_ids=schema_ids,
+            provider_override=provider_override,
+            model_override=model_override,
+        )
         return {
             "stage1": stage1,
             "stage2_results": stage2_results,
