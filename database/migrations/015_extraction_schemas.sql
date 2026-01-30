@@ -222,9 +222,9 @@ INSERT INTO extraction_schemas (
 -- 7. GRANTS
 -- ============================================================================
 
-GRANT SELECT, INSERT, UPDATE, DELETE ON extraction_schemas TO incident_tracker_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON prompt_test_datasets TO incident_tracker_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON prompt_test_cases TO incident_tracker_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON prompt_test_runs TO incident_tracker_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON extraction_quality_samples TO incident_tracker_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON materialized_view_refresh_config TO incident_tracker_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON extraction_schemas TO sentinel;
+GRANT SELECT, INSERT, UPDATE, DELETE ON prompt_test_datasets TO sentinel;
+GRANT SELECT, INSERT, UPDATE, DELETE ON prompt_test_cases TO sentinel;
+GRANT SELECT, INSERT, UPDATE, DELETE ON prompt_test_runs TO sentinel;
+GRANT SELECT, INSERT, UPDATE, DELETE ON extraction_quality_samples TO sentinel;
+GRANT SELECT, INSERT, UPDATE, DELETE ON materialized_view_refresh_config TO sentinel;

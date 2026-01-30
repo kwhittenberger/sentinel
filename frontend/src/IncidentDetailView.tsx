@@ -1,5 +1,6 @@
+import { useState } from 'react';
 import { HighlightedArticle, collectHighlightsFromRecord } from './articleHighlight';
-import type { Incident, ExtractedIncidentData } from './types';
+import type { Incident, IncidentActor, IncidentEvent, ExtractedIncidentData } from './types';
 import './ExtensibleSystem.css';
 
 interface IncidentDetailViewProps {
@@ -57,6 +58,117 @@ function TaggedField({ label, value, confidence, type = 'text' }: TaggedFieldPro
   );
 }
 
+const roleColors: Record<string, string> = {
+  victim: '#ef4444',
+  offender: '#f97316',
+  officer: '#3b82f6',
+  witness: '#8b5cf6',
+  arresting_agency: '#0ea5e9',
+  reporting_agency: '#0ea5e9',
+  bystander: '#6b7280',
+  organizer: '#10b981',
+  participant: '#6b7280',
+};
+
+const eventTypeIcons: Record<string, string> = {
+  murder: '\u2620',
+  shooting: '\uD83D\uDD2B',
+  arrest: '\u2696',
+  protest: '\u270A',
+  prior_arrest: '\uD83D\uDCCB',
+  conviction: '\u2696',
+  deportation_attempt: '\u2708',
+  indictment: '\uD83D\uDCC4',
+  release: '\uD83D\uDD13',
+  immigration_detainer: '\uD83D\uDD12',
+};
+
+function IncidentActorCard({ actor }: { actor: IncidentActor }) {
+  const [expanded, setExpanded] = useState(false);
+  const borderColor = actor.actor_type === 'agency' ? '#0ea5e9'
+    : actor.actor_type === 'group' ? '#8b5cf6'
+    : '#3b82f6';
+
+  return (
+    <div className="edv-actor-card" style={{ borderLeft: `3px solid ${borderColor}` }}>
+      <div className="edv-actor-header" onClick={() => setExpanded(!expanded)}>
+        <div className="edv-actor-name-row">
+          <span className="edv-actor-name">{actor.canonical_name}</span>
+          <span className={`edv-actor-type-badge edv-actor-type-${actor.actor_type}`}>
+            {actor.actor_type}
+          </span>
+        </div>
+        <div className="edv-actor-roles">
+          <span
+            className="edv-role-tag"
+            style={{
+              borderColor: roleColors[actor.role] || '#6b7280',
+              color: roleColors[actor.role] || '#6b7280',
+            }}
+          >
+            {(actor.role_type_name || actor.role).replace(/_/g, ' ')}
+          </span>
+        </div>
+        <span className="edv-expand-icon">{expanded ? '\u25B2' : '\u25BC'}</span>
+      </div>
+      {expanded && (
+        <div className="edv-actor-details">
+          {actor.gender && (
+            <div className="edv-field-row">
+              <span className="edv-field-label">Gender</span>
+              <span className="edv-field-value">{actor.gender}</span>
+            </div>
+          )}
+          {actor.nationality && (
+            <div className="edv-field-row">
+              <span className="edv-field-label">Nationality</span>
+              <span className="edv-field-value">{actor.nationality}</span>
+            </div>
+          )}
+          {actor.immigration_status && (
+            <div className="edv-field-row">
+              <span className="edv-field-label">Immigration Status</span>
+              <span className="edv-field-value">{actor.immigration_status}</span>
+            </div>
+          )}
+          {actor.prior_deportations !== undefined && actor.prior_deportations > 0 && (
+            <div className="edv-field-row">
+              <span className="edv-field-label">Prior Deportations</span>
+              <span className="edv-field-value">{actor.prior_deportations}</span>
+            </div>
+          )}
+          {actor.is_law_enforcement && (
+            <div className="edv-field-row">
+              <span className="edv-field-label">Law Enforcement</span>
+              <span className="edv-field-value">Yes</span>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function IncidentEventRow({ event }: { event: IncidentEvent }) {
+  const icon = event.event_type ? (eventTypeIcons[event.event_type] || '\u2022') : '\u2022';
+  return (
+    <div className="edv-event-row">
+      <div className="edv-event-date">
+        {event.start_date || '??'}
+      </div>
+      <div className="edv-event-content">
+        <span className="edv-event-type">
+          {icon}{' '}
+          {event.event_type ? event.event_type.replace(/_/g, ' ') : event.name}
+        </span>
+        {event.description && (
+          <span className="edv-event-desc">{event.description}</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function IncidentDetailView({
   incident,
   extractedData,
@@ -100,6 +212,16 @@ export function IncidentDetailView({
         {incident?.incident_type && (
           <span className="ext-badge ext-badge-type">
             {incident.incident_type.replace(/_/g, ' ')}
+          </span>
+        )}
+        {incident?.domain_name && (
+          <span className="ext-badge ext-badge-domain">
+            {incident.domain_name}
+          </span>
+        )}
+        {incident?.category_name && incident.category_name !== incident?.incident_type && (
+          <span className="ext-badge ext-badge-event-category">
+            {incident.category_name}
           </span>
         )}
       </div>
@@ -339,6 +461,36 @@ export function IncidentDetailView({
           {incident?.tier && (
             <span className="ext-badge ext-badge-tier">Tier {incident.tier}</span>
           )}
+        </div>
+      )}
+
+      {/* Actors */}
+      {incident?.actors && incident.actors.length > 0 && (
+        <div className="ext-detail-section-group">
+          <h4>
+            Actors & Entities
+            <span className="edv-count-badge" style={{ marginLeft: 6 }}>{incident.actors.length}</span>
+          </h4>
+          <div className="edv-actors-list">
+            {incident.actors.map((actor) => (
+              <IncidentActorCard key={actor.id + actor.role} actor={actor} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Events Timeline */}
+      {incident?.linked_events && incident.linked_events.length > 0 && (
+        <div className="ext-detail-section-group">
+          <h4>
+            Related Events
+            <span className="edv-count-badge" style={{ marginLeft: 6 }}>{incident.linked_events.length}</span>
+          </h4>
+          <div className="edv-events-timeline">
+            {incident.linked_events.map((event) => (
+              <IncidentEventRow key={event.id} event={event} />
+            ))}
+          </div>
         </div>
       )}
 

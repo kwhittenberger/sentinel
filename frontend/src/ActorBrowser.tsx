@@ -171,9 +171,14 @@ export const ActorBrowser: React.FC = () => {
       setMergeSuccess(`Merged successfully into "${result.canonical_name}"`);
       setTimeout(() => setMergeSuccess(null), 3000);
 
-      setShowMergeSuggestionsModal(false);
+      // Immediately remove suggestions involving the merged-away actor
+      setMergeSuggestions(prev => prev.filter(
+        s => s.actor1_id !== secondaryId && s.actor2_id !== secondaryId
+      ));
+
       setShowSimilarModal(false);
       fetchActors();
+      // Re-fetch suggestions in background for accuracy (modal stays open)
       fetchMergeSuggestions();
       if (selectedActor && (selectedActor.id === actor1Id || selectedActor.id === actor2Id)) {
         fetchActorDetails(primaryId);

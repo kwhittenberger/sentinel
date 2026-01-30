@@ -1289,6 +1289,18 @@
   color: white;
 }
 
+.ext-badge-domain {
+  background: rgba(59, 130, 246, 0.12);
+  color: #3b82f6;
+  border: 1px solid rgba(59, 130, 246, 0.3);
+}
+
+.ext-badge-event-category {
+  background: rgba(16, 185, 129, 0.12);
+  color: #10b981;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
 .ext-badge-actor-person {
   background: #6366f1;
   color: white;

@@ -617,16 +617,16 @@ GROUP BY a.id;
 -- GRANTS
 -- ============================================================================
 
-GRANT SELECT, INSERT, UPDATE, DELETE ON prompts TO incident_tracker_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON prompt_executions TO incident_tracker_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON field_definitions TO incident_tracker_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON events TO incident_tracker_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON actors TO incident_tracker_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON incident_events TO incident_tracker_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON incident_actors TO incident_tracker_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON actor_relations TO incident_tracker_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON pipeline_stages TO incident_tracker_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON incident_type_pipeline_config TO incident_tracker_app;
-GRANT SELECT ON active_prompts TO incident_tracker_app;
-GRANT SELECT ON events_summary TO incident_tracker_app;
-GRANT SELECT ON actors_summary TO incident_tracker_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON prompts TO sentinel;
+GRANT SELECT, INSERT, UPDATE, DELETE ON prompt_executions TO sentinel;
+GRANT SELECT, INSERT, UPDATE, DELETE ON field_definitions TO sentinel;
+GRANT SELECT, INSERT, UPDATE, DELETE ON events TO sentinel;
+GRANT SELECT, INSERT, UPDATE, DELETE ON actors TO sentinel;
+GRANT SELECT, INSERT, UPDATE, DELETE ON incident_events TO sentinel;
+GRANT SELECT, INSERT, UPDATE, DELETE ON incident_actors TO sentinel;
+GRANT SELECT, INSERT, UPDATE, DELETE ON actor_relations TO sentinel;
+GRANT SELECT, INSERT, UPDATE, DELETE ON pipeline_stages TO sentinel;
+GRANT SELECT, INSERT, UPDATE, DELETE ON incident_type_pipeline_config TO sentinel;
+GRANT SELECT ON active_prompts TO sentinel;
+GRANT SELECT ON events_summary TO sentinel;
+GRANT SELECT ON actors_summary TO sentinel;

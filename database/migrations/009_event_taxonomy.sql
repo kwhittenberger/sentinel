@@ -258,8 +258,8 @@ GROUP BY a.id, a.canonical_name, ed.id, ed.name;
 -- 8. GRANTS
 -- ============================================================================
 
-GRANT SELECT, INSERT, UPDATE, DELETE ON event_domains TO incident_tracker_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON event_categories TO incident_tracker_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON event_domains TO sentinel;
+GRANT SELECT, INSERT, UPDATE, DELETE ON event_categories TO sentinel;
 
 COMMENT ON TABLE event_domains IS 'Top-level event domains (Immigration, Criminal Justice, Civil Rights, etc.)';
 COMMENT ON TABLE event_categories IS 'Hierarchical event categories within domains';

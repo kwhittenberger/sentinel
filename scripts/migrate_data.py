@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 # Database URL
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql://incident_tracker_app:devpassword@localhost:5433/incident_tracker"
+    "postgresql://sentinel:devpassword@localhost:5433/sentinel"
 )
 
 # Data directories

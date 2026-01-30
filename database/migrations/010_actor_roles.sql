@@ -99,6 +99,6 @@ WHERE role_type_id IS NULL;
 -- 5. GRANTS
 -- ============================================================================
 
-GRANT SELECT, INSERT, UPDATE, DELETE ON actor_role_types TO incident_tracker_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON actor_role_types TO sentinel;
 
 COMMENT ON TABLE actor_role_types IS 'Configurable role types for actors in incidents, replacing fixed enum';

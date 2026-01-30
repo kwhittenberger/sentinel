@@ -714,28 +714,46 @@ class ActorService:
                     if alias not in all_aliases:
                         all_aliases.append(alias)
 
-            # Transfer incident links
+            # Transfer incident links:
+            # First remove secondary links that would duplicate existing primary links
             await execute("""
-                UPDATE incident_actors
-                SET actor_id = $1
+                DELETE FROM incident_actors
                 WHERE actor_id = $2
-                ON CONFLICT (incident_id, actor_id, role) DO NOTHING
+                  AND (incident_id, role) IN (
+                      SELECT incident_id, role FROM incident_actors WHERE actor_id = $1
+                  )
+            """, primary_actor_id, secondary_id)
+            # Then transfer remaining secondary links to primary
+            await execute("""
+                UPDATE incident_actors SET actor_id = $1 WHERE actor_id = $2
             """, primary_actor_id, secondary_id)
 
-            # Delete duplicate links
+            # Transfer actor relations:
+            # First remove relations between primary and secondary (would become self-relations)
             await execute("""
-                DELETE FROM incident_actors ia1
-                WHERE ia1.actor_id = $1
-                  AND EXISTS (
-                      SELECT 1 FROM incident_actors ia2
-                      WHERE ia2.incident_id = ia1.incident_id
-                        AND ia2.actor_id = $2
-                        AND ia2.role = ia1.role
-                        AND ia2.id > ia1.id
+                DELETE FROM actor_relations
+                WHERE (actor_id = $1 AND related_actor_id = $2)
+                   OR (actor_id = $2 AND related_actor_id = $1)
+            """, primary_actor_id, secondary_id)
+            # Remove secondary's outgoing relations that duplicate primary's
+            await execute("""
+                DELETE FROM actor_relations
+                WHERE actor_id = $2
+                  AND (related_actor_id, relation_type) IN (
+                      SELECT related_actor_id, relation_type
+                      FROM actor_relations WHERE actor_id = $1
                   )
-            """, secondary_id, primary_actor_id)
-
-            # Transfer actor relations
+            """, primary_actor_id, secondary_id)
+            # Remove secondary's incoming relations that duplicate primary's
+            await execute("""
+                DELETE FROM actor_relations
+                WHERE related_actor_id = $2
+                  AND (actor_id, relation_type) IN (
+                      SELECT actor_id, relation_type
+                      FROM actor_relations WHERE related_actor_id = $1
+                  )
+            """, primary_actor_id, secondary_id)
+            # Now safely transfer remaining relations
             await execute("""
                 UPDATE actor_relations SET actor_id = $1 WHERE actor_id = $2
             """, primary_actor_id, secondary_id)

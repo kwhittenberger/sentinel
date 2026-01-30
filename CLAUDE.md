@@ -4,12 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Data tracking system for violent confrontations involving ICE/CBP and immigrant-involved crimes. Tracks two incident categories:
+**Sentinel** — Incident analysis and pattern detection platform. Ingests articles via RSS, extracts structured incident data using LLM pipelines, and provides curation workflows, analytics, and geographic visualization.
 
-- **Enforcement**: Incidents where ICE/CBP agents harmed non-immigrants (protesters, journalists, bystanders, US citizens, officers)
-- **Crime**: Crimes committed by individuals with immigration status issues
-
-The system includes LLM-powered article extraction, curation workflows, and analytics.
+The system supports configurable event domains and categories (e.g., Immigration, Criminal Justice, Civil Rights) with LLM-powered extraction, confidence-based auto-approval, and deduplication.
 
 ## Quick Start
 
@@ -113,7 +110,7 @@ docker-compose up -d db
 docker-compose logs -f
 
 # Connect to database
-docker exec -it incident_tracker_db psql -U incident_tracker_app -d incident_tracker
+docker exec -it sentinel_db psql -U sentinel -d sentinel
 ```
 
 ## Environment Variables
@@ -121,7 +118,7 @@ docker exec -it incident_tracker_db psql -U incident_tracker_app -d incident_tra
 Copy `.env.example` to `.env` and configure:
 
 ```
-DATABASE_URL=postgresql://incident_tracker_app:devpassword@localhost:5433/incident_tracker
+DATABASE_URL=postgresql://sentinel:devpassword@localhost:5433/sentinel
 ANTHROPIC_API_KEY=sk-ant-...
 ```
 

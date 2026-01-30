@@ -78,6 +78,54 @@ export interface Incident {
   // Curation workflow
   curation_status?: CurationStatus;
   extraction_confidence?: number;
+
+  // Extensibility system — populated by detail endpoints
+  actors?: IncidentActor[];
+  linked_events?: IncidentEvent[];
+  domain_name?: string;
+  domain_slug?: string;
+  category_name?: string;
+  category_slug?: string;
+}
+
+export interface IncidentActor {
+  id: string;
+  canonical_name: string;
+  actor_type: string;
+  role: string;
+  role_type?: string;
+  role_type_name?: string;
+  is_primary: boolean;
+  immigration_status?: string;
+  nationality?: string;
+  gender?: string;
+  is_law_enforcement: boolean;
+  prior_deportations?: number;
+}
+
+export interface IncidentEvent {
+  id: string;
+  name: string;
+  event_type?: string;
+  start_date?: string;
+  description?: string;
+  is_primary_event?: boolean;
+}
+
+export interface PipelineStats {
+  articles_ingested: number;
+  pending_review: number;
+  domains_active: number;
+  events_tracked: number;
+  avg_extraction_confidence: number | null;
+}
+
+export interface IncidentStats {
+  fatal_outcomes: number;
+  serious_injuries: number;
+  domain_counts: Record<string, number>;
+  events_tracked: number;
+  avg_confidence: number | null;
 }
 
 export interface Stats {
@@ -90,6 +138,51 @@ export interface Stats {
   by_tier: Record<number, number>;
   by_state: Record<string, number>;
   by_incident_type: Record<string, number>;
+  pipeline_stats?: PipelineStats | null;
+  incident_stats?: IncidentStats | null;
+}
+
+// Connected incidents types
+export interface ConnectedIncidentSummary {
+  id: string;
+  date: string | null;
+  city: string | null;
+  state: string | null;
+  incident_type: string | null;
+  outcome_category: string | null;
+  victim_name: string | null;
+}
+
+export interface EventConnection {
+  event_id: string;
+  event_name: string;
+  event_slug: string;
+  incidents: ConnectedIncidentSummary[];
+}
+
+export interface IncidentConnections {
+  incident_id: string;
+  events: EventConnection[];
+}
+
+export interface EventListItem {
+  id: string;
+  name: string;
+  event_type?: string;
+  incident_count: number;
+}
+
+export interface DomainCategory {
+  id: string;
+  name: string;
+  slug: string;
+}
+
+export interface DomainSummary {
+  id: string;
+  name: string;
+  slug: string;
+  categories: DomainCategory[];
 }
 
 export interface FilterOptions {
@@ -104,11 +197,14 @@ export interface Filters {
   tiers: number[];
   states: string[];
   categories: string[];
-  non_immigrant_only: boolean;
-  death_only?: boolean;
   date_start?: string;
   date_end?: string;
-  // New unified filters
+  // Domain/category taxonomy filters
+  domain?: string;
+  category?: string;
+  severity?: string;
+  event_id?: string;
+  // Unified filters
   incident_category?: IncidentCategory;
   incident_types?: string[];
   gang_affiliated?: boolean;

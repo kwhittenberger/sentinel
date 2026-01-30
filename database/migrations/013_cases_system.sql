@@ -246,13 +246,13 @@ EXECUTE FUNCTION update_case_timestamp();
 -- 9. GRANTS
 -- ============================================================================
 
-GRANT SELECT, INSERT, UPDATE, DELETE ON cases TO incident_tracker_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON charges TO incident_tracker_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON charge_history TO incident_tracker_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON case_jurisdictions TO incident_tracker_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON external_system_ids TO incident_tracker_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON case_incidents TO incident_tracker_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON case_actors TO incident_tracker_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON cases TO sentinel;
+GRANT SELECT, INSERT, UPDATE, DELETE ON charges TO sentinel;
+GRANT SELECT, INSERT, UPDATE, DELETE ON charge_history TO sentinel;
+GRANT SELECT, INSERT, UPDATE, DELETE ON case_jurisdictions TO sentinel;
+GRANT SELECT, INSERT, UPDATE, DELETE ON external_system_ids TO sentinel;
+GRANT SELECT, INSERT, UPDATE, DELETE ON case_incidents TO sentinel;
+GRANT SELECT, INSERT, UPDATE, DELETE ON case_actors TO sentinel;
 
 COMMENT ON TABLE cases IS 'Legal case records with jurisdiction and status tracking';
 COMMENT ON TABLE charges IS 'Individual charges within a case with lifecycle tracking';

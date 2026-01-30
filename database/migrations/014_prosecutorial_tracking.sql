@@ -262,11 +262,11 @@ EXECUTE FUNCTION update_case_timestamp();
 -- 7. GRANTS
 -- ============================================================================
 
-GRANT SELECT, INSERT, UPDATE, DELETE ON prosecutorial_actions TO incident_tracker_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON prosecutor_action_charges TO incident_tracker_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON bail_decisions TO incident_tracker_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON dispositions TO incident_tracker_app;
-GRANT SELECT ON prosecutor_stats TO incident_tracker_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON prosecutorial_actions TO sentinel;
+GRANT SELECT, INSERT, UPDATE, DELETE ON prosecutor_action_charges TO sentinel;
+GRANT SELECT, INSERT, UPDATE, DELETE ON bail_decisions TO sentinel;
+GRANT SELECT, INSERT, UPDATE, DELETE ON dispositions TO sentinel;
+GRANT SELECT ON prosecutor_stats TO sentinel;
 
 COMMENT ON TABLE prosecutorial_actions IS 'Tracks prosecutor decisions throughout case lifecycle';
 COMMENT ON TABLE prosecutor_action_charges IS 'Links prosecutorial actions to affected charges';

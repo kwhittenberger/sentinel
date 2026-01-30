@@ -109,8 +109,8 @@ EXECUTE FUNCTION check_relationship_cycle();
 -- 4. GRANTS
 -- ============================================================================
 
-GRANT SELECT, INSERT, UPDATE, DELETE ON relationship_types TO incident_tracker_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON event_relationships TO incident_tracker_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON relationship_types TO sentinel;
+GRANT SELECT, INSERT, UPDATE, DELETE ON event_relationships TO sentinel;
 
 COMMENT ON TABLE relationship_types IS 'Definitions for event relationship semantics (directional, inverse pairs)';
 COMMENT ON TABLE event_relationships IS 'Links between related incidents with type and confidence';

@@ -290,10 +290,10 @@ CREATE TABLE migration_rollback_log (
 -- 7. GRANTS
 -- ============================================================================
 
-GRANT SELECT ON actor_incident_history TO incident_tracker_app;
-GRANT SELECT ON recidivism_analysis TO incident_tracker_app;
-GRANT SELECT ON defendant_lifecycle_timeline TO incident_tracker_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON import_sagas TO incident_tracker_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON staging_incidents TO incident_tracker_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON staging_actors TO incident_tracker_app;
-GRANT SELECT, INSERT ON migration_rollback_log TO incident_tracker_app;
+GRANT SELECT ON actor_incident_history TO sentinel;
+GRANT SELECT ON recidivism_analysis TO sentinel;
+GRANT SELECT ON defendant_lifecycle_timeline TO sentinel;
+GRANT SELECT, INSERT, UPDATE, DELETE ON import_sagas TO sentinel;
+GRANT SELECT, INSERT, UPDATE, DELETE ON staging_incidents TO sentinel;
+GRANT SELECT, INSERT, UPDATE, DELETE ON staging_actors TO sentinel;
+GRANT SELECT, INSERT ON migration_rollback_log TO sentinel;

@@ -8,6 +8,9 @@ import type {
   CurationQueueItem,
   ComparisonStats,
   Person,
+  DomainSummary,
+  EventListItem,
+  IncidentConnections,
 } from './types';
 
 const API_BASE = '/api';
@@ -24,19 +27,22 @@ export async function fetchIncidents(filters: Filters): Promise<{ incidents: Inc
   if (filters.categories.length > 0) {
     params.set('categories', filters.categories.join(','));
   }
-  if (filters.non_immigrant_only) {
-    params.set('non_immigrant_only', 'true');
-  }
-  if (filters.death_only) {
-    params.set('death_only', 'true');
-  }
   if (filters.date_start) {
     params.set('date_start', filters.date_start);
   }
   if (filters.date_end) {
     params.set('date_end', filters.date_end);
   }
-  // New unified filters
+  if (filters.domain) {
+    params.set('domain', filters.domain);
+  }
+  if (filters.category) {
+    params.set('event_category', filters.category);
+  }
+  if (filters.severity) {
+    params.set('severity', filters.severity);
+  }
+  // Unified filters
   if (filters.incident_category) {
     params.set('category', filters.incident_category);
   }
@@ -52,6 +58,9 @@ export async function fetchIncidents(filters: Filters): Promise<{ incidents: Inc
   if (filters.search) {
     params.set('search', filters.search);
   }
+  if (filters.event_id) {
+    params.set('event_id', filters.event_id);
+  }
 
   const response = await fetch(`${API_BASE}/incidents?${params}`);
   return response.json();
@@ -66,17 +75,23 @@ export async function fetchStats(filters: Filters): Promise<Stats> {
   if (filters.states.length > 0) {
     params.set('states', filters.states.join(','));
   }
-  if (filters.non_immigrant_only) {
-    params.set('non_immigrant_only', 'true');
-  }
-  if (filters.death_only) {
-    params.set('death_only', 'true');
-  }
   if (filters.date_start) {
     params.set('date_start', filters.date_start);
   }
   if (filters.date_end) {
     params.set('date_end', filters.date_end);
+  }
+  if (filters.domain) {
+    params.set('domain', filters.domain);
+  }
+  if (filters.category) {
+    params.set('event_category', filters.category);
+  }
+  if (filters.severity) {
+    params.set('severity', filters.severity);
+  }
+  if (filters.event_id) {
+    params.set('event_id', filters.event_id);
   }
   // Category filter
   if (filters.incident_category) {
@@ -89,6 +104,25 @@ export async function fetchStats(filters: Filters): Promise<Stats> {
 
 export async function fetchFilterOptions(): Promise<FilterOptions> {
   const response = await fetch(`${API_BASE}/filters`);
+  return response.json();
+}
+
+// Domain summary for filter dropdowns
+export async function fetchDomainsSummary(): Promise<{ domains: DomainSummary[] }> {
+  const response = await fetch(`${API_BASE}/domains-summary`);
+  return response.json();
+}
+
+// Event list for filter dropdown
+export async function fetchEventList(): Promise<EventListItem[]> {
+  const response = await fetch(`${API_BASE}/events?limit=200`);
+  return response.json();
+}
+
+// Incident connections (event siblings + duplicate links)
+export async function fetchIncidentConnections(incidentId: string): Promise<IncidentConnections> {
+  const response = await fetch(`${API_BASE}/incidents/${incidentId}/connections`);
+  if (!response.ok) throw new Error('Failed to fetch connections');
   return response.json();
 }
 

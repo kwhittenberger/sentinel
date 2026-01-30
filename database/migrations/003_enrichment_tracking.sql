@@ -42,8 +42,8 @@ VALUES ('Enrichment', 'enrichment', 'backend.pipeline.stages.enrichment.Enrichme
 ON CONFLICT (slug) DO NOTHING;
 
 -- Grant permissions
-GRANT SELECT, INSERT, UPDATE, DELETE ON enrichment_runs TO incident_tracker_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON enrichment_log TO incident_tracker_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON enrichment_runs TO sentinel;
+GRANT SELECT, INSERT, UPDATE, DELETE ON enrichment_log TO sentinel;
 
 -- Record migration
 INSERT INTO schema_migrations (version) VALUES ('003_enrichment_tracking');

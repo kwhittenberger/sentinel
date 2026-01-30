@@ -621,13 +621,13 @@ ORDER BY ia.relevance_score DESC, ia.fetched_at DESC;
 -- Create application role
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'incident_tracker_app') THEN
-        CREATE ROLE incident_tracker_app WITH LOGIN PASSWORD 'changeme';
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'sentinel') THEN
+        CREATE ROLE sentinel WITH LOGIN PASSWORD 'changeme';
     END IF;
 END
 $$;
 
-GRANT USAGE ON SCHEMA public TO incident_tracker_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO incident_tracker_app;
-GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO incident_tracker_app;
-GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO incident_tracker_app;
+GRANT USAGE ON SCHEMA public TO sentinel;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO sentinel;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO sentinel;
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO sentinel;

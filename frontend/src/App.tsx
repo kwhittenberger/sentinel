@@ -2,11 +2,13 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { MapContainer, TileLayer, CircleMarker, Tooltip, useMap } from 'react-leaflet';
 import MarkerClusterGroup from 'react-leaflet-cluster';
 import 'leaflet/dist/leaflet.css';
-import type { Incident, Stats, Filters, IncidentType } from './types';
-import { fetchIncidents, fetchStats, fetchQueueStats } from './api';
+import type { Incident, Stats, Filters, IncidentType, DomainSummary, EventListItem, IncidentConnections, UniversalExtractionData, Event } from './types';
+import { fetchIncidents, fetchStats, fetchQueueStats, fetchDomainsSummary, fetchEventList, fetchIncidentConnections } from './api';
 import { Charts } from './Charts';
 import { HeatmapLayer } from './HeatmapLayer';
 import { AdminPanel } from './AdminPanel';
+import { IncidentDetailView } from './IncidentDetailView';
+import { ExtractionDetailView } from './ExtractionDetailView';
 import './App.css';
 
 interface QueueStats {
@@ -76,7 +78,20 @@ function App() {
   const [searchText, setSearchText] = useState('');
   const [incidentTypeFilter, setIncidentTypeFilter] = useState('');
   const [incidentTypes, setIncidentTypes] = useState<IncidentType[]>([]);
+  const [domainsSummary, setDomainsSummary] = useState<DomainSummary[]>([]);
+  const [eventList, setEventList] = useState<EventListItem[]>([]);
   const [sortBy, setSortBy] = useState<'date-desc' | 'date-asc' | 'state' | 'type' | 'deaths-first'>('date-desc');
+  const [statsCollapsed, setStatsCollapsed] = useState(
+    () => localStorage.getItem('sentinel-stats-collapsed') !== 'false'
+  );
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [fullIncident, setFullIncident] = useState<Incident | null>(null);
+  const [articleContent, setArticleContent] = useState<string | null>(null);
+  const [extractionData, setExtractionData] = useState<UniversalExtractionData | null>(null);
+  const [sourceUrl, setSourceUrl] = useState<string | null>(null);
+  const [connections, setConnections] = useState<IncidentConnections | null>(null);
+  const [connectionsLoading, setConnectionsLoading] = useState(false);
+  const [activeEvent, setActiveEvent] = useState<Event | null>(null);
   const [timelineEnabled, setTimelineEnabled] = useState(false);
   const [timelineDate, setTimelineDate] = useState<string | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -96,10 +111,12 @@ function App() {
       tiers: params.get('tiers') ? params.get('tiers')!.split(',').map(Number) : [1, 2, 3, 4],
       states: params.get('states') ? params.get('states')!.split(',') : [],
       categories: params.get('categories') ? params.get('categories')!.split(',') : [],
-      non_immigrant_only: params.get('non_immigrant_only') === 'true',
-      death_only: params.get('death_only') === 'true',
       date_start: params.get('date_start') || defaultDateStart,
       date_end: params.get('date_end') || today,
+      domain: params.get('domain') || undefined,
+      category: params.get('category') || undefined,
+      severity: params.get('severity') || undefined,
+      event_id: params.get('event_id') || undefined,
     };
   });
 
@@ -115,11 +132,17 @@ function App() {
     if (filters.categories.length > 0) {
       params.set('categories', filters.categories.join(','));
     }
-    if (filters.non_immigrant_only) {
-      params.set('non_immigrant_only', 'true');
+    if (filters.domain) {
+      params.set('domain', filters.domain);
     }
-    if (filters.death_only) {
-      params.set('death_only', 'true');
+    if (filters.category) {
+      params.set('category', filters.category);
+    }
+    if (filters.severity) {
+      params.set('severity', filters.severity);
+    }
+    if (filters.event_id) {
+      params.set('event_id', filters.event_id);
     }
     if (filters.date_start) {
       params.set('date_start', filters.date_start);
@@ -141,10 +164,24 @@ function App() {
     });
   }, [filters]);
 
-  // Load queue stats for sidebar badge
+  // Load queue stats for sidebar badge, domains, and events for filters
   useEffect(() => {
     fetchQueueStats().then(setQueueStats).catch(() => {});
+    fetchDomainsSummary().then(data => setDomainsSummary(data.domains)).catch(() => {});
+    fetchEventList().then(setEventList).catch(() => {});
   }, []);
+
+  // Load event details when event filter is active
+  useEffect(() => {
+    if (filters.event_id) {
+      fetch(`/api/events/${filters.event_id}`)
+        .then(res => res.ok ? res.json() : null)
+        .then(data => { if (data) setActiveEvent(data as Event); })
+        .catch(() => setActiveEvent(null));
+    } else {
+      setActiveEvent(null);
+    }
+  }, [filters.event_id]);
 
   // Load incident types for display names
   useEffect(() => {
@@ -160,13 +197,6 @@ function App() {
     if (!typeName) return '';
     const typeInfo = incidentTypes.find(t => t.name === typeName || t.slug === typeName);
     return typeInfo?.display_name || typeName.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-  }, [incidentTypes]);
-
-  // Helper to get color for incident type
-  const getTypeColor = useCallback((typeName: string | undefined): string | undefined => {
-    if (!typeName) return undefined;
-    const typeInfo = incidentTypes.find(t => t.name === typeName || t.slug === typeName);
-    return typeInfo?.color || undefined;
   }, [incidentTypes]);
 
   // Helper to get display state name (full name if available, otherwise abbreviation)
@@ -241,6 +271,63 @@ function App() {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [incidents, selectedIncident]);
+
+  // Stats collapse toggle
+  const toggleStats = () => {
+    setStatsCollapsed(prev => {
+      localStorage.setItem('sentinel-stats-collapsed', String(!prev));
+      return !prev;
+    });
+  };
+
+  // Open drawer when incident selected, close when cleared
+  useEffect(() => {
+    if (selectedIncident) {
+      setDrawerOpen(true);
+      // Fetch full incident detail from admin API
+      setFullIncident(null);
+      setArticleContent(null);
+      setExtractionData(null);
+      setSourceUrl(null);
+      fetch(`/api/admin/incidents/${selectedIncident.id}`)
+        .then(res => res.ok ? res.json() : null)
+        .then(data => { if (data) setFullIncident(data as Incident); })
+        .catch(() => {});
+      // Fetch linked articles for content + extraction data
+      fetch(`/api/admin/incidents/${selectedIncident.id}/articles`)
+        .then(res => res.ok ? res.json() : null)
+        .then(data => {
+          if (data?.articles?.length > 0) {
+            const article = data.articles.find((a: Record<string, unknown>) => a.is_primary) || data.articles[0];
+            if (article?.content) setArticleContent(article.content as string);
+            if (article?.source_url) setSourceUrl(article.source_url as string);
+            // Use extracted_data for the rich ExtractionDetailView
+            if (article?.extracted_data && typeof article.extracted_data === 'object') {
+              setExtractionData(article.extracted_data as UniversalExtractionData);
+            }
+          }
+        })
+        .catch(() => {});
+    } else {
+      setDrawerOpen(false);
+      setFullIncident(null);
+      setArticleContent(null);
+      setExtractionData(null);
+      setSourceUrl(null);
+      setConnections(null);
+    }
+  }, [selectedIncident]);
+
+  // Fetch connections when drawer is open with an incident
+  useEffect(() => {
+    if (drawerOpen && selectedIncident?.id) {
+      setConnectionsLoading(true);
+      fetchIncidentConnections(selectedIncident.id)
+        .then(setConnections)
+        .catch(() => setConnections(null))
+        .finally(() => setConnectionsLoading(false));
+    }
+  }, [drawerOpen, selectedIncident?.id]);
 
   // Use custom view if set, otherwise default to US view
   const defaultView = STATE_CENTERS['All States'];
@@ -411,7 +498,7 @@ function App() {
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
-    link.download = `ice_incidents_${new Date().toISOString().split('T')[0]}.csv`;
+    link.download = `sentinel_incidents_${new Date().toISOString().split('T')[0]}.csv`;
     link.click();
   };
 
@@ -469,64 +556,148 @@ function App() {
           </div>
         </div>
 
-        {/* Incident category filter */}
+        {/* Domain filter */}
         <div className="filter-group">
-          <label>Incident Category</label>
+          <label>Domain</label>
           <select
-            value={filters.incident_category || ''}
+            value={filters.domain || ''}
             onChange={(e) => setFilters({
               ...filters,
-              incident_category: e.target.value as 'enforcement' | 'crime' | undefined || undefined
+              domain: e.target.value || undefined,
+              category: undefined, // reset category when domain changes
             })}
             className="state-select"
           >
-            <option value="">All Categories</option>
-            <option value="enforcement">Enforcement</option>
-            <option value="crime">Crime</option>
+            <option value="">All Domains</option>
+            {domainsSummary.map(d => (
+              <option key={d.slug} value={d.slug}>{d.name}</option>
+            ))}
           </select>
         </div>
 
-        {/* Non-immigrant filter */}
+        {/* Category filter (filtered by selected domain) */}
+        {(() => {
+          const selectedDomain = domainsSummary.find(d => d.slug === filters.domain);
+          const categories = selectedDomain?.categories || [];
+          if (categories.length === 0 && !filters.domain) {
+            // Show all categories across domains when no domain selected
+            const allCategories = domainsSummary.flatMap(d => d.categories);
+            if (allCategories.length > 0) {
+              return (
+                <div className="filter-group">
+                  <label>Category</label>
+                  <select
+                    value={filters.category || ''}
+                    onChange={(e) => setFilters({ ...filters, category: e.target.value || undefined })}
+                    className="state-select"
+                  >
+                    <option value="">All Categories</option>
+                    {allCategories.map(c => (
+                      <option key={c.slug} value={c.slug}>{c.name}</option>
+                    ))}
+                  </select>
+                </div>
+              );
+            }
+            return null;
+          }
+          return categories.length > 0 ? (
+            <div className="filter-group">
+              <label>Category</label>
+              <select
+                value={filters.category || ''}
+                onChange={(e) => setFilters({ ...filters, category: e.target.value || undefined })}
+                className="state-select"
+              >
+                <option value="">All Categories</option>
+                {categories.map(c => (
+                  <option key={c.slug} value={c.slug}>{c.name}</option>
+                ))}
+              </select>
+            </div>
+          ) : null;
+        })()}
+
+        {/* Severity filter */}
         <div className="filter-group">
-          <label className="checkbox-label">
-            <input
-              type="checkbox"
-              checked={filters.non_immigrant_only}
-              onChange={(e) => setFilters({ ...filters, non_immigrant_only: e.target.checked })}
-            />
-            Non-immigrant only
-          </label>
+          <label>Severity</label>
+          <select
+            value={filters.severity || ''}
+            onChange={(e) => setFilters({ ...filters, severity: e.target.value || undefined })}
+            className="state-select"
+          >
+            <option value="">All Severities</option>
+            <option value="death">Death</option>
+            <option value="serious_injury">Serious Injury</option>
+            <option value="minor_injury">Minor Injury</option>
+            <option value="no_injury">No Injury</option>
+          </select>
         </div>
 
-        {/* Death only filter */}
-        <div className="filter-group">
-          <label className="checkbox-label">
-            <input
-              type="checkbox"
-              checked={filters.death_only || false}
-              onChange={(e) => setFilters({ ...filters, death_only: e.target.checked })}
-            />
-            Deaths only
-          </label>
-        </div>
+        {/* Event filter */}
+        {eventList.length > 0 && (
+          <div className="filter-group">
+            <label>Event</label>
+            <select
+              value={filters.event_id || ''}
+              onChange={(e) => setFilters({ ...filters, event_id: e.target.value || undefined })}
+              className="state-select"
+            >
+              <option value="">All Events</option>
+              {eventList.map(ev => (
+                <option key={ev.id} value={ev.id}>
+                  {ev.name} ({ev.incident_count})
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {/* Category breakdown widget */}
+        {stats && (
+          <div className="filter-group">
+            <label>Breakdown</label>
+            <div className="category-breakdown">
+              {Object.entries(stats.by_category || {}).map(([cat, count]) => {
+                const total = stats.total_incidents || 1;
+                const pct = Math.round((count / total) * 100);
+                const color = cat === 'enforcement' ? '#f97316' : cat === 'crime' ? '#3b82f6' : '#6b7280';
+                return (
+                  <div key={cat} className="category-breakdown-row">
+                    <span className="category-breakdown-label">{cat}</span>
+                    <div className="category-breakdown-bar">
+                      <div className="category-breakdown-fill" style={{ width: `${pct}%`, background: color }} />
+                    </div>
+                    <span className="category-breakdown-count">{count}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Date range filter */}
-        <div style={{ marginBottom: '16px', width: '100%' }}>
-          <div style={{ fontSize: '12px', fontWeight: 500, color: 'var(--text-secondary)', marginBottom: '6px' }}>Date Range</div>
-          <div style={{ display: 'flex', gap: '6px', alignItems: 'center', width: '100%', paddingRight: '8px', boxSizing: 'border-box' }}>
-            <input
-              type="date"
-              value={filters.date_start || ''}
-              onChange={(e) => setFilters({ ...filters, date_start: e.target.value || undefined })}
-              style={{ flex: 1, padding: '6px 8px', fontSize: '12px', border: '1px solid var(--border-color)', borderRadius: '4px', background: 'var(--bg-input)', color: 'var(--text-primary)', minWidth: 0 }}
-            />
-            <span style={{ color: 'var(--text-secondary)', fontSize: '12px' }}>to</span>
-            <input
-              type="date"
-              value={filters.date_end || ''}
-              onChange={(e) => setFilters({ ...filters, date_end: e.target.value || undefined })}
-              style={{ flex: 1, padding: '6px 8px', fontSize: '12px', border: '1px solid var(--border-color)', borderRadius: '4px', background: 'var(--bg-input)', color: 'var(--text-primary)', minWidth: 0 }}
-            />
+        <div className="filter-group">
+          <label>Date Range</label>
+          <div className="date-range">
+            <div className="date-range-row">
+              <span className="date-range-row-label">From</span>
+              <input
+                type="date"
+                value={filters.date_start || ''}
+                onChange={(e) => setFilters({ ...filters, date_start: e.target.value || undefined })}
+                className="date-input"
+              />
+            </div>
+            <div className="date-range-row">
+              <span className="date-range-row-label">To</span>
+              <input
+                type="date"
+                value={filters.date_end || ''}
+                onChange={(e) => setFilters({ ...filters, date_end: e.target.value || undefined })}
+                className="date-input"
+              />
+            </div>
           </div>
         </div>
 
@@ -745,105 +916,179 @@ function App() {
 
         <hr />
 
-        {/* Incident Details */}
-        <h2>Incident Details</h2>
-        {selectedIncident ? (
-          <div className="incident-detail">
-            <h3>
-              {selectedIncident.city}, {getStateDisplayName(selectedIncident)}
-            </h3>
-            {selectedIncident.victim_name && <p className="victim-name">{selectedIncident.victim_name}</p>}
-
-            <div className="detail-row">
-              <span className="label">Date:</span>
-              <span>{formatDate(selectedIncident.date)}</span>
-            </div>
-            <div className="detail-row">
-              <span className="label">Type:</span>
-              <span style={{ color: getTypeColor(selectedIncident.incident_type) }}>
-                {getTypeDisplayName(selectedIncident.incident_type)}
-              </span>
-            </div>
-            <div className="detail-row">
-              <span className="label">Category:</span>
-              <span>{selectedIncident.victim_category || 'Unknown'}</span>
-            </div>
-            <div className="detail-row">
-              <span className="label">Outcome:</span>
-              <span>{selectedIncident.outcome_category || 'Unknown'}</span>
-            </div>
-            <div className="detail-row">
-              <span className="label">Tier:</span>
-              <span>{selectedIncident.tier}</span>
-            </div>
-            <div className="detail-row">
-              <span className="label">ID:</span>
-              <span>{selectedIncident.id}</span>
-            </div>
-
-            {selectedIncident.notes && (
-              <div className="detail-section">
-                <strong>Notes:</strong>
-                <p>{selectedIncident.notes}</p>
+        {/* Quick actions for selected incident */}
+        {selectedIncident && (
+          <>
+            <h2>Selected</h2>
+            <div className="incident-detail">
+              <h3>{selectedIncident.city}, {getStateDisplayName(selectedIncident)}</h3>
+              <div className="detail-row">
+                <span className="label">Date:</span>
+                <span>{formatDate(selectedIncident.date)}</span>
               </div>
-            )}
-
-            {selectedIncident.source_url && (
-              <div className="detail-section">
-                <strong>Source:</strong>
-                <a href={selectedIncident.source_url} target="_blank" rel="noopener noreferrer">
-                  {selectedIncident.source_name || 'View Source'}
-                </a>
+              <div className="button-group">
+                {selectedIncident.lat && selectedIncident.lon && (
+                  <>
+                    <button className="zoom-btn" onClick={() => zoomToIncident(selectedIncident)}>
+                      Zoom to Location
+                    </button>
+                    <button className="street-view-btn" onClick={() => setViewTab('streetview')}>
+                      View Street View
+                    </button>
+                  </>
+                )}
+                <button className="clear-btn" onClick={() => setSelectedIncident(null)}>
+                  Clear Selection
+                </button>
               </div>
-            )}
-
-            {selectedIncident.linked_ids && selectedIncident.linked_ids.length > 0 && (
-              <div className="detail-section linked-section">
-                <strong>Related Reports ({selectedIncident.linked_ids.length})</strong>
-                <p className="linked-info">This incident may appear in multiple sources:</p>
-                <div className="linked-ids">
-                  {selectedIncident.linked_ids.map(linkedId => {
-                    const linkedIncident = incidents.find(i => i.id === linkedId);
-                    return (
-                      <div key={linkedId} className="linked-item">
-                        <span className="linked-id">{linkedId}</span>
-                        {linkedIncident && (
-                          <span className="linked-source">
-                            {linkedIncident.source_name || `Tier ${linkedIncident.tier}`}
-                          </span>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-
-            <div className="button-group">
-              {selectedIncident.lat && selectedIncident.lon && (
-                <>
-                  <button className="zoom-btn" onClick={() => zoomToIncident(selectedIncident)}>
-                    Zoom to Location
-                  </button>
-                  <button className="street-view-btn" onClick={() => setViewTab('streetview')}>
-                    View Street View
-                  </button>
-                </>
-              )}
-              <button className="clear-btn" onClick={() => setSelectedIncident(null)}>
-                Clear Selection
-              </button>
             </div>
-          </div>
-        ) : (
-          <p className="hint">Click a marker on the map to view details</p>
+          </>
         )}
       </aside>
+
+      {/* Bottom Detail Drawer — always rendered, animated via CSS */}
+      <div className={`detail-drawer-overlay ${drawerOpen && selectedIncident ? 'visible' : ''}`}
+        onClick={() => setSelectedIncident(null)} />
+      <div className={`detail-drawer ${drawerOpen && selectedIncident ? 'open' : ''}`}>
+        {selectedIncident && (
+          <>
+            <div className="detail-drawer-header">
+              <div className="detail-drawer-title">
+                <h3>{selectedIncident.city}, {getStateDisplayName(selectedIncident)}</h3>
+                {selectedIncident.victim_name && (
+                  <span className="detail-drawer-subtitle">{selectedIncident.victim_name}</span>
+                )}
+              </div>
+              <div className="detail-drawer-actions">
+                {selectedIncident.lat && selectedIncident.lon && (
+                  <button className="detail-drawer-action-btn" onClick={() => {
+                    setDrawerOpen(false);
+                    zoomToIncident(selectedIncident);
+                  }}>
+                    Zoom
+                  </button>
+                )}
+                <button className="detail-drawer-close" onClick={() => setSelectedIncident(null)}>&times;</button>
+              </div>
+            </div>
+            <div className="detail-drawer-body">
+              <div className="detail-drawer-columns">
+                <div className="detail-drawer-main">
+                  {extractionData ? (
+                    <ExtractionDetailView
+                      data={extractionData}
+                      articleContent={articleContent || undefined}
+                      sourceUrl={sourceUrl || undefined}
+                    />
+                  ) : (
+                    <IncidentDetailView
+                      incident={fullIncident || selectedIncident}
+                      extractedData={null}
+                      articleContent={articleContent || undefined}
+                      showSource={true}
+                    />
+                  )}
+                </div>
+                <div className="detail-drawer-side">
+                  {/* Connected Incidents */}
+                  <div className="connected-incidents">
+                    <h4>Connected Incidents</h4>
+
+                    {connectionsLoading && <p className="connected-loading">Loading connections...</p>}
+                    {!connectionsLoading && connections?.events && connections.events.length > 0 && (
+                      <div className="connected-events">
+                        {connections.events.map(ev => (
+                          <div key={ev.event_id} className="connected-event-group">
+                            <div className="connected-event-name">
+                              <span>{ev.event_name}</span>
+                              <button
+                                className="connected-event-map-btn"
+                                title="Show all incidents from this event on the map"
+                                onClick={() => {
+                                  setFilters(f => ({ ...f, event_id: ev.event_id }));
+                                  setSelectedIncident(null);
+                                }}
+                              >
+                                View on Map
+                              </button>
+                            </div>
+                            <div className="connected-event-siblings">
+                              {ev.incidents.map(sib => (
+                                <div
+                                  key={sib.id}
+                                  className="connected-incident-item"
+                                  onClick={() => {
+                                    const full = incidents.find(i => i.id === sib.id);
+                                    if (full) setSelectedIncident(full);
+                                  }}
+                                >
+                                  <span className="connected-incident-date">{sib.date?.split('T')[0] || '—'}</span>
+                                  <span className="connected-incident-location">
+                                    {sib.city}{sib.city && sib.state ? ', ' : ''}{sib.state}
+                                  </span>
+                                  {sib.incident_type && (
+                                    <span className="connected-incident-type">{sib.incident_type.replace(/_/g, ' ')}</span>
+                                  )}
+                                  {sib.outcome_category && (
+                                    <span className={`connected-incident-outcome ${sib.outcome_category === 'death' ? 'fatal' : ''}`}>
+                                      {sib.outcome_category}
+                                    </span>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {selectedIncident.linked_ids && selectedIncident.linked_ids.length > 0 && (
+                      <div className="connected-linked-reports">
+                        <div className="connected-section-label">Linked Reports ({selectedIncident.linked_ids.length})</div>
+                        {selectedIncident.linked_ids.map(linkedId => {
+                          const linkedInc = incidents.find(i => i.id === linkedId);
+                          return (
+                            <div
+                              key={linkedId}
+                              className="connected-incident-item"
+                              onClick={() => {
+                                if (linkedInc) setSelectedIncident(linkedInc);
+                              }}
+                              style={{ cursor: linkedInc ? 'pointer' : 'default' }}
+                            >
+                              {linkedInc ? (
+                                <>
+                                  <span className="connected-incident-date">{formatDate(linkedInc.date)}</span>
+                                  <span className="connected-incident-location">
+                                    {linkedInc.city}{linkedInc.city && linkedInc.state ? ', ' : ''}{getStateDisplayName(linkedInc)}
+                                  </span>
+                                  <span className="connected-incident-type">{linkedInc.source_name || `Tier ${linkedInc.tier}`}</span>
+                                </>
+                              ) : (
+                                <span className="connected-incident-id">{linkedId}</span>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {!connectionsLoading && (!connections?.events || connections.events.length === 0) &&
+                      (!selectedIncident.linked_ids || selectedIncident.linked_ids.length === 0) && (
+                      <p className="connected-empty">No connected incidents found.</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
 
       {/* Main Content */}
       <main className="main-content">
         <div className="header-row">
-          <h1>Immigration Incidents Dashboard</h1>
+          <h1>Sentinel</h1>
           <button
             className="dark-mode-btn"
             onClick={() => setDarkMode(!darkMode)}
@@ -852,41 +1097,72 @@ function App() {
             {darkMode ? 'Light' : 'Dark'}
           </button>
         </div>
-        <p className="subtitle">Tracking enforcement incidents and immigration-related crimes (Jan 2025 - Jan 2026)</p>
+        <p className="subtitle">Incident analysis and pattern detection</p>
 
         {/* Stats */}
         {stats && (
-          <div className="stats-grid">
-            <div className="stat-card">
-              <div className="stat-value">{stats.total_incidents}</div>
-              <div className="stat-label">Total Incidents</div>
-            </div>
-            <div className="stat-card">
-              <div className="stat-value">{stats.total_deaths}</div>
-              <div className="stat-label">Deaths</div>
-            </div>
-            <div className="stat-card enforcement">
-              <div className="stat-value">{stats.by_category?.enforcement || 0}</div>
-              <div className="stat-label">Enforcement</div>
-              {stats.category_deaths?.enforcement > 0 && (
-                <div className="stat-sub">{stats.category_deaths.enforcement} deaths</div>
-              )}
-            </div>
-            <div className="stat-card crime">
-              <div className="stat-value">{stats.by_category?.crime || 0}</div>
-              <div className="stat-label">Crime</div>
-              {stats.category_deaths?.crime > 0 && (
-                <div className="stat-sub">{stats.category_deaths.crime} deaths</div>
-              )}
-            </div>
-            <div className="stat-card">
-              <div className="stat-value">{stats.states_affected}</div>
-              <div className="stat-label">States Affected</div>
-            </div>
-            <div className="stat-card">
-              <div className="stat-value">{stats.non_immigrant_incidents}</div>
-              <div className="stat-label">Non-Immigrant</div>
-            </div>
+          <div className={`stats-section ${statsCollapsed ? 'stats-collapsed' : ''}`}>
+            <button className="stats-toggle-btn" onClick={toggleStats} title={statsCollapsed ? 'Expand stats' : 'Collapse stats'}>
+              {statsCollapsed ? '\u25BC' : '\u25B2'}
+            </button>
+            {statsCollapsed ? (
+              <div className="stats-bar-compact">
+                <span><strong>{stats.total_incidents}</strong> incidents</span>
+                <span><strong>{stats.incident_stats?.fatal_outcomes ?? 0}</strong> fatal</span>
+                <span><strong>{stats.incident_stats?.serious_injuries ?? 0}</strong> serious</span>
+                <span><strong>{stats.incident_stats?.events_tracked ?? 0}</strong> events</span>
+                <span>
+                  {stats.incident_stats?.avg_confidence != null
+                    ? <><strong>{(stats.incident_stats.avg_confidence * 100).toFixed(0)}%</strong> confidence</>
+                    : '—'}
+                </span>
+              </div>
+            ) : (
+              <div className="stats-grid">
+                <div className="stat-card">
+                  <div className="stat-value">{stats.total_incidents}</div>
+                  <div className="stat-label">Total Incidents</div>
+                </div>
+                <div className="stat-card">
+                  <div className="stat-value">{stats.incident_stats?.fatal_outcomes ?? 0}</div>
+                  <div className="stat-label">Fatal Outcomes</div>
+                </div>
+                <div className="stat-card">
+                  <div className="stat-value">{stats.incident_stats?.serious_injuries ?? 0}</div>
+                  <div className="stat-label">Serious Injuries</div>
+                </div>
+                <div className="stat-card">
+                  <div className="stat-value">
+                    {stats.incident_stats?.domain_counts
+                      ? Object.keys(stats.incident_stats.domain_counts).length
+                      : 0}
+                  </div>
+                  <div className="stat-label">Domains</div>
+                  {stats.incident_stats?.domain_counts && (
+                    <div className="stat-domain-bars">
+                      {Object.entries(stats.incident_stats.domain_counts).slice(0, 3).map(([name, count]) => (
+                        <div key={name} className="stat-domain-row">
+                          <span className="stat-domain-name">{name}</span>
+                          <span className="stat-domain-count">{count}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <div className="stat-card">
+                  <div className="stat-value">{stats.incident_stats?.events_tracked ?? 0}</div>
+                  <div className="stat-label">Events Tracked</div>
+                </div>
+                <div className="stat-card">
+                  <div className="stat-value">
+                    {stats.incident_stats?.avg_confidence != null
+                      ? `${(stats.incident_stats.avg_confidence * 100).toFixed(0)}%`
+                      : '—'}
+                  </div>
+                  <div className="stat-label">Avg Confidence</div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -941,6 +1217,57 @@ function App() {
             </div>
           )}
         </div>
+
+        {/* Event Detail Banner */}
+        {activeEvent && adminPanel === 'none' && (
+          <div className="event-banner">
+            <div className="event-banner-header">
+              <div className="event-banner-title">
+                <h3>{activeEvent.name}</h3>
+                <div className="event-banner-meta">
+                  {activeEvent.event_type && (
+                    <span className="event-banner-type">{activeEvent.event_type.replace(/_/g, ' ')}</span>
+                  )}
+                  <span className="event-banner-dates">
+                    {activeEvent.start_date?.split('T')[0]}
+                    {activeEvent.end_date && ` — ${activeEvent.end_date.split('T')[0]}`}
+                    {activeEvent.ongoing && ' (ongoing)'}
+                  </span>
+                  {activeEvent.primary_city && activeEvent.primary_state && (
+                    <span className="event-banner-location">{activeEvent.primary_city}, {activeEvent.primary_state}</span>
+                  )}
+                  <span className="event-banner-count">{activeEvent.incident_count} incident{activeEvent.incident_count !== 1 ? 's' : ''}</span>
+                </div>
+              </div>
+              <button className="event-banner-close" onClick={() => setFilters(f => ({ ...f, event_id: undefined }))}>
+                Clear Event
+              </button>
+            </div>
+            {activeEvent.ai_summary && (
+              <p className="event-banner-summary">{activeEvent.ai_summary}</p>
+            )}
+            {!activeEvent.ai_summary && activeEvent.description && (
+              <p className="event-banner-summary">{activeEvent.description}</p>
+            )}
+            {activeEvent.actors && activeEvent.actors.length > 0 && (
+              <div className="event-banner-actors">
+                {activeEvent.actors.map((actor, idx) => (
+                  <span key={`${actor.id}-${actor.role}-${idx}`} className={`event-banner-actor event-banner-actor-${actor.role}`}>
+                    {actor.canonical_name}
+                    <span className="event-banner-actor-role">{actor.role.replace(/_/g, ' ')}</span>
+                  </span>
+                ))}
+              </div>
+            )}
+            {activeEvent.tags && activeEvent.tags.length > 0 && (
+              <div className="event-banner-tags">
+                {activeEvent.tags.map(tag => (
+                  <span key={tag} className="event-banner-tag">{tag}</span>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Map View */}
         {/* Timeline Controls */}

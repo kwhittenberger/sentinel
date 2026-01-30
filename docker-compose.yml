@@ -1,19 +1,19 @@
 services:
   db:
     image: postgres:16-alpine
-    container_name: incident_tracker_db
+    container_name: sentinel_db
     restart: unless-stopped
     environment:
-      POSTGRES_DB: incident_tracker
-      POSTGRES_USER: incident_tracker_app
+      POSTGRES_DB: sentinel
+      POSTGRES_USER: sentinel
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devpassword}
     ports:
       - "5433:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - sentinel_data:/var/lib/postgresql/data
       - ./database/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U incident_tracker_app -d incident_tracker"]
+      test: ["CMD-SHELL", "pg_isready -U sentinel -d sentinel"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -22,10 +22,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: incident_tracker_backend
+    container_name: sentinel_backend
     restart: unless-stopped
     environment:
-      DATABASE_URL: postgresql://incident_tracker_app:${POSTGRES_PASSWORD:-devpassword}@db:5432/incident_tracker
+      DATABASE_URL: postgresql://sentinel:${POSTGRES_PASSWORD:-devpassword}@db:5432/sentinel
       USE_DATABASE: "true"
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       ENVIRONMENT: ${ENVIRONMENT:-development}
@@ -44,7 +44,7 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    container_name: incident_tracker_frontend
+    container_name: sentinel_frontend
     restart: unless-stopped
     ports:
       - "5173:5173"
@@ -58,4 +58,4 @@ services:
     command: npm run dev -- --host
 
 volumes:
-  postgres_data:
+  sentinel_data:

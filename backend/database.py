@@ -32,7 +32,7 @@ async def _init_connection(conn: Connection):
 # Database URL from environment
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql://incident_tracker_app:devpassword@localhost:5433/incident_tracker"
+    "postgresql://sentinel:devpassword@localhost:5433/sentinel"
 )
 
 # Global connection pool

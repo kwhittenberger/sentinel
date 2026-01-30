@@ -16,7 +16,7 @@ export function collectHighlights(
   fields: Array<[string, string | null | undefined]>
 ): HighlightEntry[] {
   return fields
-    .filter((entry): entry is [string, string] => !!entry[1] && entry[1].length > 2)
+    .filter((entry): entry is [string, string] => !!entry[1] && entry[1].length > 2 && entry[1].length < 200)
     .map(([label, value]) => ({ label, value }));
 }
 
@@ -43,7 +43,6 @@ export function collectHighlightsFromRecord(
     ['Victim Category', str('victim_category')],
     ['Immigration Status', str('offender_immigration_status') ?? str('immigration_status')],
     ['Offender Name', str('offender_name')],
-    ['Description', str('description')],
   ]);
 }
 
