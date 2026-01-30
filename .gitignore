@@ -45,3 +45,4 @@ celerybeat-schedule.db
 
 # Data pipeline cache
 data/.cache/
+.logs/
