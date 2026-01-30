@@ -5,4 +5,4 @@ set -a
 source .env
 set +a
 cd backend
-USE_DATABASE=true uvicorn main:app --host 127.0.0.1 --port 8000 --reload
+USE_DATABASE=true USE_CELERY=true uvicorn main:app --host 127.0.0.1 --port 8000 --reload

@@ -188,6 +188,43 @@ async def async_execute(query: str, *args):
 # ---------------------------------------------------------------------------
 
 
+async def _record_task_metric(
+    job_id: str,
+    task_name: str,
+    queue: str,
+    status: str,
+    started_at: datetime,
+    completed_at: datetime,
+    error: Optional[str] = None,
+    items_processed: int = 0,
+    metadata: Optional[dict] = None,
+):
+    """Record a task execution metric row."""
+    try:
+        pool = await get_pool()
+        duration_ms = int((completed_at - started_at).total_seconds() * 1000)
+        await pool.execute(
+            """
+            INSERT INTO task_metrics
+                (job_id, task_name, queue, status, started_at, completed_at,
+                 duration_ms, error, items_processed, metadata)
+            VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            """,
+            job_id,
+            task_name,
+            queue,
+            status,
+            started_at,
+            completed_at,
+            duration_ms,
+            error,
+            items_processed,
+            metadata or {},
+        )
+    except Exception as exc:
+        logger.warning(f"Failed to record task metric: {exc}")
+
+
 async def _run_task_lifecycle(
     job_id: str,
     celery_task_id: str,
@@ -198,14 +235,46 @@ async def _run_task_lifecycle(
 
     mark_started -> handler(job_id, params) -> mark_completed or mark_failed.
     This avoids creating multiple event loops (which breaks asyncpg pools).
+    Also records execution metrics in task_metrics.
     """
+    started_at = datetime.utcnow()
     await async_mark_job_started(job_id, celery_task_id)
+
+    # Resolve task name and queue from the job row
+    task_name = "unknown"
+    queue = "default"
+    try:
+        pool = await get_pool()
+        row = await pool.fetchrow(
+            "SELECT job_type, queue FROM background_jobs WHERE id = $1::uuid", job_id
+        )
+        if row:
+            task_name = row["job_type"]
+            queue = row.get("queue") or "default"
+    except Exception:
+        pass
+
     try:
         result = await handler(job_id, params)
+        completed_at = datetime.utcnow()
         await async_mark_job_completed(job_id, result.get("message", "Completed"))
+
+        items = result.get("items_processed") or result.get("total", 0)
+        await _record_task_metric(
+            job_id, task_name, queue, "completed",
+            started_at, completed_at,
+            items_processed=items,
+            metadata={"handler_result_keys": list(result.keys())},
+        )
         return result
     except Exception as exc:
+        completed_at = datetime.utcnow()
         await async_mark_job_failed(job_id, str(exc))
+        await _record_task_metric(
+            job_id, task_name, queue, "failed",
+            started_at, completed_at,
+            error=str(exc),
+        )
         raise
 
 

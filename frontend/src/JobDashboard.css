@@ -1,0 +1,379 @@
+/* Job Dashboard — uses app theme variables from App.css */
+
+.job-dashboard {
+  padding: 0;
+}
+
+.dashboard-header {
+  margin-bottom: 16px;
+}
+
+.dashboard-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.dashboard-title-row h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* WebSocket connection indicator */
+.ws-indicator {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.ws-indicator.connected {
+  background: rgba(34, 197, 94, 0.15);
+  color: var(--success-color);
+}
+
+.ws-indicator.disconnected {
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--danger-color);
+}
+
+/* Action messages */
+.jd-message {
+  margin-top: 8px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.jd-message.success {
+  background: rgba(34, 197, 94, 0.1);
+  color: var(--success-color);
+  border: 1px solid rgba(34, 197, 94, 0.2);
+}
+
+.jd-message.error {
+  background: rgba(239, 68, 68, 0.1);
+  color: var(--danger-color);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+}
+
+/* Sections — match .dashboard-card styling */
+.jd-section {
+  margin-bottom: 16px;
+  background: var(--bg-card);
+  border-radius: 8px;
+  padding: 16px 20px;
+  border: 1px solid var(--border-color);
+}
+
+.jd-section-title {
+  margin: 0 0 12px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.jd-count-badge {
+  background: var(--primary-color);
+  color: #fff;
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-weight: 700;
+}
+
+/* Quick Actions */
+.jd-quick-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* Queue Status Bar */
+.queue-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.queue-status-bar.compact {
+  gap: 6px;
+  font-size: 12px;
+}
+
+.queue-status-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.queue-pills {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.queue-pill {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border: 1.5px solid;
+  border-radius: 999px;
+  white-space: nowrap;
+  font-family: monospace;
+}
+
+.queue-pill.offline {
+  color: var(--danger-color);
+  border-color: var(--danger-color);
+}
+
+.queue-pill.loading {
+  color: var(--text-muted);
+  border-color: var(--border-color);
+}
+
+.queue-workers-badge {
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 2px 8px;
+  background: var(--bg-secondary);
+  border-radius: 4px;
+}
+
+/* Active Jobs Grid */
+.jd-active-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 12px;
+}
+
+.jd-job-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.jd-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.jd-card-type {
+  font-weight: 600;
+  text-transform: capitalize;
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+.jd-card-badges {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.jd-queue-badge {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(59, 130, 246, 0.12);
+  color: var(--primary-color);
+  font-weight: 600;
+}
+
+.jd-status-badge {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+/* Pipeline stage visualization */
+.jd-stages {
+  display: flex;
+  gap: 4px;
+  margin: 10px 0;
+  align-items: center;
+}
+
+.jd-stage-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.jd-stage-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.jd-stage-dot.pending {
+  background: var(--border-color);
+}
+
+.jd-stage-dot.running {
+  background: var(--primary-color);
+  animation: jd-pulse 1.2s ease-in-out infinite;
+}
+
+.jd-stage-dot.completed {
+  background: var(--success-color);
+}
+
+.jd-stage-dot.failed {
+  background: var(--danger-color);
+}
+
+.jd-stage-label {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.jd-stage-label.running {
+  color: var(--primary-color);
+  font-weight: 600;
+}
+
+.jd-stage-label.completed {
+  color: var(--success-color);
+}
+
+.jd-stage-label.failed {
+  color: var(--danger-color);
+}
+
+.jd-stage-connector {
+  width: 16px;
+  height: 2px;
+  background: var(--border-color);
+  flex-shrink: 0;
+}
+
+@keyframes jd-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+/* Progress bar */
+.jd-progress {
+  margin: 8px 0;
+}
+
+.jd-progress-bar {
+  height: 6px;
+  background: var(--border-color);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 4px;
+}
+
+.jd-progress-fill {
+  height: 100%;
+  background: var(--primary-color);
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.jd-progress-text {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-family: monospace;
+}
+
+.jd-card-message {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin: 6px 0;
+  line-height: 1.3;
+}
+
+.jd-card-meta {
+  display: flex;
+  gap: 16px;
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 8px;
+}
+
+.jd-card-actions {
+  margin-top: 10px;
+  display: flex;
+  gap: 6px;
+}
+
+/* Empty state */
+.jd-empty {
+  color: var(--text-muted);
+  font-size: 13px;
+  margin: 0;
+}
+
+/* History tabs */
+.jd-history-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+/* History table — matches .jobs-table from AdminPanel.css */
+.jd-history-table-wrap {
+  overflow-x: auto;
+}
+
+.jd-history-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  background: var(--bg-card);
+}
+
+.jd-history-table th {
+  text-align: left;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-color);
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+}
+
+.jd-history-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-color);
+  vertical-align: middle;
+  color: var(--text-primary);
+}
+
+.jd-history-table tbody tr:hover {
+  background: var(--bg-hover);
+}
+
+.jd-error-cell {
+  max-width: 200px;
+}
+
+.jd-error-text {
+  color: var(--danger-color);
+  font-size: 12px;
+  cursor: help;
+}
+
+.jd-action-cell {
+  white-space: nowrap;
+  display: flex;
+  gap: 4px;
+}

@@ -12,7 +12,8 @@ import {
 } from './api';
 import { SettingsPanel } from './SettingsPanel';
 import { IncidentBrowser } from './IncidentBrowser';
-import { JobManager } from './JobManager';
+import { JobDashboard } from './JobDashboard';
+import { QueueStatusBar } from './QueueStatusBar';
 import { AnalyticsDashboard } from './AnalyticsDashboard';
 import { BatchProcessing } from './BatchProcessing';
 import { QueueManager } from './QueueManager';
@@ -331,6 +332,9 @@ export function AdminPanel({ onClose, onRefresh }: AdminPanelProps) {
               <span>Deduplication</span>
             </div>
           </div>
+          <div className="sidebar-queue-status">
+            <QueueStatusBar compact />
+          </div>
         </div>
       </nav>
 
@@ -344,17 +348,9 @@ export function AdminPanel({ onClose, onRefresh }: AdminPanelProps) {
               <div className="page-actions">
                 <button
                   className="action-btn primary"
-                  onClick={() => handleOperation('pipeline', () => runFullPipeline(false))}
-                  disabled={!!operating}
+                  onClick={() => setView('jobs')}
                 >
-                  {operating === 'pipeline' ? 'Running...' : 'Run Full Pipeline'}
-                </button>
-                <button
-                  className="action-btn"
-                  onClick={() => handleOperation('fetch', () => runPipelineFetch())}
-                  disabled={!!operating}
-                >
-                  {operating === 'fetch' ? 'Fetching...' : 'Fetch New Data'}
+                  Open Job Dashboard
                 </button>
               </div>
             </div>
@@ -607,9 +603,9 @@ export function AdminPanel({ onClose, onRefresh }: AdminPanelProps) {
           <IncidentBrowser />
         )}
 
-        {/* Job Manager View */}
+        {/* Job Dashboard View */}
         {view === 'jobs' && (
-          <JobManager />
+          <JobDashboard />
         )}
 
         {/* Analytics Dashboard View */}

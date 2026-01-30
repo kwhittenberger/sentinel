@@ -6,7 +6,7 @@ Supports both ICE enforcement incidents and immigration-related crime cases.
 import os
 import uuid
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Query, HTTPException, Depends, Body
+from fastapi import FastAPI, Query, HTTPException, Depends, Body, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional, List
 import json
@@ -45,9 +45,17 @@ async def lifespan(app: FastAPI):
         else:
             logger.info("Celery mode enabled — skipping in-process job executor")
 
+        # Start WebSocket broadcast loop
+        from backend.jobs_ws import job_update_manager
+        await job_update_manager.start()
+
     yield
 
     if USE_DATABASE:
+        # Stop WebSocket broadcast loop
+        from backend.jobs_ws import job_update_manager
+        await job_update_manager.stop()
+
         if not USE_CELERY:
             # Stop in-process job executor
             from backend.services.job_executor import get_executor
@@ -3324,6 +3332,10 @@ async def create_job(
     if USE_CELERY:
         _dispatch_celery_task(job_type, str(job_id), params or {})
 
+    # Notify WebSocket clients
+    from backend.jobs_ws import job_update_manager
+    await job_update_manager.notify_job_changed(str(job_id))
+
     return {"success": True, "job_id": str(job_id)}
 
 
@@ -3390,7 +3402,183 @@ async def cancel_job(job_id: str):
         WHERE id = $2 AND status IN ('pending', 'running')
     """, datetime.utcnow(), job_uuid)
 
+    # Notify WebSocket clients
+    from backend.jobs_ws import job_update_manager
+    await job_update_manager.notify_job_changed(job_id)
+
     return {"success": True, "cancelled": job_id}
+
+
+@app.delete("/api/admin/jobs/{job_id}/delete")
+async def hard_delete_job(job_id: str):
+    """Hard-delete a terminal-state job (completed, failed, cancelled)."""
+    if not USE_DATABASE:
+        raise HTTPException(status_code=501, detail="Database not enabled")
+
+    from backend.database import execute, fetch as db_fetch
+
+    try:
+        job_uuid = uuid.UUID(job_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid job ID format")
+
+    rows = await db_fetch(
+        "SELECT status FROM background_jobs WHERE id = $1", job_uuid
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if rows[0]["status"] in ("pending", "running"):
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot delete active job. Cancel it first.",
+        )
+
+    await execute("DELETE FROM background_jobs WHERE id = $1", job_uuid)
+    return {"success": True, "deleted": job_id}
+
+
+@app.post("/api/admin/jobs/{job_id}/retry")
+async def retry_job(job_id: str):
+    """Re-create a failed job with the same type and params."""
+    if not USE_DATABASE:
+        raise HTTPException(status_code=501, detail="Database not enabled")
+
+    from backend.database import execute, fetch as db_fetch
+
+    try:
+        job_uuid = uuid.UUID(job_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid job ID format")
+
+    rows = await db_fetch(
+        "SELECT job_type, params, queue FROM background_jobs WHERE id = $1",
+        job_uuid,
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    original = rows[0]
+    new_id = uuid.uuid4()
+    queue = original.get("queue") or "default"
+
+    await execute("""
+        INSERT INTO background_jobs (id, job_type, status, params, created_at, queue)
+        VALUES ($1, $2, 'pending', $3, $4, $5)
+    """, new_id, original["job_type"], original.get("params") or {}, datetime.utcnow(), queue)
+
+    if USE_CELERY:
+        _dispatch_celery_task(original["job_type"], str(new_id), original.get("params") or {})
+
+    from backend.jobs_ws import job_update_manager
+    await job_update_manager.notify_job_changed(str(new_id))
+
+    return {"success": True, "new_job_id": str(new_id)}
+
+
+@app.post("/api/admin/jobs/{job_id}/unstick")
+async def unstick_job(job_id: str):
+    """Reset a stale running job back to pending and re-dispatch."""
+    if not USE_DATABASE:
+        raise HTTPException(status_code=501, detail="Database not enabled")
+
+    from backend.database import execute, fetch as db_fetch
+
+    try:
+        job_uuid = uuid.UUID(job_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid job ID format")
+
+    rows = await db_fetch(
+        "SELECT status, job_type, params, queue, celery_task_id FROM background_jobs WHERE id = $1",
+        job_uuid,
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    job = rows[0]
+    if job["status"] != "running":
+        raise HTTPException(status_code=409, detail="Only running jobs can be unstuck")
+
+    # Revoke the old Celery task if possible
+    if USE_CELERY and job.get("celery_task_id"):
+        from backend.celery_app import app as celery_app
+        celery_app.control.revoke(job["celery_task_id"], terminate=True, signal="SIGTERM")
+
+    await execute("""
+        UPDATE background_jobs
+        SET status = 'pending',
+            started_at = NULL,
+            celery_task_id = NULL,
+            error = 'Unstuck by admin',
+            retry_count = COALESCE(retry_count, 0) + 1
+        WHERE id = $1
+    """, job_uuid)
+
+    # Re-dispatch
+    if USE_CELERY:
+        _dispatch_celery_task(job["job_type"], job_id, job.get("params") or {})
+
+    from backend.jobs_ws import job_update_manager
+    await job_update_manager.notify_job_changed(job_id)
+
+    return {"success": True, "unstuck": job_id}
+
+
+# =====================
+# WebSocket: Job Updates
+# =====================
+
+
+@app.websocket("/ws/jobs")
+async def websocket_jobs(ws: WebSocket):
+    """Real-time job status stream."""
+    from backend.jobs_ws import job_update_manager
+
+    await job_update_manager.connect(ws)
+    try:
+        while True:
+            # Keep connection alive; client may send pings
+            await ws.receive_text()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        await job_update_manager.disconnect(ws)
+
+
+# =====================
+# Metrics Endpoints
+# =====================
+
+
+@app.get("/api/metrics/overview")
+async def metrics_overview():
+    """Queue and worker stats via Celery inspect (cached 5s)."""
+    if not USE_CELERY:
+        return {
+            "queues": {},
+            "workers": {},
+            "totals": {"active_tasks": 0, "reserved_tasks": 0, "total_workers": 0},
+        }
+    from backend.metrics import get_metrics_overview
+    return await get_metrics_overview()
+
+
+@app.get("/api/metrics/task-performance")
+async def metrics_task_performance(period: str = Query("24h")):
+    """Per-task performance stats from task_metrics table."""
+    if not USE_DATABASE:
+        return {"tasks": []}
+
+    # Parse period string (e.g. "24h", "7d")
+    hours = 24
+    if period.endswith("h"):
+        hours = int(period[:-1])
+    elif period.endswith("d"):
+        hours = int(period[:-1]) * 24
+
+    from backend.metrics import get_task_performance
+    return await get_task_performance(hours)
 
 
 @app.get("/api/admin/queue/{article_id}/suggestions")

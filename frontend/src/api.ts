@@ -11,6 +11,7 @@ import type {
   DomainSummary,
   EventListItem,
   IncidentConnections,
+  QueueMetrics,
 } from './types';
 
 const API_BASE = '/api';
@@ -536,5 +537,50 @@ export async function fetchPipelineStages(): Promise<{
   description: string | null; default_order: number; is_active: boolean;
 }[]> {
   const response = await fetch(`${API_BASE}/admin/pipeline/stages`);
+  return response.json();
+}
+
+// Metrics API functions
+export async function fetchMetricsOverview(): Promise<QueueMetrics> {
+  const response = await fetch(`${API_BASE}/metrics/overview`);
+  return response.json();
+}
+
+export async function fetchTaskPerformance(period = '24h'): Promise<{ tasks: { name: string; total: number; successful: number; failed: number; avg_duration_ms: number; p95_duration_ms: number; total_items: number }[] }> {
+  const response = await fetch(`${API_BASE}/metrics/task-performance?period=${period}`);
+  return response.json();
+}
+
+// Enhanced job action API functions
+export async function deleteJob(jobId: string): Promise<{ success: boolean; deleted: string }> {
+  const response = await fetch(`${API_BASE}/admin/jobs/${jobId}/delete`, {
+    method: 'DELETE',
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ detail: 'Delete failed' }));
+    throw new Error(err.detail || 'Delete failed');
+  }
+  return response.json();
+}
+
+export async function retryJob(jobId: string): Promise<{ success: boolean; new_job_id: string }> {
+  const response = await fetch(`${API_BASE}/admin/jobs/${jobId}/retry`, {
+    method: 'POST',
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ detail: 'Retry failed' }));
+    throw new Error(err.detail || 'Retry failed');
+  }
+  return response.json();
+}
+
+export async function unstickJob(jobId: string): Promise<{ success: boolean; unstuck: string }> {
+  const response = await fetch(`${API_BASE}/admin/jobs/${jobId}/unstick`, {
+    method: 'POST',
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ detail: 'Unstick failed' }));
+    throw new Error(err.detail || 'Unstick failed');
+  }
   return response.json();
 }

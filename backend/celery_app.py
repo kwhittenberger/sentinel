@@ -74,6 +74,7 @@ app.conf.task_routes = {
     "backend.tasks.pipeline_tasks.run_full_pipeline": {"queue": "default"},
     "backend.tasks.scheduled_tasks.scheduled_fetch": {"queue": "fetch"},
     "backend.tasks.scheduled_tasks.cleanup_stale_jobs": {"queue": "default"},
+    "backend.tasks.scheduled_tasks.aggregate_metrics": {"queue": "default"},
 }
 
 # ---------------------------------------------------------------------------
@@ -87,6 +88,10 @@ app.conf.beat_schedule = {
     "cleanup-stale-jobs": {
         "task": "backend.tasks.scheduled_tasks.cleanup_stale_jobs",
         "schedule": crontab(minute="*/15"),  # Every 15 minutes
+    },
+    "aggregate-metrics": {
+        "task": "backend.tasks.scheduled_tasks.aggregate_metrics",
+        "schedule": crontab(minute="*/5"),  # Every 5 minutes
     },
 }
 

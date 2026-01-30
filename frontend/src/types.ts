@@ -385,6 +385,26 @@ export interface Job {
   started_at?: string;
   completed_at?: string;
   error?: string;
+  retry_count?: number;
+  max_retries?: number;
+  queue?: string;
+  priority?: number;
+  celery_task_id?: string;
+}
+
+export interface QueueMetrics {
+  queues: Record<string, { active: number; reserved: number; workers: string[] }>;
+  workers: Record<string, { status: string; active_tasks: number; tasks_completed: number }>;
+  totals: { active_tasks: number; reserved_tasks: number; total_workers: number };
+  error?: string;
+}
+
+export interface JobStageProgress {
+  name: string;
+  label: string;
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  progress?: number;
+  total?: number;
 }
 
 // Settings types

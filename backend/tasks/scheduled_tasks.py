@@ -153,3 +153,68 @@ def cleanup_stale_jobs(self):
     except Exception as exc:
         logger.error(f"Stale job cleanup failed: {exc}")
         raise
+
+
+async def _async_aggregate_metrics() -> dict:
+    """Aggregate raw task_metrics into 5-minute period buckets."""
+    # Find the latest aggregated period to avoid re-processing
+    latest = await async_fetch("""
+        SELECT MAX(period_end) AS latest FROM task_metrics_aggregate
+    """)
+    # Default: aggregate from 24h ago if no prior aggregation
+    from_time = latest[0]["latest"] if latest and latest[0]["latest"] else None
+    if from_time is None:
+        from_time = datetime.utcnow() - __import__("datetime").timedelta(hours=24)
+
+    result = await async_execute("""
+        INSERT INTO task_metrics_aggregate
+            (period_start, period_end, task_name,
+             total_runs, successful, failed,
+             avg_duration_ms, p95_duration_ms, total_items_processed)
+        SELECT
+            date_trunc('hour', completed_at)
+                + INTERVAL '5 min' * FLOOR(EXTRACT(MINUTE FROM completed_at) / 5)
+                AS period_start,
+            date_trunc('hour', completed_at)
+                + INTERVAL '5 min' * (FLOOR(EXTRACT(MINUTE FROM completed_at) / 5) + 1)
+                AS period_end,
+            task_name,
+            COUNT(*),
+            COUNT(*) FILTER (WHERE status = 'completed'),
+            COUNT(*) FILTER (WHERE status = 'failed'),
+            AVG(duration_ms)::INTEGER,
+            PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY duration_ms)::INTEGER,
+            SUM(items_processed)
+        FROM task_metrics
+        WHERE completed_at > $1
+        GROUP BY period_start, period_end, task_name
+        ON CONFLICT (period_start, task_name) DO UPDATE SET
+            total_runs = EXCLUDED.total_runs,
+            successful = EXCLUDED.successful,
+            failed = EXCLUDED.failed,
+            avg_duration_ms = EXCLUDED.avg_duration_ms,
+            p95_duration_ms = EXCLUDED.p95_duration_ms,
+            total_items_processed = EXCLUDED.total_items_processed
+    """, from_time)
+
+    return {"status": "aggregated", "result": str(result)}
+
+
+@app.task(
+    bind=True,
+    name="backend.tasks.scheduled_tasks.aggregate_metrics",
+    acks_late=True,
+    soft_time_limit=60,
+    time_limit=120,
+)
+def aggregate_metrics(self):
+    """Periodically aggregate task_metrics into summary buckets."""
+    logger.info("Metrics aggregation starting")
+    _db._pool = None  # Force fresh pool
+    try:
+        result = asyncio.run(_async_aggregate_metrics())
+        logger.info(f"Metrics aggregation completed: {result}")
+        return result
+    except Exception as exc:
+        logger.error(f"Metrics aggregation failed: {exc}")
+        raise
