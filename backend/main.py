@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 # Check if we should use database
 USE_DATABASE = os.getenv("USE_DATABASE", "false").lower() == "true"
+USE_CELERY = os.getenv("USE_CELERY", "false").lower() == "true"
 
 
 @asynccontextmanager
@@ -35,20 +36,24 @@ async def lifespan(app: FastAPI):
         await get_pool()
         logger.info("Database connection pool initialized")
 
-        # Start background job executor
-        from backend.services.job_executor import get_executor
-        executor = get_executor()
-        await executor.start()
-        logger.info("Background job executor started")
+        if not USE_CELERY:
+            # Start in-process job executor (legacy fallback)
+            from backend.services.job_executor import get_executor
+            executor = get_executor()
+            await executor.start()
+            logger.info("Background job executor started (in-process)")
+        else:
+            logger.info("Celery mode enabled — skipping in-process job executor")
 
     yield
 
     if USE_DATABASE:
-        # Stop job executor
-        from backend.services.job_executor import get_executor
-        executor = get_executor()
-        await executor.stop()
-        logger.info("Background job executor stopped")
+        if not USE_CELERY:
+            # Stop in-process job executor
+            from backend.services.job_executor import get_executor
+            executor = get_executor()
+            await executor.stop()
+            logger.info("Background job executor stopped")
 
         from backend.database import close_pool
         await close_pool()
@@ -3228,9 +3233,13 @@ async def list_jobs(
 
     from backend.database import fetch
 
+    _JOB_COLS = """id, job_type, status, progress, total, message,
+            created_at, started_at, completed_at, error,
+            celery_task_id, retry_count, max_retries, queue, priority"""
+
     if status:
-        query = """
-            SELECT id, job_type, status, progress, total, message, created_at, started_at, completed_at, error
+        query = f"""
+            SELECT {_JOB_COLS}
             FROM background_jobs
             WHERE status = $1
             ORDER BY created_at DESC
@@ -3238,8 +3247,8 @@ async def list_jobs(
         """
         rows = await fetch(query, status, limit)
     else:
-        query = """
-            SELECT id, job_type, status, progress, total, message, created_at, started_at, completed_at, error
+        query = f"""
+            SELECT {_JOB_COLS}
             FROM background_jobs
             ORDER BY created_at DESC
             LIMIT $1
@@ -3258,6 +3267,29 @@ async def list_jobs(
     return {"jobs": jobs, "total": len(jobs)}
 
 
+def _dispatch_celery_task(job_type: str, job_id: str, params: dict):
+    """Send a job to the appropriate Celery task queue."""
+    from backend.tasks.fetch_tasks import run_fetch
+    from backend.tasks.extraction_tasks import run_process, run_batch_extract
+    from backend.tasks.enrichment_tasks import run_batch_enrich, run_enrichment
+    from backend.tasks.pipeline_tasks import run_full_pipeline
+
+    _TASK_MAP = {
+        "fetch": run_fetch,
+        "process": run_process,
+        "batch_extract": run_batch_extract,
+        "batch_enrich": run_batch_enrich,
+        "cross_reference_enrich": run_enrichment,
+        "full_pipeline": run_full_pipeline,
+    }
+
+    task_fn = _TASK_MAP.get(job_type)
+    if task_fn is None:
+        logger.warning(f"No Celery task mapped for job_type={job_type}")
+        return
+    task_fn.delay(job_id, params)
+
+
 @app.post("/api/admin/jobs")
 async def create_job(
     job_type: str = Body(..., embed=True),
@@ -3271,11 +3303,26 @@ async def create_job(
     import uuid
     from datetime import datetime
 
+    # Map job_type to Celery queue name
+    _QUEUE_MAP = {
+        "fetch": "fetch",
+        "process": "extraction",
+        "batch_extract": "extraction",
+        "batch_enrich": "enrichment",
+        "cross_reference_enrich": "enrichment",
+        "full_pipeline": "default",
+    }
+
     job_id = uuid.uuid4()
+    queue = _QUEUE_MAP.get(job_type, "default")
+
     await execute("""
-        INSERT INTO background_jobs (id, job_type, status, params, created_at)
-        VALUES ($1, $2, 'pending', $3, $4)
-    """, job_id, job_type, params or {}, datetime.utcnow())
+        INSERT INTO background_jobs (id, job_type, status, params, created_at, queue)
+        VALUES ($1, $2, 'pending', $3, $4, $5)
+    """, job_id, job_type, params or {}, datetime.utcnow(), queue)
+
+    if USE_CELERY:
+        _dispatch_celery_task(job_type, str(job_id), params or {})
 
     return {"success": True, "job_id": str(job_id)}
 
@@ -3316,7 +3363,7 @@ async def cancel_job(job_id: str):
     if not USE_DATABASE:
         raise HTTPException(status_code=501, detail="Database not enabled")
 
-    from backend.database import execute
+    from backend.database import execute, fetch as db_fetch
     import uuid
     from datetime import datetime
 
@@ -3324,6 +3371,18 @@ async def cancel_job(job_id: str):
         job_uuid = uuid.UUID(job_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid job ID format")
+
+    # If Celery mode, revoke the task before updating DB
+    if USE_CELERY:
+        rows = await db_fetch(
+            "SELECT celery_task_id FROM background_jobs WHERE id = $1", job_uuid
+        )
+        if rows and rows[0].get("celery_task_id"):
+            from backend.celery_app import app as celery_app
+
+            celery_app.control.revoke(
+                rows[0]["celery_task_id"], terminate=True, signal="SIGTERM"
+            )
 
     result = await execute("""
         UPDATE background_jobs

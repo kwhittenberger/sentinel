@@ -14,6 +14,11 @@ interface Job {
   started_at?: string;
   completed_at?: string;
   error?: string;
+  retry_count?: number;
+  max_retries?: number;
+  queue?: string;
+  priority?: number;
+  celery_task_id?: string;
 }
 
 interface JobManagerProps {
@@ -204,6 +209,10 @@ export function JobManager({ onClose }: JobManagerProps) {
                   <div className="job-meta">
                     <span>Created: {formatDate(job.created_at)}</span>
                     {job.started_at && <span>Started: {formatDate(job.started_at)}</span>}
+                    {job.queue && <span>Queue: {job.queue}</span>}
+                    {(job.retry_count ?? 0) > 0 && (
+                      <span>Retries: {job.retry_count}/{job.max_retries ?? 3}</span>
+                    )}
                   </div>
                   <div className="job-actions">
                     <button
@@ -232,6 +241,8 @@ export function JobManager({ onClose }: JobManagerProps) {
                   <th>Type</th>
                   <th>Status</th>
                   <th>Progress</th>
+                  <th>Queue</th>
+                  <th>Retries</th>
                   <th>Created</th>
                   <th>Completed</th>
                   <th>Error</th>
@@ -248,6 +259,12 @@ export function JobManager({ onClose }: JobManagerProps) {
                     </td>
                     <td>
                       {job.total ? `${job.progress || 0}/${job.total}` : '-'}
+                    </td>
+                    <td>{job.queue || '-'}</td>
+                    <td>
+                      {(job.retry_count ?? 0) > 0
+                        ? `${job.retry_count}/${job.max_retries ?? 3}`
+                        : '-'}
                     </td>
                     <td>{formatDate(job.created_at)}</td>
                     <td>{job.completed_at ? formatDate(job.completed_at) : '-'}</td>

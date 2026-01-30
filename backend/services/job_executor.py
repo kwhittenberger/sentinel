@@ -1,5 +1,11 @@
-"""Background job executor service."""
+"""Background job executor service.
+
+DEPRECATED: This in-process polling executor is the legacy fallback used when
+USE_CELERY=false. New task logic lives in backend/tasks/. This module is
+retained for environments that cannot run Redis/Celery.
+"""
 import asyncio
+import hashlib
 import uuid
 from datetime import datetime
 from typing import Optional, Callable, Dict, Any
@@ -156,28 +162,46 @@ class JobExecutor:
                     parsed = feedparser.parse(response.text)
 
                 for entry in parsed.entries[:20]:  # Limit per feed
-                    # Check if already exists
+                    link = entry.get('link', '')
+                    if not link:
+                        continue
+
+                    # Check if URL already exists
                     existing = await fetch("""
                         SELECT id FROM ingested_articles WHERE source_url = $1
-                    """, entry.get('link', ''))
+                    """, link)
+                    if existing:
+                        continue
 
-                    if not existing and entry.get('link'):
-                        article_id = uuid.uuid4()
-                        await execute("""
-                            INSERT INTO ingested_articles (
-                                id, source_url, title, content, source_name,
-                                published_date, fetched_at, status
-                            ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending')
-                        """,
-                            article_id,
-                            entry.get('link', ''),
-                            entry.get('title', '')[:500],
-                            entry.get('summary', entry.get('description', ''))[:10000],
-                            feed['name'],
-                            datetime.utcnow(),  # TODO: parse entry.published
-                            datetime.utcnow()
-                        )
-                        total_fetched += 1
+                    # Check content hash to catch syndicated duplicates
+                    raw_content = entry.get('summary', entry.get('description', ''))[:10000]
+                    if raw_content:
+                        content_hash = hashlib.md5(raw_content.encode()).hexdigest()
+                        hash_exists = await fetch("""
+                            SELECT id FROM ingested_articles WHERE content_hash = $1
+                        """, content_hash)
+                        if hash_exists:
+                            continue
+                    else:
+                        content_hash = None
+
+                    article_id = uuid.uuid4()
+                    await execute("""
+                        INSERT INTO ingested_articles (
+                            id, source_url, title, content, content_hash, source_name,
+                            published_date, fetched_at, status
+                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending')
+                    """,
+                        article_id,
+                        link,
+                        entry.get('title', '')[:500],
+                        raw_content,
+                        content_hash,
+                        feed['name'],
+                        datetime.utcnow(),  # TODO: parse entry.published
+                        datetime.utcnow()
+                    )
+                    total_fetched += 1
 
                 # Update last_fetched
                 await execute("""
