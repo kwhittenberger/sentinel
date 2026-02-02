@@ -1275,7 +1275,7 @@ async def bulk_approve(
 
     # Get articles in tier
     query = f"""
-        SELECT id, extracted_data, source_url, extraction_confidence
+        SELECT id, title, extracted_data, source_url, extraction_confidence
         FROM ingested_articles
         WHERE status IN ('pending', 'in_review')
           AND ({tier_filters[tier]})
@@ -1289,6 +1289,7 @@ async def bulk_approve(
 
     approved_count = 0
     errors = 0
+    error_details = []
     incident_ids = []
 
     for row in rows:
@@ -1302,15 +1303,17 @@ async def bulk_approve(
             except (ValueError, TypeError):
                 extracted_data = {}
 
-        # Determine category from extracted data (no merge_info in bulk path)
+        # Extract merge_info (persisted in extracted_data by the extraction pipeline)
         from backend.services.stage2_selector import resolve_category_from_merge_info
-        row_category = resolve_category_from_merge_info(None, extracted_data, default=category or "crime")
+        row_merge_info = extracted_data.pop("merge_info", None)
+        row_category = resolve_category_from_merge_info(row_merge_info, extracted_data, default=category or "crime")
 
         try:
             result = await svc.create_incident_from_extraction(
                 extracted_data=extracted_data,
                 article=dict(row),
                 category=row_category,
+                merge_info=row_merge_info,
             )
             incident_id = result["incident_id"]
 
@@ -1331,12 +1334,14 @@ async def bulk_approve(
                 SET status = 'error', rejection_reason = $1, reviewed_at = $2
                 WHERE id = $3
             """, f"Bulk approve error: {str(e)[:400]}", datetime.utcnow(), article_id)
+            error_details.append(f"{row.get('title', article_id)}: {str(e)[:200]}")
             errors += 1
 
     return {
         "success": True,
         "approved_count": approved_count,
         "errors": errors,
+        "error_details": error_details,
         "incident_ids": incident_ids,
     }
 
@@ -1443,9 +1448,10 @@ async def auto_approve_extracted(data: dict = Body(...)):
             except (ValueError, TypeError):
                 extracted_data = {}
 
-        # Determine category from extracted data (no merge_info in auto-approve path)
+        # Extract merge_info (persisted in extracted_data by the extraction pipeline)
         from backend.services.stage2_selector import resolve_category_from_merge_info
-        row_category = resolve_category_from_merge_info(None, extracted_data)
+        row_merge_info = extracted_data.pop("merge_info", None)
+        row_category = resolve_category_from_merge_info(row_merge_info, extracted_data)
 
         article_dict = {
             "id": article_id,
@@ -1474,6 +1480,7 @@ async def auto_approve_extracted(data: dict = Body(...)):
                         extracted_data=extracted_data,
                         article=article_dict,
                         category=row_category,
+                        merge_info=row_merge_info,
                     )
                     incident_id = inc_result["incident_id"]
                     await pool.execute("""
@@ -2145,11 +2152,14 @@ async def approve_article(
     # Create incident via the creation service
     from backend.services.incident_creation_service import get_incident_creation_service
     svc = get_incident_creation_service()
+    # Pop merge_info from extracted_data so it doesn't leak into incident fields
+    approve_merge_info = extracted_data.pop("merge_info", None) or merge_info
     result = await svc.create_incident_from_extraction(
         extracted_data=extracted_data,
         article=dict(article),
         category=category,
         overrides=overrides,
+        merge_info=approve_merge_info,
     )
     incident_id = result["incident_id"]
 
@@ -5729,6 +5739,10 @@ async def two_stage_batch_extract(data: dict = Body(...)):
             # Passing a pre-serialized string would cause double-serialization.
             clean_data = json.loads(json.dumps(merged_data, default=str))
 
+            # Persist merge_info so schema identity survives to approval time
+            if merge_info:
+                clean_data["merge_info"] = json.loads(json.dumps(merge_info, default=str))
+
             # Update ingested_articles with merged extraction + clear errors
             await pool.execute("""
                 UPDATE ingested_articles
@@ -5783,6 +5797,7 @@ async def two_stage_batch_extract(data: dict = Body(...)):
                         extracted_data=merged_data,
                         article=article_dict,
                         category=row_category,
+                        merge_info=merge_info,
                     )
                     incident_id = inc_result["incident_id"]
                     await pool.execute("""

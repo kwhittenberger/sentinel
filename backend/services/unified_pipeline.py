@@ -263,6 +263,10 @@ class UnifiedPipeline:
                 merged = select_and_merge_stage2(pipeline_result.get('stage2_results', []))
                 if merged and merged.get('extracted_data'):
                     article['extracted_data'] = merged['extracted_data']
+                    # Persist merge_info inside extracted_data so schema
+                    # identity survives to approval/incident-creation time
+                    if merged.get('merge_info'):
+                        article['extracted_data']['merge_info'] = merged['merge_info']
                     result.extraction_result['merge_info'] = merged.get('merge_info')
 
             # Step 3: Auto-Approval (uses merged Stage 2 extraction)

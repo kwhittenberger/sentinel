@@ -333,6 +333,7 @@ def _merge_extracted_data(
     base_conf = _get_confidence(base_result)
     sources = [{
         "schema_name": base_schema,
+        "schema_id": base_result.get("schema_id", ""),
         "domain_slug": base_result.get("domain_slug", ""),
         "category_slug": base_result.get("category_slug", ""),
         "confidence": round(base_conf, 2),
@@ -372,6 +373,7 @@ def _merge_extracted_data(
 
         sources.append({
             "schema_name": r_schema,
+            "schema_id": r.get("schema_id", ""),
             "domain_slug": r.get("domain_slug", ""),
             "category_slug": r.get("category_slug", ""),
             "confidence": round(r_conf, 2),
@@ -438,6 +440,7 @@ def select_and_merge_stage2(
             "merge_info": {
                 "sources": [{
                     "schema_name": result.get("schema_name", ""),
+                    "schema_id": result.get("schema_id", ""),
                     "domain_slug": result.get("domain_slug", ""),
                     "category_slug": result.get("category_slug", ""),
                     "confidence": round(_get_confidence(result), 2),

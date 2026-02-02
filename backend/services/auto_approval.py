@@ -69,7 +69,7 @@ class CrimeApprovalConfig(ApprovalConfig):
     """Category-specific config for crime incidents (standard threshold)."""
     min_confidence_auto_approve: float = 0.85
     required_fields: List[str] = field(default_factory=lambda: [
-        'date', 'state', 'incident_type', 'offender_immigration_status'
+        'date', 'state', 'incident_type'
     ])
     field_confidence_threshold: float = 0.70
 

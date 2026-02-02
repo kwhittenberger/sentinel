@@ -214,10 +214,10 @@ export function BatchProcessing({ onClose, onRefresh, hideOpsBar }: BatchProcess
         loadTieredQueue();
         onRefresh?.();
       } else {
-        setMessage({ type: 'error', text: data.error || 'Failed to approve' });
+        setMessage({ type: 'error', text: data.error || data.detail || 'Failed to approve' });
       }
-    } catch {
-      setMessage({ type: 'error', text: 'Failed to approve' });
+    } catch (err) {
+      setMessage({ type: 'error', text: `Failed to approve: ${err instanceof Error ? err.message : 'Network error'}` });
     } finally {
       setProcessing(false);
     }
@@ -260,10 +260,11 @@ export function BatchProcessing({ onClose, onRefresh, hideOpsBar }: BatchProcess
         setRejectReason('');
         loadTieredQueue();
       } else {
-        setMessage({ type: 'error', text: 'Failed to reject' });
+        const data = await response.json().catch(() => null);
+        setMessage({ type: 'error', text: `Failed to reject: ${data?.detail || data?.error || `HTTP ${response.status}`}` });
       }
-    } catch {
-      setMessage({ type: 'error', text: 'Failed to reject' });
+    } catch (err) {
+      setMessage({ type: 'error', text: `Failed to reject: ${err instanceof Error ? err.message : 'Network error'}` });
     } finally {
       setProcessing(false);
     }
@@ -282,16 +283,25 @@ export function BatchProcessing({ onClose, onRefresh, hideOpsBar }: BatchProcess
           limit: 100,
         }),
       });
-      if (response.ok) {
-        const data = await response.json();
-        setMessage({ type: 'success', text: `Approved ${data.approved_count} items` });
+      const data = await response.json().catch(() => null);
+      if (response.ok && data) {
+        if (data.errors > 0) {
+          const details = (data.error_details || []).join('\n');
+          setMessage({
+            type: 'error',
+            text: `Approved ${data.approved_count} items, ${data.errors} failed:\n${details}`,
+          });
+        } else {
+          setMessage({ type: 'success', text: `Approved ${data.approved_count} items` });
+        }
         loadTieredQueue();
         onRefresh?.();
       } else {
-        setMessage({ type: 'error', text: 'Bulk approve failed' });
+        const detail = data?.detail || data?.message || `HTTP ${response.status}`;
+        setMessage({ type: 'error', text: `Bulk approve failed: ${detail}` });
       }
-    } catch {
-      setMessage({ type: 'error', text: 'Bulk approve failed' });
+    } catch (err) {
+      setMessage({ type: 'error', text: `Bulk approve failed: ${err instanceof Error ? err.message : 'Network error'}` });
     } finally {
       setProcessing(false);
     }
@@ -313,16 +323,17 @@ export function BatchProcessing({ onClose, onRefresh, hideOpsBar }: BatchProcess
           limit: 100,
         }),
       });
-      if (response.ok) {
-        const data = await response.json();
+      const data = await response.json().catch(() => null);
+      if (response.ok && data) {
         setMessage({ type: 'success', text: `Rejected ${data.rejected_count} items` });
         setRejectReason('');
         loadTieredQueue();
       } else {
-        setMessage({ type: 'error', text: 'Bulk reject failed' });
+        const detail = data?.detail || data?.message || `HTTP ${response.status}`;
+        setMessage({ type: 'error', text: `Bulk reject failed: ${detail}` });
       }
-    } catch {
-      setMessage({ type: 'error', text: 'Bulk reject failed' });
+    } catch (err) {
+      setMessage({ type: 'error', text: `Bulk reject failed: ${err instanceof Error ? err.message : 'Network error'}` });
     } finally {
       setProcessing(false);
     }

@@ -77,40 +77,63 @@ AGENCY_NORMALIZE: Dict[str, str] = {
 class IncidentCreationService:
     """Reusable service that creates a fully-populated incident from extraction data."""
 
-    # Cache of category_slug → required_fields list (loaded from DB on first use)
-    _required_fields_cache: Dict[str, List[str]] = {}
-
-    # Hardcoded fallbacks when DB is unavailable
-    _FALLBACK_REQUIRED: Dict[str, List[str]] = {
-        'enforcement': ['date', 'state', 'incident_type', 'victim_category', 'outcome_category'],
-        'crime': ['date', 'state', 'incident_type', 'offender_immigration_status'],
-    }
+    # Universal minimum required fields when no schema info is available
     _DEFAULT_REQUIRED: List[str] = ['date', 'state']
 
-    async def _get_required_fields_for_category(self, category: str) -> List[str]:
-        """Fetch required_fields from event_categories table, with hardcoded fallback."""
-        if category in self._required_fields_cache:
-            return self._required_fields_cache[category]
+    # Only validate fields that the creation service actually checks
+    _VALIDATABLE_FIELDS = {'date', 'state', 'incident_type', 'victim_category', 'outcome_category'}
+
+    async def _get_required_fields(self, merge_info: Optional[Dict[str, Any]]) -> List[str]:
+        """Derive required fields from the extraction schema(s) that produced the data.
+
+        When merge_info has sources with schema_ids, query extraction_schemas
+        for each contributing schema's required_fields and return the union.
+        Falls back to universal minimums for legacy articles or missing info.
+        """
+        if not merge_info:
+            return list(self._DEFAULT_REQUIRED)
+
+        sources = merge_info.get("sources")
+        if not sources or not isinstance(sources, list):
+            return list(self._DEFAULT_REQUIRED)
+
+        # Collect schema_ids from ALL contributing sources (not just the base —
+        # merged data contains fields from every schema, so validation should
+        # cover the union of their requirements)
+        schema_ids = []
+        for src in sources:
+            sid = src.get("schema_id")
+            if sid:
+                schema_ids.append(str(sid))
+        schema_ids = list(dict.fromkeys(schema_ids))  # dedupe, preserve order
+
+        if not schema_ids:
+            return list(self._DEFAULT_REQUIRED)
 
         try:
-            from backend.database import fetchrow
-            row = await fetchrow("""
-                SELECT ec.required_fields
-                FROM event_categories ec
-                WHERE ec.slug = $1 AND ec.is_active = TRUE
-                LIMIT 1
-            """, category)
-            if row and row['required_fields']:
-                fields = list(row['required_fields'])
-                self._required_fields_cache[category] = fields
-                return fields
-        except Exception as e:
-            logger.warning("Failed to load required_fields for %s from DB: %s", category, e)
+            from backend.database import fetch
+            rows = await fetch("""
+                SELECT required_fields
+                FROM extraction_schemas
+                WHERE id = ANY($1::uuid[])
+                  AND is_active = TRUE
+            """, schema_ids)
 
-        # Fall back to hardcoded
-        fallback = self._FALLBACK_REQUIRED.get(category, self._DEFAULT_REQUIRED)
-        self._required_fields_cache[category] = fallback
-        return fallback
+            # Union the required fields across all contributing schemas
+            union: set = set()
+            for row in rows:
+                rf = row.get("required_fields")
+                if rf and isinstance(rf, list):
+                    union.update(rf)
+
+            if not union:
+                return list(self._DEFAULT_REQUIRED)
+
+            # Intersect with fields the creation service actually validates
+            return sorted(union & self._VALIDATABLE_FIELDS)
+        except Exception as e:
+            logger.warning("Failed to load required_fields from extraction_schemas: %s", e)
+            return list(self._DEFAULT_REQUIRED)
 
     # ------------------------------------------------------------------
     # Public API
@@ -122,6 +145,7 @@ class IncidentCreationService:
         article: Dict[str, Any],
         category: str,
         overrides: Optional[Dict[str, Any]] = None,
+        merge_info: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Create an incident with actors, events, domain/category, tags and
@@ -207,9 +231,9 @@ class IncidentCreationService:
         custom_fields = self._build_custom_fields(extracted_data)
 
         # --- validate required fields before insert ---
-        # Prefer database-defined required_fields from the event_categories table;
-        # fall back to hardcoded lists when DB lookup fails or returns empty.
-        required = await self._get_required_fields_for_category(category)
+        # Use schema-level required_fields from the extraction_schemas that
+        # produced this data (via merge_info); fall back to universal minimums.
+        required = await self._get_required_fields(merge_info)
         field_sources = {
             'date': date_str,
             'state': state_str,
