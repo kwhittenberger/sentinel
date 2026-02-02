@@ -180,10 +180,19 @@ async def _async_batch_extract_handler(job_id: str, params: dict) -> dict:
 )
 def run_process(self, job_id: str, params: dict):
     """Process pending articles with LLM extraction."""
+    from backend.services.llm_errors import LLMError, ErrorCategory
+
     try:
         return run_task(job_id, self.request.id, _async_process_handler, params)
     except SoftTimeLimitExceeded:
         raise
+    except LLMError as e:
+        if e.category == ErrorCategory.PERMANENT:
+            logger.error("Permanent LLM error in run_process, failing task: %s", e)
+            raise  # Don't retry
+        # Transient/partial — retry with backoff
+        logger.warning("Transient LLM error in run_process, retrying: %s", e)
+        raise self.retry(exc=e, countdown=60 * (self.request.retries + 1))
 
 
 @app.task(
@@ -199,7 +208,15 @@ def run_process(self, job_id: str, params: dict):
 )
 def run_batch_extract(self, job_id: str, params: dict):
     """Batch extract articles with universal extraction."""
+    from backend.services.llm_errors import LLMError, ErrorCategory
+
     try:
         return run_task(job_id, self.request.id, _async_batch_extract_handler, params)
     except SoftTimeLimitExceeded:
         raise
+    except LLMError as e:
+        if e.category == ErrorCategory.PERMANENT:
+            logger.error("Permanent LLM error in run_batch_extract, failing task: %s", e)
+            raise  # Don't retry
+        logger.warning("Transient LLM error in run_batch_extract, retrying: %s", e)
+        raise self.retry(exc=e, countdown=120 * (self.request.retries + 1))

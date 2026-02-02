@@ -58,12 +58,18 @@ class AnthropicProvider:
             raise RuntimeError("Anthropic API key not configured")
 
         start = time.time()
-        message = self.client.messages.create(
-            model=model,
-            max_tokens=max_tokens,
-            system=system_prompt,
-            messages=[{"role": "user", "content": user_message}],
-        )
+        try:
+            message = self.client.messages.create(
+                model=model,
+                max_tokens=max_tokens,
+                system=system_prompt,
+                messages=[{"role": "user", "content": user_message}],
+            )
+        except Exception as e:
+            from .llm_errors import classify_anthropic_error, LLMError
+            if isinstance(e, LLMError):
+                raise
+            raise classify_anthropic_error(e) from e
         latency_ms = int((time.time() - start) * 1000)
 
         return LLMResponse(
@@ -119,15 +125,21 @@ class OllamaProvider:
         max_tokens: int = 2000,
     ) -> LLMResponse:
         start = time.time()
-        response = self.client.chat.completions.create(
-            model=model,
-            max_tokens=max_tokens,
-            response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_message},
-            ],
-        )
+        try:
+            response = self.client.chat.completions.create(
+                model=model,
+                max_tokens=max_tokens,
+                response_format={"type": "json_object"},
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_message},
+                ],
+            )
+        except Exception as e:
+            from .llm_errors import classify_ollama_error, LLMError
+            if isinstance(e, LLMError):
+                raise
+            raise classify_ollama_error(e) from e
         latency_ms = int((time.time() - start) * 1000)
 
         choice = response.choices[0]
@@ -201,15 +213,48 @@ class LLMRouter:
         if not provider:
             raise ValueError(f"Unknown provider: {provider_name}")
 
+        from .llm_errors import LLMError, ErrorCategory
+
         # Try primary provider
         try:
             return provider.call(system_prompt, user_message, model, max_tokens)
-        except Exception as e:
+        except LLMError as e:
             logger.warning(
                 f"Provider '{provider_name}' failed (model={model}): {e}"
             )
 
-            # Try fallback if configured and different from primary
+            # Permanent errors should not fall back — re-raise immediately
+            if e.category == ErrorCategory.PERMANENT:
+                raise
+
+            # Try fallback for transient/partial errors
+            if (
+                fallback_provider
+                and fallback_provider != provider_name
+                and fallback_provider in self._providers
+            ):
+                fb = self._providers[fallback_provider]
+                fb_model = fallback_model or "claude-sonnet-4-20250514"
+                logger.info(
+                    f"Falling back to '{fallback_provider}' (model={fb_model})"
+                )
+                try:
+                    return fb.call(system_prompt, user_message, fb_model, max_tokens)
+                except LLMError as fb_err:
+                    logger.error(f"Fallback provider '{fallback_provider}' also failed: {fb_err}")
+                    raise fb_err from e
+                except Exception as fb_err:
+                    logger.error(f"Fallback provider '{fallback_provider}' also failed: {fb_err}")
+                    raise fb_err from e
+
+            # No fallback available — re-raise original
+            raise
+        except Exception as e:
+            logger.warning(
+                f"Provider '{provider_name}' failed (model={model}): {e}"
+            )
+            # Non-LLMError exceptions (shouldn't happen with wrapped providers,
+            # but handle gracefully)
             if (
                 fallback_provider
                 and fallback_provider != provider_name
@@ -225,8 +270,6 @@ class LLMRouter:
                 except Exception as fb_err:
                     logger.error(f"Fallback provider '{fallback_provider}' also failed: {fb_err}")
                     raise fb_err from e
-
-            # No fallback available — re-raise original
             raise
 
 

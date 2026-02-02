@@ -119,10 +119,20 @@ class TwoStageExtractionService:
             )
             if provider_override:
                 call_kwargs["provider_name"] = provider_override
-            response = await asyncio.wait_for(
-                asyncio.to_thread(router.call, **call_kwargs),
-                timeout=LLM_CALL_TIMEOUT_SECONDS,
-            )
+            try:
+                response = await asyncio.wait_for(
+                    asyncio.to_thread(router.call, **call_kwargs),
+                    timeout=LLM_CALL_TIMEOUT_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                from .llm_errors import LLMError, ErrorCategory
+                raise LLMError(
+                    category=ErrorCategory.TRANSIENT,
+                    error_code="timeout",
+                    message=f"Stage 1 LLM call timed out after {LLM_CALL_TIMEOUT_SECONDS}s",
+                    provider=call_kwargs.get("provider_name", "anthropic"),
+                    retryable=True,
+                )
 
             extraction_data = self._parse_json(response.text)
 
@@ -339,10 +349,20 @@ class TwoStageExtractionService:
             )
             if provider_override:
                 call_kwargs["provider_name"] = provider_override
-            response = await asyncio.wait_for(
-                asyncio.to_thread(router.call, **call_kwargs),
-                timeout=LLM_CALL_TIMEOUT_SECONDS,
-            )
+            try:
+                response = await asyncio.wait_for(
+                    asyncio.to_thread(router.call, **call_kwargs),
+                    timeout=LLM_CALL_TIMEOUT_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                from .llm_errors import LLMError, ErrorCategory
+                raise LLMError(
+                    category=ErrorCategory.TRANSIENT,
+                    error_code="timeout",
+                    message=f"Stage 2 LLM call timed out after {LLM_CALL_TIMEOUT_SECONDS}s",
+                    provider=call_kwargs.get("provider_name", "anthropic"),
+                    retryable=True,
+                )
 
             extracted_data = self._parse_json(response.text)
 
@@ -384,7 +404,12 @@ class TwoStageExtractionService:
                 response.output_tokens,
                 response.latency_ms,
             )
-            return self._serialize(updated)
+            result = self._serialize(updated)
+            # Enrich with domain metadata for downstream selection/merge
+            result["schema_name"] = schema.get("name", "")
+            result["domain_slug"] = schema.get("domain_slug", "")
+            result["category_slug"] = schema.get("category_slug", "")
+            return result
 
         except Exception as e:
             logger.exception("Stage 2 extraction failed for schema %s", schema_id)
@@ -624,6 +649,8 @@ class TwoStageExtractionService:
 
     def _parse_json(self, text: str) -> Dict[str, Any]:
         """Parse LLM JSON response, handling markdown code blocks."""
+        from .llm_errors import LLMError, ErrorCategory
+
         cleaned = text.strip()
         if cleaned.startswith("```"):
             lines = cleaned.split("\n")
@@ -633,9 +660,16 @@ class TwoStageExtractionService:
             cleaned = "\n".join(lines)
         try:
             return json.loads(cleaned)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as e:
             logger.warning("Failed to parse LLM JSON: %s", cleaned[:200])
-            return {}
+            raise LLMError(
+                category=ErrorCategory.PARTIAL,
+                error_code="json_parse_error",
+                message=f"Failed to parse LLM response as JSON: {e}",
+                provider="unknown",
+                retryable=True,
+                original=e,
+            ) from e
 
     def _serialize(self, row) -> Dict[str, Any]:
         """Serialize a database row to a JSON-safe dict."""

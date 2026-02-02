@@ -1390,7 +1390,7 @@ async def get_tiered_queue(category: Optional[str] = Query(None)):
     query = """
         SELECT id, title, source_name, extraction_confidence, published_date, fetched_at
         FROM ingested_articles
-        WHERE status = 'pending'
+        WHERE status IN ('pending', 'in_review')
         ORDER BY extraction_confidence DESC NULLS LAST
         LIMIT 200
     """
@@ -1447,7 +1447,7 @@ async def bulk_approve(
     query = f"""
         SELECT id, extracted_data, source_url, extraction_confidence
         FROM ingested_articles
-        WHERE status = 'pending'
+        WHERE status IN ('pending', 'in_review')
           AND ({tier_filters[tier]})
         ORDER BY extraction_confidence DESC
         LIMIT $1
@@ -1458,22 +1458,23 @@ async def bulk_approve(
     svc = get_incident_creation_service()
 
     approved_count = 0
+    errors = 0
     incident_ids = []
 
     for row in rows:
         article_id = row["id"]
         extracted_data = row.get("extracted_data") or {}
+        # Handle cases where extracted_data is stored as a JSON string
+        if isinstance(extracted_data, str):
+            import json as _json
+            try:
+                extracted_data = _json.loads(extracted_data)
+            except (ValueError, TypeError):
+                extracted_data = {}
 
-        # Determine category from extraction data
-        categories = extracted_data.get("categories", [])
-        row_category = category or "crime"
-        if isinstance(categories, list):
-            if "enforcement" in categories:
-                row_category = "enforcement"
-            elif "crime" in categories:
-                row_category = "crime"
-        if extracted_data.get("category"):
-            row_category = extracted_data["category"]
+        # Determine category from extracted data (no merge_info in bulk path)
+        from backend.services.stage2_selector import resolve_category_from_merge_info
+        row_category = resolve_category_from_merge_info(None, extracted_data, default=category or "crime")
 
         try:
             result = await svc.create_incident_from_extraction(
@@ -1494,10 +1495,18 @@ async def bulk_approve(
             incident_ids.append(incident_id)
         except Exception as e:
             logger.error(f"Bulk approve failed for article {article_id}: {e}")
+            # Mark as error so it doesn't keep appearing in queue
+            await execute("""
+                UPDATE ingested_articles
+                SET status = 'error', rejection_reason = $1, reviewed_at = $2
+                WHERE id = $3
+            """, f"Bulk approve error: {str(e)[:400]}", datetime.utcnow(), article_id)
+            errors += 1
 
     return {
         "success": True,
         "approved_count": approved_count,
+        "errors": errors,
         "incident_ids": incident_ids,
     }
 
@@ -1530,7 +1539,7 @@ async def bulk_reject(
         SET status = 'rejected', rejection_reason = $1, reviewed_at = $2
         WHERE id IN (
             SELECT id FROM ingested_articles
-            WHERE status = 'pending'
+            WHERE status IN ('pending', 'in_review')
               AND ({tier_filters[tier]})
             LIMIT $3
         )
@@ -1545,6 +1554,157 @@ async def bulk_reject(
             pass
 
     return {"success": True, "rejected_count": rejected_count}
+
+
+@app.post("/api/admin/queue/auto-approve")
+async def auto_approve_extracted(data: dict = Body(...)):
+    """Evaluate extracted-but-pending articles against approval thresholds.
+
+    Creates incidents for articles that pass, marks rejects, leaves
+    borderline articles for manual review. Can be called independently
+    after extraction or as part of the pipeline.
+
+    Body: { "limit": 50 }
+    """
+    if not USE_DATABASE:
+        raise HTTPException(status_code=501, detail="Database not enabled")
+
+    import uuid as uuid_mod
+    import json as _json
+    from datetime import datetime
+    from backend.database import get_pool
+    from backend.services.auto_approval import get_auto_approval_service
+    from backend.services.incident_creation_service import get_incident_creation_service
+
+    limit = min(data.get("limit", 50), 200)
+    pool = await get_pool()
+
+    approval_service = get_auto_approval_service()
+    incident_service = get_incident_creation_service()
+    approval_service.set_db_pool(pool)
+    await approval_service.load_category_configs_from_db()
+
+    # Fetch articles that have been extracted but not yet approved/rejected
+    rows = await pool.fetch("""
+        SELECT id, title, content, source_url, published_date,
+               extracted_data, extraction_confidence
+        FROM ingested_articles
+        WHERE status IN ('pending', 'in_review')
+          AND extracted_data IS NOT NULL
+          AND extraction_confidence IS NOT NULL
+        ORDER BY extraction_confidence DESC
+        LIMIT $1
+    """, limit)
+
+    auto_approved = 0
+    auto_rejected = 0
+    needs_review = 0
+    errors = 0
+    items = []
+
+    for row in rows:
+        article_id = str(row["id"])
+        title = (row.get("title") or "(untitled)")[:80]
+
+        extracted_data = row.get("extracted_data") or {}
+        if isinstance(extracted_data, str):
+            try:
+                extracted_data = _json.loads(extracted_data)
+            except (ValueError, TypeError):
+                extracted_data = {}
+
+        # Determine category from extracted data (no merge_info in auto-approve path)
+        from backend.services.stage2_selector import resolve_category_from_merge_info
+        row_category = resolve_category_from_merge_info(None, extracted_data)
+
+        article_dict = {
+            "id": article_id,
+            "title": row.get("title"),
+            "content": row.get("content"),
+            "source_url": row.get("source_url"),
+            "published_date": str(row["published_date"]) if row.get("published_date") else None,
+        }
+
+        try:
+            decision = await approval_service.evaluate_async(
+                article_dict, extracted_data, category=row_category
+            )
+
+            item = {
+                "id": article_id,
+                "title": title,
+                "confidence": float(row["extraction_confidence"]) if row.get("extraction_confidence") else None,
+                "decision": decision.decision,
+                "reason": decision.reason,
+            }
+
+            if decision.decision == "auto_approve":
+                try:
+                    inc_result = await incident_service.create_incident_from_extraction(
+                        extracted_data=extracted_data,
+                        article=article_dict,
+                        category=row_category,
+                    )
+                    incident_id = inc_result["incident_id"]
+                    await pool.execute("""
+                        UPDATE ingested_articles
+                        SET status = 'approved', incident_id = $1, reviewed_at = $2
+                        WHERE id = $3
+                    """, uuid_mod.UUID(incident_id), datetime.utcnow(), row["id"])
+                    item["status"] = "auto_approved"
+                    item["incident_id"] = incident_id
+                    auto_approved += 1
+                except Exception as e:
+                    logger.error("Auto-approve incident creation failed for %s: %s", article_id, e)
+                    await pool.execute("""
+                        UPDATE ingested_articles
+                        SET status = 'error', rejection_reason = $1, reviewed_at = $2
+                        WHERE id = $3
+                    """, f"Auto-approve error: {str(e)[:400]}", datetime.utcnow(), row["id"])
+                    item["status"] = "error"
+                    item["error"] = str(e)[:200]
+                    errors += 1
+
+            elif decision.decision == "auto_reject":
+                await pool.execute("""
+                    UPDATE ingested_articles
+                    SET status = 'rejected', rejection_reason = $1, reviewed_at = $2
+                    WHERE id = $3
+                """, decision.reason[:500], datetime.utcnow(), row["id"])
+                item["status"] = "auto_rejected"
+                auto_rejected += 1
+
+            else:
+                # needs_review — mark as in_review if still pending
+                await pool.execute("""
+                    UPDATE ingested_articles
+                    SET status = 'in_review'
+                    WHERE id = $1 AND status = 'pending'
+                """, row["id"])
+                item["status"] = "needs_review"
+                needs_review += 1
+
+            items.append(item)
+
+        except Exception as e:
+            logger.error("Auto-approve evaluation failed for %s: %s", article_id, e)
+            errors += 1
+            items.append({
+                "id": article_id,
+                "title": title,
+                "status": "error",
+                "error": str(e)[:200],
+            })
+
+    return {
+        "success": True,
+        "processed": len(rows),
+        "auto_approved": auto_approved,
+        "auto_rejected": auto_rejected,
+        "needs_review": needs_review,
+        "errors": errors,
+        "items": items,
+    }
 
 
 @app.get("/api/admin/queue/extraction-status")
@@ -2086,8 +2246,10 @@ async def approve_article(
     if overrides:
         extracted_data.update(overrides)
 
-    # Determine category from extraction
-    category = extracted_data_raw.get("category") or extracted_data.get("category") or "crime"
+    # Determine category from extraction — use merge_info-aware resolver
+    from backend.services.stage2_selector import resolve_category_from_merge_info
+    merge_info = extracted_data_raw.get("merge_info") or extracted_data.get("merge_info")
+    category = resolve_category_from_merge_info(merge_info, extracted_data)
 
     # If linking to existing incident, add as additional source
     if link_to_existing_id:
@@ -2241,9 +2403,13 @@ async def reset_pipeline_data(
     count_rows = await fetch("SELECT COUNT(*) as n FROM events")
     counts["events"] = count_rows[0]["n"]
     count_rows = await fetch(
-        "SELECT COUNT(*) as n FROM ingested_articles WHERE status IN ('approved', 'linked', 'rejected')"
+        "SELECT COUNT(*) as n FROM ingested_articles WHERE status != 'pending'"
     )
     counts["articles_to_reset"] = count_rows[0]["n"]
+    count_rows = await fetch("SELECT COUNT(*) as n FROM article_extractions")
+    counts["article_extractions"] = count_rows[0]["n"]
+    count_rows = await fetch("SELECT COUNT(*) as n FROM schema_extraction_results")
+    counts["schema_extraction_results"] = count_rows[0]["n"]
 
     if dry_run:
         return {
@@ -2273,17 +2439,28 @@ async def reset_pipeline_data(
     # 3. Delete all events (will be recreated from extraction)
     await execute("DELETE FROM events")
 
-    # 4. Reset articles to pending so they re-enter the pipeline
+    # 4. Clear extraction tables so re-extraction runs fresh
+    await execute("DELETE FROM schema_extraction_results")
+    await execute("DELETE FROM article_extractions")
+
+    # 5. Reset ALL non-pending articles so they re-enter the pipeline
     await execute("""
         UPDATE ingested_articles
         SET status = 'pending',
             incident_id = NULL,
             extracted_data = NULL,
             extraction_confidence = NULL,
+            extracted_at = NULL,
             relevance_score = NULL,
+            relevance_reason = NULL,
             reviewed_at = NULL,
-            processed_at = NULL
-        WHERE status IN ('approved', 'linked', 'rejected')
+            rejection_reason = NULL,
+            extraction_error_count = 0,
+            last_extraction_error = NULL,
+            last_extraction_error_at = NULL,
+            extraction_error_category = NULL,
+            latest_extraction_id = NULL
+        WHERE status != 'pending'
     """)
 
     return {
@@ -5620,6 +5797,262 @@ async def two_stage_extraction_detail(extraction_id: str):
         raise HTTPException(status_code=404, detail=str(e))
 
 
+@app.post("/api/admin/two-stage/batch-extract")
+async def two_stage_batch_extract(data: dict = Body(...)):
+    """Run two-stage pipeline with merge on a batch of pending articles.
+
+    Body: { "limit": 50, "include_previously_failed": false }
+
+    Includes circuit breaker: stops on permanent errors (credits exhausted,
+    auth failure) and on 3 consecutive identical transient errors.
+    """
+    import asyncio
+    import json
+    import uuid as uuid_mod
+    from datetime import datetime
+    from backend.services.two_stage_extraction import get_two_stage_service
+    from backend.services.stage2_selector import select_and_merge_stage2, resolve_category_from_merge_info
+    from backend.services.llm_errors import LLMError
+    from backend.services.circuit_breaker import BatchCircuitBreaker
+    from backend.services.auto_approval import get_auto_approval_service
+    from backend.services.incident_creation_service import get_incident_creation_service
+
+    limit = min(data.get("limit", 50), 200)
+    include_previously_failed = data.get("include_previously_failed", False)
+    service = get_two_stage_service()
+    approval_service = get_auto_approval_service()
+    incident_service = get_incident_creation_service()
+
+    from backend.database import get_pool
+    pool = await get_pool()
+
+    # Fetch pending articles, excluding permanently-failed and 3x-failed
+    if include_previously_failed:
+        rows = await pool.fetch("""
+            SELECT id, title, content, source_url, published_date
+            FROM ingested_articles
+            WHERE status = 'pending' AND content IS NOT NULL AND length(content) > 50
+            ORDER BY published_date DESC NULLS LAST
+            LIMIT $1
+        """, limit)
+    else:
+        rows = await pool.fetch("""
+            SELECT id, title, content, source_url, published_date
+            FROM ingested_articles
+            WHERE status = 'pending' AND content IS NOT NULL AND length(content) > 50
+              AND (extraction_error_category IS NULL OR extraction_error_category != 'permanent')
+              AND COALESCE(extraction_error_count, 0) < 3
+            ORDER BY published_date DESC NULLS LAST
+            LIMIT $1
+        """, limit)
+
+    results = []
+    extracted = 0
+    errors = 0
+    skipped = 0
+    auto_approved = 0
+    auto_rejected = 0
+    needs_review = 0
+    breaker = BatchCircuitBreaker()
+    approval_service.set_db_pool(pool)
+    await approval_service.load_category_configs_from_db()
+
+    for row in rows:
+        article_id = str(row['id'])
+        title = row['title'] or '(untitled)'
+
+        # Check circuit breaker before each article
+        if breaker.tripped:
+            skipped += 1
+            results.append({
+                "id": article_id,
+                "title": title[:80],
+                "status": "skipped",
+                "reason": "circuit_breaker_tripped",
+            })
+            continue
+
+        try:
+            # Run two-stage extraction
+            pipeline_result = await service.run_full_pipeline(article_id)
+
+            # Merge stage2 results using domain-priority selector
+            stage2_results = pipeline_result.get('stage2_results', [])
+            merged = select_and_merge_stage2(stage2_results)
+
+            merged_data = merged.get('extracted_data', {}) if merged else {}
+            merge_info = merged.get('merge_info') if merged else None
+
+            # Ensure merged_data is a dict, not a string (stage2 may return either)
+            if isinstance(merged_data, str):
+                merged_data = json.loads(merged_data)
+
+            # Use the LLM's self-reported confidence from inside extracted_data,
+            # NOT the schema-completeness score from select_and_merge_stage2.
+            # The schema completeness is already stored on schema_extraction_results.
+            confidence = float(merged_data.get('overall_confidence',
+                              merged_data.get('confidence', 0)))
+
+            # Round-trip through json.dumps(default=str) to handle non-serializable
+            # types (UUID, datetime), then loads() back to a dict.  Pass the dict
+            # to asyncpg — asyncpg's jsonb codec will call json.dumps once.
+            # Passing a pre-serialized string would cause double-serialization.
+            clean_data = json.loads(json.dumps(merged_data, default=str))
+
+            # Update ingested_articles with merged extraction + clear errors
+            await pool.execute("""
+                UPDATE ingested_articles
+                SET extracted_data = $2::jsonb,
+                    extraction_confidence = $3,
+                    extracted_at = NOW(),
+                    status = 'in_review',
+                    extraction_pipeline = 'two_stage',
+                    extraction_error_count = 0,
+                    last_extraction_error = NULL,
+                    last_extraction_error_at = NULL,
+                    extraction_error_category = NULL,
+                    updated_at = NOW()
+                WHERE id = $1
+            """, row['id'], clean_data, confidence)
+
+            breaker.record_success()
+            extracted += 1
+
+            # --- Auto-approval evaluation ---
+            article_dict = {
+                "id": article_id,
+                "title": row["title"],
+                "content": row["content"],
+                "source_url": row["source_url"],
+                "published_date": str(row["published_date"]) if row.get("published_date") else None,
+            }
+
+            # Determine category from merge_info (schema-aware) or extracted_data fallback
+            row_category = resolve_category_from_merge_info(merge_info, merged_data)
+
+            decision = await approval_service.evaluate_async(
+                article_dict, merged_data, category=row_category
+            )
+
+            result_item = {
+                "id": article_id,
+                "title": title[:80],
+                "status": "extracted",
+                "confidence": confidence,
+                "stage2_count": len(stage2_results),
+                "merged_schemas": len(merge_info.get('sources', [])) if merge_info else 0,
+                "primary_domain": merge_info.get('sources', [{}])[0].get('domain_slug', '') if merge_info and merge_info.get('sources') else '',
+                "approval_decision": decision.decision,
+                "approval_reason": decision.reason,
+                "incident_id": None,
+            }
+
+            if decision.decision == "auto_approve":
+                try:
+                    inc_result = await incident_service.create_incident_from_extraction(
+                        extracted_data=merged_data,
+                        article=article_dict,
+                        category=row_category,
+                    )
+                    incident_id = inc_result["incident_id"]
+                    await pool.execute("""
+                        UPDATE ingested_articles
+                        SET status = 'approved', incident_id = $1, reviewed_at = $2
+                        WHERE id = $3
+                    """, uuid_mod.UUID(incident_id), datetime.utcnow(), row['id'])
+                    result_item["status"] = "auto_approved"
+                    result_item["incident_id"] = incident_id
+                    auto_approved += 1
+                except Exception as e:
+                    logger.error("Auto-approve failed for article %s, leaving in_review: %s", article_id, e)
+                    needs_review += 1
+                    result_item["approval_decision"] = "needs_review"
+                    result_item["approval_reason"] = f"Auto-approve failed: {e}"
+            elif decision.decision == "auto_reject":
+                await pool.execute("""
+                    UPDATE ingested_articles
+                    SET status = 'rejected', rejection_reason = $1, reviewed_at = $2
+                    WHERE id = $3
+                """, decision.reason[:500], datetime.utcnow(), row['id'])
+                result_item["status"] = "auto_rejected"
+                auto_rejected += 1
+            else:
+                needs_review += 1
+
+            results.append(result_item)
+
+            # Rate limit: 2s between articles to avoid API throttling
+            await asyncio.sleep(2)
+
+        except LLMError as e:
+            errors += 1
+
+            # Record error on the article
+            await pool.execute("""
+                UPDATE ingested_articles
+                SET extraction_error_count = COALESCE(extraction_error_count, 0) + 1,
+                    last_extraction_error = $2,
+                    last_extraction_error_at = NOW(),
+                    extraction_error_category = $3,
+                    extraction_pipeline = 'two_stage',
+                    updated_at = NOW()
+                WHERE id = $1
+            """, row['id'], str(e)[:500], e.category.value)
+
+            # Feed to circuit breaker
+            just_tripped = breaker.record_error(e, article_id)
+
+            results.append({
+                "id": article_id,
+                "title": title[:80],
+                "status": "error",
+                "error": str(e)[:200],
+                "error_category": e.category.value,
+                "error_code": e.error_code,
+            })
+            logger.error("LLM error extracting article %s: %s", article_id, e)
+
+            if just_tripped:
+                logger.warning("Circuit breaker tripped — skipping remaining articles")
+            else:
+                await asyncio.sleep(1)
+
+        except Exception as e:
+            errors += 1
+            # Non-LLM error — record but don't trip breaker
+            await pool.execute("""
+                UPDATE ingested_articles
+                SET extraction_error_count = COALESCE(extraction_error_count, 0) + 1,
+                    last_extraction_error = $2,
+                    last_extraction_error_at = NOW(),
+                    extraction_pipeline = 'two_stage',
+                    updated_at = NOW()
+                WHERE id = $1
+            """, row['id'], str(e)[:500])
+            results.append({
+                "id": article_id,
+                "title": title[:80],
+                "status": "error",
+                "error": str(e)[:200],
+            })
+            logger.exception("Error extracting article %s: %s", article_id, e)
+            await asyncio.sleep(1)
+
+    return {
+        "success": True,
+        "total_pending": await pool.fetchval("SELECT count(*) FROM ingested_articles WHERE status = 'pending'"),
+        "processed": len(rows),
+        "extracted": extracted,
+        "auto_approved": auto_approved,
+        "auto_rejected": auto_rejected,
+        "needs_review": needs_review,
+        "errors": errors,
+        "skipped": skipped,
+        "circuit_breaker": breaker.summary(),
+        "items": results,
+    }
+
+
 # =====================
 # Prompt Testing
 # =====================
@@ -5788,6 +6221,17 @@ async def review_calibration_article(comparison_id: str, article_id: str, data: 
         return result
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.post("/api/admin/prompt-tests/generate-prompt-improvement")
+async def generate_prompt_improvement(data: dict = Body(...)):
+    from backend.services.prompt_testing import get_prompt_testing_service
+    service = get_prompt_testing_service()
+    try:
+        result = await service.generate_prompt_improvement(data)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/admin/prompt-tests/calibrations/{comparison_id}/save-dataset")

@@ -3310,3 +3310,517 @@ mark.field-highlight {
     grid-template-columns: 1fr;
   }
 }
+
+/* ===================== Operations Bar ===================== */
+.ops-bar {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  margin-bottom: 16px;
+  overflow: hidden;
+}
+
+.ops-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s;
+}
+
+.ops-header:hover {
+  background: var(--bg-hover);
+}
+
+.ops-toggle {
+  background: none;
+  border: none;
+  font-size: 14px;
+  color: var(--text-secondary);
+  padding: 0;
+  width: 16px;
+  cursor: pointer;
+}
+
+.ops-title {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text-primary);
+  margin-right: 12px;
+}
+
+.ops-stats-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.ops-stat {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ops-stat-label {
+  color: var(--text-muted);
+}
+
+.ops-stat-value {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.ops-stat-sep {
+  color: var(--border-color);
+}
+
+.ops-collapsed-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+}
+
+/* Expanded Content */
+.ops-content {
+  padding: 0 16px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ops-controls-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.ops-batch-select {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.ops-batch-select select {
+  padding: 5px 10px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.ops-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+/* Confirmation Dialog */
+.ops-confirm {
+  padding: 12px 14px;
+  background: rgba(59, 130, 246, 0.06);
+  border: 1px solid rgba(59, 130, 246, 0.25);
+  border-radius: 6px;
+}
+
+.ops-confirm-content {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+  flex-wrap: wrap;
+}
+
+.ops-confirm-buttons {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+/* Job Progress Banner */
+.ops-job-banner {
+  background: rgba(59, 130, 246, 0.06);
+  border: 1px solid rgba(59, 130, 246, 0.2);
+  border-radius: 6px;
+  padding: 10px 14px;
+}
+
+.ops-job-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+
+.ops-job-icon {
+  font-size: 14px;
+}
+
+.ops-job-pct {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.ops-job-progress-bar {
+  height: 6px;
+  background: var(--bg-input);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.ops-job-progress-fill {
+  height: 100%;
+  background: #3b82f6;
+  border-radius: 3px;
+  transition: width 0.5s;
+}
+
+.ops-job-message {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 6px;
+}
+
+/* Result Toast */
+.ops-toast {
+  padding: 8px 14px;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 0 0 8px 8px;
+  cursor: pointer;
+  animation: ops-toast-in 0.2s ease-out;
+}
+
+.ops-toast-success {
+  background: rgba(34, 197, 94, 0.1);
+  color: #16a34a;
+  border-top: 1px solid rgba(34, 197, 94, 0.2);
+}
+
+.ops-toast-error {
+  background: rgba(239, 68, 68, 0.1);
+  color: #dc2626;
+  border-top: 1px solid rgba(239, 68, 68, 0.2);
+}
+
+@keyframes ops-toast-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Pipeline Flow Visualization */
+.ops-flow {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 10px 14px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  flex-wrap: wrap;
+}
+
+.ops-flow-step {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+}
+
+.ops-flow-step.active {
+  border-color: #3b82f6;
+  color: #3b82f6;
+}
+
+.ops-flow-step.warning {
+  border-color: #eab308;
+  color: #eab308;
+}
+
+.ops-flow-step.success {
+  border-color: #22c55e;
+  color: #22c55e;
+}
+
+.ops-flow-step.not-relevant {
+  border-color: #ef4444;
+  color: #ef4444;
+  opacity: 0.8;
+}
+
+.ops-flow-count {
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.ops-flow-label {
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.ops-flow-arrow {
+  color: var(--text-muted);
+  font-size: 14px;
+  padding: 0 6px;
+  flex-shrink: 0;
+}
+
+.ops-flow-divider {
+  color: var(--border-color);
+  font-size: 16px;
+  padding: 0 8px;
+  flex-shrink: 0;
+}
+
+/* Extraction Type Breakdown */
+.ops-extraction-types {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  flex-wrap: wrap;
+}
+
+.ops-extraction-types-label {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.ops-extraction-type-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ops-et-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* Schema Upgrade Row */
+.ops-upgrade-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  background: rgba(234, 179, 8, 0.08);
+  border: 1px solid rgba(234, 179, 8, 0.25);
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.ops-upgrade-text {
+  color: #ca8a04;
+}
+
+/* Active Jobs Grid */
+.ops-active-jobs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ops-job-queue {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(59, 130, 246, 0.12);
+  color: var(--primary-color);
+  font-weight: 600;
+}
+
+.ops-job-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 8px;
+}
+
+.ops-job-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* Job History Toggle */
+.ops-jobs-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  user-select: none;
+  transition: background 0.15s;
+}
+
+.ops-jobs-toggle:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.ops-jobs-toggle-icon {
+  font-size: 12px;
+  width: 14px;
+  color: var(--text-muted);
+}
+
+/* Jobs Section (expanded history) */
+.ops-jobs-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ops-history-tabs {
+  display: flex;
+  gap: 4px;
+}
+
+.ops-jobs-empty {
+  color: var(--text-muted);
+  font-size: 13px;
+  margin: 0;
+}
+
+.ops-history-table-wrap {
+  overflow-x: auto;
+}
+
+.ops-history-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  background: var(--bg-card);
+}
+
+.ops-history-table th {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-color);
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+}
+
+.ops-history-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-color);
+  vertical-align: middle;
+  color: var(--text-primary);
+}
+
+.ops-history-table tbody tr:hover {
+  background: var(--bg-hover);
+}
+
+.ops-error-cell {
+  max-width: 200px;
+}
+
+.ops-error-text {
+  color: var(--danger-color, #ef4444);
+  font-size: 12px;
+  cursor: help;
+}
+
+.ops-action-cell {
+  white-space: nowrap;
+  display: flex;
+  gap: 4px;
+}
+
+/* ===================== Pipeline View ===================== */
+.pipeline-view {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.pipeline-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--border-color);
+  padding-bottom: 0;
+}
+
+.pipeline-tab {
+  padding: 10px 20px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.pipeline-tab:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.pipeline-tab.active {
+  color: #3b82f6;
+  border-bottom-color: #3b82f6;
+}
+
+.pipeline-tab-content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .ops-controls-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .ops-actions {
+    flex-wrap: wrap;
+  }
+
+  .ops-collapsed-actions {
+    display: none;
+  }
+
+  .ops-flow {
+    gap: 4px;
+  }
+
+  .pipeline-tabs {
+    overflow-x: auto;
+  }
+}

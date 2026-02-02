@@ -7,6 +7,8 @@ import './CalibrationReview.css';
 
 export type DiffStatus = 'match' | 'mismatch' | 'missing_a' | 'missing_b' | 'both_absent';
 
+export type FieldPreferences = Record<string, 'A' | 'B'>;
+
 interface DiffTableProps {
   dataA: Record<string, any> | null;
   dataB: Record<string, any> | null;
@@ -14,6 +16,9 @@ interface DiffTableProps {
   excludeFields?: string[];
   labelOverrides?: Record<string, string>;
   showConfidence?: boolean;
+  selectable?: boolean;
+  fieldPreferences?: FieldPreferences;
+  onFieldPreferenceChange?: (field: string, config: 'A' | 'B') => void;
 }
 
 interface Stage1Data {
@@ -71,18 +76,39 @@ function formatValue(v: any): string {
   return String(v);
 }
 
-export function DiffFieldRow({ label, valueA, valueB, singleColumn }: {
+export function DiffFieldRow({ label, valueA, valueB, singleColumn, selectable, selectedConfig, onSelect }: {
   label: string;
   valueA: any;
   valueB?: any;
   singleColumn?: boolean;
+  selectable?: boolean;
+  selectedConfig?: 'A' | 'B';
+  onSelect?: (config: 'A' | 'B') => void;
 }) {
   const status = singleColumn ? 'match' : computeDiffStatus(valueA, valueB);
+  const showToggle = selectable && !singleColumn && status === 'mismatch';
   return (
-    <div className={`crc-diff-row ${singleColumn ? 'crc-single-col' : ''} crc-${status.replace('_', '-')}`}>
+    <div className={`crc-diff-row ${singleColumn ? 'crc-single-col' : ''} ${selectable ? 'crc-selectable' : ''} crc-${status.replace('_', '-')}`}>
       <div className="crc-diff-label">{label}</div>
-      <div className="crc-diff-cell">{formatValue(valueA)}</div>
-      {!singleColumn && <div className="crc-diff-cell">{formatValue(valueB)}</div>}
+      <div className={`crc-diff-cell ${showToggle && selectedConfig === 'A' ? 'crc-field-chosen' : ''}`}>{formatValue(valueA)}</div>
+      {showToggle && (
+        <div className="crc-field-toggle">
+          <button
+            className={`crc-toggle-btn ${selectedConfig === 'A' ? 'crc-toggle-active' : ''}`}
+            onClick={() => onSelect?.('A')}
+            title="Use Config A value"
+          >A</button>
+          <button
+            className={`crc-toggle-btn ${selectedConfig === 'B' ? 'crc-toggle-active' : ''}`}
+            onClick={() => onSelect?.('B')}
+            title="Use Config B value"
+          >B</button>
+        </div>
+      )}
+      {!singleColumn && !showToggle && selectable && (
+        <div className="crc-field-toggle crc-field-toggle-placeholder" />
+      )}
+      {!singleColumn && <div className={`crc-diff-cell ${showToggle && selectedConfig === 'B' ? 'crc-field-chosen' : ''}`}>{formatValue(valueB)}</div>}
     </div>
   );
 }
@@ -98,6 +124,9 @@ export function DiffTable({
   excludeFields = [],
   labelOverrides = {},
   showConfidence = false,
+  selectable = false,
+  fieldPreferences = {},
+  onFieldPreferenceChange,
 }: DiffTableProps) {
   const a = dataA || {};
   const b = dataB || {};
@@ -132,7 +161,7 @@ export function DiffTable({
   };
 
   return (
-    <div className="crc-diff-table">
+    <div className={`crc-diff-table ${selectable ? 'crc-diff-table-selectable' : ''}`}>
       {orderedKeys.map(key => {
         const label = humanLabel(key);
         const confKey = `${key}_confidence`;
@@ -148,6 +177,9 @@ export function DiffTable({
             }
             valueA={a[key]}
             valueB={b[key]}
+            selectable={selectable}
+            selectedConfig={fieldPreferences[key]}
+            onSelect={config => onFieldPreferenceChange?.(key, config)}
           />
         );
       })}
@@ -208,7 +240,8 @@ function Stage1Column({ label, data }: { label: string; data: Stage1Data | null 
   const locCount = Array.isArray(entities.locations) ? entities.locations.length : 0;
   const eventCount = data.event_count ?? (Array.isArray(data.extraction_data?.events) ? data.extraction_data!.events.length : 0);
   const confidence = data.overall_confidence ?? data.extraction_data?.extraction_confidence;
-  const hints = data.classification_hints || data.extraction_data?.classification_hints || [];
+  const rawHints = data.classification_hints || data.extraction_data?.classification_hints || [];
+  const hints = Array.isArray(rawHints) ? rawHints : [];
 
   return (
     <div className="crc-stage1-col">
@@ -305,6 +338,13 @@ function matchSchemas(listA: Stage2Result[], listB: Stage2Result[]): Array<{ nam
   return [...nameMap.entries()].map(([name, pair]) => ({ name, ...pair }));
 }
 
+function parseIfString(v: any): Record<string, any> | null {
+  if (v == null) return null;
+  if (typeof v === 'string') { try { return JSON.parse(v); } catch { return null; } }
+  if (typeof v === 'object' && !Array.isArray(v)) return v;
+  return null;
+}
+
 function SchemaAccordion({ name, a, b }: { name: string; a: Stage2Result | null; b: Stage2Result | null }) {
   const [expanded, setExpanded] = useState(false);
   const confA = a?.confidence != null ? `${Math.round(a.confidence * 100)}%` : '--';
@@ -325,8 +365,8 @@ function SchemaAccordion({ name, a, b }: { name: string; a: Stage2Result | null;
       {expanded && (
         <div className="crc-schema-body">
           <DiffTable
-            dataA={a?.extracted_data || null}
-            dataB={b?.extracted_data || null}
+            dataA={parseIfString(a?.extracted_data)}
+            dataB={parseIfString(b?.extracted_data)}
             showConfidence
           />
         </div>
@@ -364,6 +404,54 @@ export function Stage2ComparisonGrid({ stage2A, stage2B }: {
 }
 
 // ---------------------------------------------------------------------------
+// MergeSourceBadge
+// ---------------------------------------------------------------------------
+
+interface MergeSource {
+  schema_name: string;
+  domain_slug: string;
+  category_slug: string;
+  confidence: number;
+  role: string;
+  fields_contributed?: string[];
+}
+
+interface MergeInfoData {
+  sources: MergeSource[];
+  cluster_entity: string | null;
+  merged: boolean;
+  schemas_merged?: number;
+}
+
+function MergeSourceBadge({ mergeInfo }: { mergeInfo: MergeInfoData }) {
+  if (!mergeInfo?.sources?.length) return null;
+
+  const entity = mergeInfo.cluster_entity || 'unknown';
+  const sourceCount = mergeInfo.sources.length;
+  const isMerged = mergeInfo.merged && sourceCount > 1;
+
+  return (
+    <div className="crc-merge-badge">
+      <span className="crc-merge-entity">[{mergeInfo.sources[0]?.domain_slug}/{mergeInfo.sources[0]?.category_slug}] {entity}</span>
+      {isMerged && (
+        <span className="crc-merge-detail">
+          {' \u2014 merged from {0} schemas: '.replace('{0}', String(sourceCount))}
+          {mergeInfo.sources.map((s, i) => (
+            <span key={i}>
+              {i > 0 && ', '}
+              <span className={`crc-merge-source-tag crc-merge-role-${s.role}`}>
+                {s.schema_name || `${s.domain_slug}/${s.category_slug}`}
+                {' '}({Math.round(s.confidence * 100)}%)
+              </span>
+            </span>
+          ))}
+        </span>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // BestExtractionDiff
 // ---------------------------------------------------------------------------
 
@@ -378,6 +466,11 @@ export function BestExtractionDiff({
   errorB,
   chosenConfig,
   onChoose,
+  selectable = false,
+  fieldPreferences,
+  onFieldPreferenceChange,
+  mergeInfoA,
+  mergeInfoB,
 }: {
   configALabel: string;
   configBLabel: string;
@@ -389,6 +482,11 @@ export function BestExtractionDiff({
   errorB: string | null;
   chosenConfig: string | null;
   onChoose: (config: string) => void;
+  selectable?: boolean;
+  fieldPreferences?: FieldPreferences;
+  onFieldPreferenceChange?: (field: string, config: 'A' | 'B') => void;
+  mergeInfoA?: MergeInfoData | null;
+  mergeInfoB?: MergeInfoData | null;
 }) {
   const hasError = errorA || errorB;
   const hasBothExtractions = extractionA && extractionB && !hasError;
@@ -407,6 +505,7 @@ export function BestExtractionDiff({
               <span style={{ fontSize: 11, fontWeight: 600 }}>{Math.round(confidenceA * 100)}%</span>
             )}
           </div>
+          {mergeInfoA && <MergeSourceBadge mergeInfo={mergeInfoA} />}
           {errorA ? (
             <div style={{ color: '#ef4444', fontSize: 12 }}>Error: {errorA}</div>
           ) : !extractionA ? (
@@ -432,6 +531,7 @@ export function BestExtractionDiff({
               <span style={{ fontSize: 11, fontWeight: 600 }}>{Math.round(confidenceB * 100)}%</span>
             )}
           </div>
+          {mergeInfoB && <MergeSourceBadge mergeInfo={mergeInfoB} />}
           {errorB ? (
             <div style={{ color: '#ef4444', fontSize: 12 }}>Error: {errorB}</div>
           ) : !extractionB ? (
@@ -454,10 +554,36 @@ export function BestExtractionDiff({
           dataA={extractionA}
           dataB={extractionB}
           showConfidence
+          selectable={selectable}
+          fieldPreferences={fieldPreferences}
+          onFieldPreferenceChange={onFieldPreferenceChange}
         />
       )}
     </div>
   );
+}
+
+// ---------------------------------------------------------------------------
+// GoldenExtractionView
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// buildMergedExtraction — merge best-of-both from field preferences
+// ---------------------------------------------------------------------------
+
+export function buildMergedExtraction(
+  dataA: Record<string, any>,
+  dataB: Record<string, any>,
+  preferences: FieldPreferences,
+  defaultConfig: 'A' | 'B' = 'A',
+): Record<string, any> {
+  const allKeys = new Set([...Object.keys(dataA), ...Object.keys(dataB)]);
+  const merged: Record<string, any> = {};
+  for (const key of allKeys) {
+    const pref = preferences[key] || defaultConfig;
+    merged[key] = pref === 'A' ? dataA[key] : dataB[key];
+  }
+  return merged;
 }
 
 // ---------------------------------------------------------------------------

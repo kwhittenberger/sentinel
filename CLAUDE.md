@@ -11,18 +11,18 @@ The system supports configurable event domains and categories (e.g., Immigration
 ## Quick Start
 
 ```bash
-# Start database
-docker-compose up -d db
+# Start all services (db, redis, backend, celery workers, beat)
+./start-dev.sh
 
-# Backend (in one terminal)
-source .venv/bin/activate
-cd backend && uvicorn main:app --reload --port 8000
-
-# Frontend (in another terminal)
+# Frontend (in a separate terminal)
 cd frontend && npm run dev
 ```
 
-Access the dashboard at http://localhost:5173
+`start-dev.sh` handles Docker containers, .env loading, uvicorn, and all Celery workers. Logs go to `.logs/`. Use `./start-dev.sh status` to check services and `./start-dev.sh stop` to stop non-Docker processes.
+
+For backend-only (no Celery workers): `./start-backend.sh`
+
+Access the dashboard at http://localhost:5174
 
 ## Architecture
 

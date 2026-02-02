@@ -295,6 +295,7 @@ export interface CurationQueueItem {
 }
 
 export interface ExtractedIncidentData {
+  [key: string]: unknown;  // allows dynamic schema fields
   category?: IncidentCategory;
   date?: string;
   date_confidence?: number;
@@ -366,6 +367,26 @@ export interface JurisdictionComparison {
   crime_incidents: number;
   enforcement_deaths: number;
   crime_deaths: number;
+}
+
+// Extraction status types (shared between QueueManager and OperationsBar)
+export interface ExtractionStageInfo {
+  count: number;
+  avg_confidence: number;
+}
+
+export interface ExtractionStatus {
+  stages?: {
+    need_extraction: ExtractionStageInfo;
+    not_relevant: ExtractionStageInfo;
+    needs_review: ExtractionStageInfo;
+    ready_to_approve: ExtractionStageInfo;
+  };
+  by_extraction_type: Array<{ type: string; count: number; avg_confidence: number | null }>;
+  by_relevance: Array<{ relevance: string; count: number }>;
+  by_schema_type?: Array<{ schema: string; count: number }>;
+  total_pending: number;
+  needs_upgrade?: number;
 }
 
 // Job Queue types

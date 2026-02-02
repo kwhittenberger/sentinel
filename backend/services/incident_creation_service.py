@@ -25,6 +25,26 @@ CATEGORY_DOMAIN_MAP: Dict[str, tuple] = {
     "sentencing": ("criminal_justice", "sentencing"),
 }
 
+# Map extended category slugs → legacy incident_category enum values.
+# The incidents.category column is an enum {enforcement, crime}; the proper
+# extensible category is stored in domain_id + category_id.
+LEGACY_CATEGORY_MAP: Dict[str, str] = {
+    "enforcement": "enforcement",
+    "crime": "crime",
+    # CJ domain → "crime" in legacy enum
+    "arrest": "crime",
+    "prosecution": "crime",
+    "trial": "crime",
+    "sentencing": "crime",
+    "incarceration": "crime",
+    "release": "crime",
+    # CR domain → "enforcement" in legacy enum (closest match)
+    "protest": "enforcement",
+    "police_force": "enforcement",
+    "civil_rights_violation": "enforcement",
+    "litigation": "enforcement",
+}
+
 # Map extracted actor roles → legacy actor_role enum values
 ROLE_TO_LEGACY: Dict[str, str] = {
     "victim": "victim",
@@ -57,6 +77,41 @@ AGENCY_NORMALIZE: Dict[str, str] = {
 class IncidentCreationService:
     """Reusable service that creates a fully-populated incident from extraction data."""
 
+    # Cache of category_slug → required_fields list (loaded from DB on first use)
+    _required_fields_cache: Dict[str, List[str]] = {}
+
+    # Hardcoded fallbacks when DB is unavailable
+    _FALLBACK_REQUIRED: Dict[str, List[str]] = {
+        'enforcement': ['date', 'state', 'incident_type', 'victim_category', 'outcome_category'],
+        'crime': ['date', 'state', 'incident_type', 'offender_immigration_status'],
+    }
+    _DEFAULT_REQUIRED: List[str] = ['date', 'state']
+
+    async def _get_required_fields_for_category(self, category: str) -> List[str]:
+        """Fetch required_fields from event_categories table, with hardcoded fallback."""
+        if category in self._required_fields_cache:
+            return self._required_fields_cache[category]
+
+        try:
+            from backend.database import fetchrow
+            row = await fetchrow("""
+                SELECT ec.required_fields
+                FROM event_categories ec
+                WHERE ec.slug = $1 AND ec.is_active = TRUE
+                LIMIT 1
+            """, category)
+            if row and row['required_fields']:
+                fields = list(row['required_fields'])
+                self._required_fields_cache[category] = fields
+                return fields
+        except Exception as e:
+            logger.warning("Failed to load required_fields for %s from DB: %s", category, e)
+
+        # Fall back to hardcoded
+        fallback = self._FALLBACK_REQUIRED.get(category, self._DEFAULT_REQUIRED)
+        self._required_fields_cache[category] = fallback
+        return fallback
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -76,6 +131,10 @@ class IncidentCreationService:
         """
         from backend.database import fetch, execute
         from backend.utils.state_normalizer import normalize_state
+        from backend.services.auto_approval import normalize_extracted_fields
+
+        # Normalize field names/structure so creation works across all schemas
+        extracted_data = normalize_extracted_fields(extracted_data)
 
         if overrides:
             extracted_data = {**extracted_data, **overrides}
@@ -86,8 +145,11 @@ class IncidentCreationService:
         outcome_info = incident_info.get("outcome", {}) if isinstance(incident_info, dict) else {}
 
         date_str = incident_info.get("date") or extracted_data.get("date")
-        state_str = location_info.get("state") or extracted_data.get("state")
-        city_str = location_info.get("city") or extracted_data.get("city")
+        # Check universal format (incident.location), flat format (state), and
+        # non-universal nested format (location.state) for broader schema compat
+        top_location = extracted_data.get("location", {}) if isinstance(extracted_data.get("location"), dict) else {}
+        state_str = location_info.get("state") or extracted_data.get("state") or top_location.get("state")
+        city_str = location_info.get("city") or extracted_data.get("city") or top_location.get("city")
         description = incident_info.get("summary") or extracted_data.get("description")
 
         incident_date = self._parse_date(date_str)
@@ -144,6 +206,25 @@ class IncidentCreationService:
         tags = self._build_tags(extracted_data, incident_info)
         custom_fields = self._build_custom_fields(extracted_data)
 
+        # --- validate required fields before insert ---
+        # Prefer database-defined required_fields from the event_categories table;
+        # fall back to hardcoded lists when DB lookup fails or returns empty.
+        required = await self._get_required_fields_for_category(category)
+        field_sources = {
+            'date': date_str,
+            'state': state_str,
+            'incident_type': incident_type_name,
+            'victim_category': victim_category_name,
+            'outcome_category': outcome_category_name,
+        }
+        missing = [f for f in required
+                   if field_sources.get(f) is None or field_sources.get(f) == '']
+        if missing:
+            raise ValueError(
+                f"Cannot create incident: missing required fields for "
+                f"{category}: {', '.join(missing)}"
+            )
+
         # --- INSERT incident ---
         incident_id = uuid.uuid4()
         insert_query = """
@@ -166,10 +247,11 @@ class IncidentCreationService:
             )
             RETURNING id
         """
+        legacy_category = LEGACY_CATEGORY_MAP.get(category, "crime")
         await execute(
             insert_query,
             incident_id,
-            category,
+            legacy_category,
             incident_date,
             normalize_state(state_str),
             city_str,
@@ -607,10 +689,12 @@ class IncidentCreationService:
         if rows:
             return rows[0]["id"]
 
+        # incident_types.category is a legacy enum {enforcement, crime}
+        legacy_cat = LEGACY_CATEGORY_MAP.get(category, "crime")
         new_id = uuid.uuid4()
         await execute(
             "INSERT INTO incident_types (id, name, category) VALUES ($1, $2, $3)",
-            new_id, name, category,
+            new_id, name, legacy_cat,
         )
         return new_id
 

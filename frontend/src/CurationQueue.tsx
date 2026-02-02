@@ -3,27 +3,12 @@ import type { CurationQueueItem, UniversalExtractionData } from './types';
 import { SplitPane } from './SplitPane';
 import { IncidentDetailView } from './IncidentDetailView';
 import { ExtractionDetailView } from './ExtractionDetailView';
+import { DynamicExtractionFields, buildEditData, parseExtractedData } from './DynamicExtractionFields';
 
 const API_BASE = '/api';
 
 interface CurationQueueProps {
   onRefresh?: () => void;
-}
-
-interface EditableData {
-  date?: string;
-  state?: string;
-  city?: string;
-  incident_type?: string;
-  victim_name?: string;
-  victim_age?: number;
-  victim_category?: string;
-  outcome_category?: string;
-  description?: string;
-  offender_name?: string;
-  immigration_status?: string;
-  prior_deportations?: number;
-  gang_affiliated?: boolean;
 }
 
 export function CurationQueue({ onRefresh }: CurationQueueProps) {
@@ -33,7 +18,7 @@ export function CurationQueue({ onRefresh }: CurationQueueProps) {
   const [selectedItem, setSelectedItem] = useState<CurationQueueItem | null>(null);
   const [processing, setProcessing] = useState(false);
   const [editMode, setEditMode] = useState(false);
-  const [editData, setEditData] = useState<EditableData>({});
+  const [editData, setEditData] = useState<Record<string, unknown>>({});
   const [rejectReason, setRejectReason] = useState('');
 
   const fetchQueue = async () => {
@@ -43,7 +28,12 @@ export function CurationQueue({ onRefresh }: CurationQueueProps) {
       const response = await fetch(`${API_BASE}/admin/queue?status=pending`);
       if (!response.ok) throw new Error('Failed to fetch queue');
       const data = await response.json();
-      setItems(data.items || []);
+      // Parse extracted_data strings — API may return them as JSON strings
+      const items = (data.items || []).map((item: CurationQueueItem) => ({
+        ...item,
+        extracted_data: parseExtractedData(item.extracted_data),
+      }));
+      setItems(items);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error');
     } finally {
@@ -59,25 +49,7 @@ export function CurationQueue({ onRefresh }: CurationQueueProps) {
     setSelectedItem(item);
     setEditMode(false);
     // Initialize edit data from extracted data
-    if (item.extracted_data) {
-      setEditData({
-        date: item.extracted_data.date,
-        state: item.extracted_data.state,
-        city: item.extracted_data.city,
-        incident_type: item.extracted_data.incident_type,
-        victim_name: item.extracted_data.victim_name,
-        victim_age: item.extracted_data.victim_age,
-        victim_category: item.extracted_data.victim_category,
-        outcome_category: item.extracted_data.outcome_category,
-        description: item.extracted_data.description,
-        offender_name: item.extracted_data.offender_name,
-        immigration_status: item.extracted_data.immigration_status,
-        prior_deportations: item.extracted_data.prior_deportations,
-        gang_affiliated: item.extracted_data.gang_affiliated,
-      });
-    } else {
-      setEditData({});
-    }
+    setEditData(buildEditData(item.extracted_data as Record<string, unknown> | null));
   };
 
   const handleApprove = async (
@@ -284,143 +256,10 @@ export function CurationQueue({ onRefresh }: CurationQueueProps) {
                 {editMode ? (
                   <div className="detail-section">
                     <h4>Edit Extracted Data</h4>
-                    <div className="edit-form">
-                      <div className="form-row">
-                        <div className="form-group">
-                          <label>Date</label>
-                          <input
-                            type="date"
-                            value={editData.date || ''}
-                            onChange={e => setEditData({ ...editData, date: e.target.value })}
-                          />
-                        </div>
-                        <div className="form-group">
-                          <label>State</label>
-                          <input
-                            type="text"
-                            value={editData.state || ''}
-                            onChange={e => setEditData({ ...editData, state: e.target.value })}
-                          />
-                        </div>
-                      </div>
-                      <div className="form-row">
-                        <div className="form-group">
-                          <label>City</label>
-                          <input
-                            type="text"
-                            value={editData.city || ''}
-                            onChange={e => setEditData({ ...editData, city: e.target.value })}
-                          />
-                        </div>
-                        <div className="form-group">
-                          <label>Incident Type</label>
-                          <input
-                            type="text"
-                            value={editData.incident_type || ''}
-                            onChange={e => setEditData({ ...editData, incident_type: e.target.value })}
-                          />
-                        </div>
-                      </div>
-                      <div className="form-row">
-                        <div className="form-group">
-                          <label>Victim Name</label>
-                          <input
-                            type="text"
-                            value={editData.victim_name || ''}
-                            onChange={e => setEditData({ ...editData, victim_name: e.target.value })}
-                          />
-                        </div>
-                        <div className="form-group">
-                          <label>Victim Age</label>
-                          <input
-                            type="number"
-                            value={editData.victim_age || ''}
-                            onChange={e => setEditData({ ...editData, victim_age: parseInt(e.target.value) || undefined })}
-                          />
-                        </div>
-                      </div>
-                      <div className="form-row">
-                        <div className="form-group">
-                          <label>Victim Category</label>
-                          <select
-                            value={editData.victim_category || ''}
-                            onChange={e => setEditData({ ...editData, victim_category: e.target.value })}
-                          >
-                            <option value="">Select...</option>
-                            <option value="detainee">Detainee</option>
-                            <option value="enforcement_target">Enforcement Target</option>
-                            <option value="protester">Protester</option>
-                            <option value="journalist">Journalist</option>
-                            <option value="bystander">Bystander</option>
-                            <option value="us_citizen_collateral">US Citizen (Collateral)</option>
-                            <option value="officer">Officer</option>
-                            <option value="multiple">Multiple</option>
-                          </select>
-                        </div>
-                        <div className="form-group">
-                          <label>Outcome Category</label>
-                          <select
-                            value={editData.outcome_category || ''}
-                            onChange={e => setEditData({ ...editData, outcome_category: e.target.value })}
-                          >
-                            <option value="">Select...</option>
-                            <option value="fatal">Fatal</option>
-                            <option value="serious_injury">Serious Injury</option>
-                            <option value="minor_injury">Minor Injury</option>
-                            <option value="no_injury">No Injury</option>
-                            <option value="property_damage">Property Damage</option>
-                            <option value="unknown">Unknown</option>
-                          </select>
-                        </div>
-                      </div>
-                      <div className="form-group">
-                        <label>Description</label>
-                        <textarea
-                          value={editData.description || ''}
-                          onChange={e => setEditData({ ...editData, description: e.target.value })}
-                          rows={3}
-                        />
-                      </div>
-                      <div className="form-row">
-                        <div className="form-group">
-                          <label>Offender Name</label>
-                          <input
-                            type="text"
-                            value={editData.offender_name || ''}
-                            onChange={e => setEditData({ ...editData, offender_name: e.target.value })}
-                          />
-                        </div>
-                        <div className="form-group">
-                          <label>Immigration Status</label>
-                          <input
-                            type="text"
-                            value={editData.immigration_status || ''}
-                            onChange={e => setEditData({ ...editData, immigration_status: e.target.value })}
-                          />
-                        </div>
-                      </div>
-                      <div className="form-row">
-                        <div className="form-group">
-                          <label>Prior Deportations</label>
-                          <input
-                            type="number"
-                            value={editData.prior_deportations || ''}
-                            onChange={e => setEditData({ ...editData, prior_deportations: parseInt(e.target.value) || undefined })}
-                          />
-                        </div>
-                        <div className="form-group">
-                          <label>Gang Affiliated</label>
-                          <select
-                            value={editData.gang_affiliated === undefined ? '' : editData.gang_affiliated ? 'yes' : 'no'}
-                            onChange={e => setEditData({ ...editData, gang_affiliated: e.target.value === '' ? undefined : e.target.value === 'yes' })}
-                          >
-                            <option value="">Unknown</option>
-                            <option value="yes">Yes</option>
-                            <option value="no">No</option>
-                          </select>
-                        </div>
-                      </div>
-                    </div>
+                    <DynamicExtractionFields
+                      data={editData}
+                      onChange={setEditData}
+                    />
                   </div>
                 ) : (
                   /* Use universal view if extraction has nested incident/actors structure */

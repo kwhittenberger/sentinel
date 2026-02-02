@@ -649,7 +649,19 @@ async def find_duplicate_incident(
     offender_name = entities.get('offender_name')
     victim_name = entities.get('victim_name')
     state = entities.get('state')
-    incident_date = entities.get('date')
+    incident_date_raw = entities.get('date')
+
+    # Convert date string to datetime.date for asyncpg
+    incident_date = None
+    if incident_date_raw:
+        if isinstance(incident_date_raw, str):
+            from datetime import date as _date
+            try:
+                incident_date = _date.fromisoformat(incident_date_raw)
+            except (ValueError, TypeError):
+                pass
+        else:
+            incident_date = incident_date_raw
 
     # Strategy 2: Entity-based matching
     # Find potential matches based on name + state + date range
@@ -704,6 +716,7 @@ async def find_duplicate_incident(
     # Check each potential match for name similarity
     best_match = None
     best_confidence = 0.0
+    best_match_reason = 'similar'
 
     for match in potential_matches:
         matched_name = match.get('matched_name')
@@ -717,7 +730,7 @@ async def find_duplicate_incident(
             if is_match and confidence > best_confidence:
                 best_match = match
                 best_confidence = confidence
-                best_match['name_match_reason'] = reason
+                best_match_reason = reason
 
         elif match_role == 'victim' and victim_name:
             is_match, confidence, reason = check_name_similarity(
@@ -726,14 +739,14 @@ async def find_duplicate_incident(
             if is_match and confidence > best_confidence:
                 best_match = match
                 best_confidence = confidence
-                best_match['name_match_reason'] = reason
+                best_match_reason = reason
 
     if best_match:
         return {
             'match_type': 'entity',
             'matched_id': str(best_match['id']),
             'confidence': best_confidence,
-            'reason': f"Name match ({best_match.get('match_role')}: {best_match.get('name_match_reason', 'similar')})",
+            'reason': f"Name match ({best_match.get('match_role')}: {best_match_reason})",
             'matched_incident': {
                 'date': str(best_match['date']) if best_match['date'] else None,
                 'location': f"{best_match.get('city', '')}, {best_match.get('state', '')}".strip(', '),

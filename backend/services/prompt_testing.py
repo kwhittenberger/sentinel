@@ -1202,6 +1202,22 @@ class PromptTestingService:
             return
         comp = dict(comp)
 
+        # Support reuse_comparison_id filter: pull article IDs from an existing comparison
+        filters_raw = comp.get("article_filters") or {}
+        if isinstance(filters_raw, str):
+            filters_raw = json.loads(filters_raw)
+        reuse_id = filters_raw.get("reuse_comparison_id")
+        if reuse_id:
+            existing_articles = await fetch(
+                "SELECT article_id FROM comparison_articles WHERE comparison_id = $1::uuid",
+                reuse_id,
+            )
+            if existing_articles:
+                filters_raw["article_ids"] = [str(r["article_id"]) for r in existing_articles]
+                # Remove reuse key so it doesn't interfere downstream
+                del filters_raw["reuse_comparison_id"]
+                comp["article_filters"] = filters_raw
+
         await execute(
             """UPDATE prompt_test_comparisons
                SET status = 'running', started_at = NOW(), message = 'Fetching articles...'
@@ -1219,6 +1235,12 @@ class PromptTestingService:
             conditions = []
             params: list = []
             idx = 1
+
+            article_ids = filters.get("article_ids")
+            if article_ids:
+                conditions.append(f"id = ANY(${idx}::uuid[])")
+                params.append(article_ids)
+                idx += 1
 
             status_filter = filters.get("status")
             if status_filter:
@@ -1296,9 +1318,12 @@ class PromptTestingService:
                     result_b = {"stage1": None, "stage2_results": [], "error": str(result_b),
                                 "total_tokens": 0, "total_latency_ms": 0}
 
-                # Pick best-confidence Stage 2 result for the flat extraction columns
-                best_a = self._pick_best_stage2(result_a.get("stage2_results", []))
-                best_b = self._pick_best_stage2(result_b.get("stage2_results", []))
+                # Select best Stage 2 result using domain-priority + entity merge
+                from backend.services.stage2_selector import select_and_merge_stage2
+                merged_a = select_and_merge_stage2(result_a.get("stage2_results", []))
+                merged_b = select_and_merge_stage2(result_b.get("stage2_results", []))
+                best_a = merged_a
+                best_b = merged_b
 
                 await execute(
                     """INSERT INTO comparison_articles
@@ -1309,21 +1334,23 @@ class PromptTestingService:
                             config_a_stage1, config_b_stage1,
                             config_a_stage2_results, config_b_stage2_results,
                             config_a_total_tokens, config_b_total_tokens,
-                            config_a_total_latency_ms, config_b_total_latency_ms)
+                            config_a_total_latency_ms, config_b_total_latency_ms,
+                            config_a_merge_info, config_b_merge_info)
                        VALUES ($1::uuid, $2::uuid,
                                $3, $4, $5, $6,
                                $7::jsonb, $8, $9, $10,
                                $11::jsonb, $12, $13, $14,
                                $15::jsonb, $16::jsonb,
                                $17::jsonb, $18::jsonb,
-                               $19, $20, $21, $22)""",
+                               $19, $20, $21, $22,
+                               $23::jsonb, $24::jsonb)""",
                     comparison_id,
                     article_id,
                     article.get("title"),
                     article.get("content"),
                     article.get("source_url"),
                     article.get("published_date"),
-                    # Flat extraction: best Stage 2 result
+                    # Flat extraction: merged Stage 2 result
                     best_a["extracted_data"] if best_a else None,
                     best_a.get("confidence") if best_a else None,
                     result_a.get("total_latency_ms"),
@@ -1341,6 +1368,9 @@ class PromptTestingService:
                     result_b.get("total_tokens"),
                     result_a.get("total_latency_ms"),
                     result_b.get("total_latency_ms"),
+                    # Merge info
+                    best_a.get("merge_info") if best_a else None,
+                    best_b.get("merge_info") if best_b else None,
                 )
 
                 progress = i + 1
@@ -1414,6 +1444,117 @@ class PromptTestingService:
                 best_conf = conf
                 best = r
         return best
+
+    # --- Prompt Improvement Generation ---
+
+    async def generate_prompt_improvement(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Analyze per-field preferences between two config extractions and generate
+        targeted prompt improvement suggestions using the LLM.
+        """
+        from backend.services.llm_provider import get_llm_router
+
+        article_content = data.get("article_content", "")
+        config_a_extraction = data.get("config_a_extraction", {})
+        config_b_extraction = data.get("config_b_extraction", {})
+        overall_preferred = data.get("overall_preferred_config", "A")
+        field_preferences = data.get("field_preferences", {})
+        current_system_prompt = data.get("current_system_prompt")
+        current_user_prompt_template = data.get("current_user_prompt_template")
+
+        # Identify fields where the non-overall config was preferred
+        divergent_fields = {}
+        for field_name, pref in field_preferences.items():
+            if pref != overall_preferred:
+                divergent_fields[field_name] = {
+                    "preferred_config": pref,
+                    "preferred_value": (config_b_extraction if pref == "B" else config_a_extraction).get(field_name),
+                    "other_value": (config_a_extraction if pref == "B" else config_b_extraction).get(field_name),
+                }
+
+        if not divergent_fields:
+            return {
+                "analysis": "No divergent field preferences found. All fields were preferred from the same config.",
+                "suggested_prompt_additions": [],
+                "suggested_field_instructions": {},
+            }
+
+        # Build the analysis prompt
+        divergent_summary = "\n".join(
+            f"- Field '{f}': Preferred Config {d['preferred_config']} value = {json.dumps(d['preferred_value'])}; "
+            f"Config {overall_preferred} value = {json.dumps(d['other_value'])}"
+            for f, d in divergent_fields.items()
+        )
+
+        system_prompt = (
+            "You are an expert at analyzing LLM extraction quality and improving prompts. "
+            "You will be given an article, two extraction outputs (Config A and Config B), "
+            "and information about which config did better for specific fields. "
+            "Your job is to analyze why one config extracted certain fields better and suggest "
+            "specific prompt improvements to capture those better extraction patterns."
+        )
+
+        user_prompt = f"""## Article Content (truncated to 3000 chars)
+{article_content[:3000]}
+
+## Config A Extraction
+{json.dumps(config_a_extraction, indent=2)}
+
+## Config B Extraction
+{json.dumps(config_b_extraction, indent=2)}
+
+## Overall Preferred Config: {overall_preferred}
+
+## Fields Where the Other Config Was Preferred
+{divergent_summary}
+
+{f"## Current System Prompt\\n{current_system_prompt}" if current_system_prompt else ""}
+{f"## Current User Prompt Template\\n{current_user_prompt_template}" if current_user_prompt_template else ""}
+
+## Task
+Analyze why Config {('B' if overall_preferred == 'A' else 'A')} extracted the divergent fields better, and suggest specific prompt additions or modifications.
+
+Respond with valid JSON matching this schema:
+{{
+  "analysis": "A 2-3 sentence analysis of why the non-preferred config extracted certain fields better",
+  "suggested_prompt_additions": [
+    {{
+      "target": "system_prompt" | "user_prompt_template",
+      "addition": "The specific text to add or modify in the prompt",
+      "rationale": "Why this change would improve extraction of these fields"
+    }}
+  ],
+  "suggested_field_instructions": {{
+    "field_name": "Specific extraction instruction for this field"
+  }}
+}}"""
+
+        try:
+            router = get_llm_router()
+            response = router.call(
+                system_prompt=system_prompt,
+                user_message=user_prompt,
+                model="claude-sonnet-4-20250514",
+                max_tokens=2000,
+                provider_name="anthropic",
+                fallback_provider=None,
+            )
+            result = self._parse_llm_response(response.text)
+            # Ensure required keys exist
+            if "analysis" not in result:
+                result["analysis"] = "Analysis unavailable"
+            if "suggested_prompt_additions" not in result:
+                result["suggested_prompt_additions"] = []
+            if "suggested_field_instructions" not in result:
+                result["suggested_field_instructions"] = {}
+            return result
+        except Exception as e:
+            logger.error("Prompt improvement generation failed: %s", e)
+            return {
+                "analysis": f"Failed to generate improvement: {str(e)}",
+                "suggested_prompt_additions": [],
+                "suggested_field_instructions": {},
+            }
 
     # --- Helpers ---
 

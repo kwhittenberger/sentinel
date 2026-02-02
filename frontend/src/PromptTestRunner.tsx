@@ -5,7 +5,9 @@ import {
   Stage2ComparisonGrid,
   BestExtractionDiff,
   GoldenExtractionView,
+  buildMergedExtraction,
 } from './CalibrationReviewComponents';
+import type { FieldPreferences } from './CalibrationReviewComponents';
 
 const API_BASE = '';
 
@@ -121,6 +123,22 @@ interface Comparison {
   total_articles: number;
 }
 
+interface MergeSource {
+  schema_name: string;
+  domain_slug: string;
+  category_slug: string;
+  confidence: number;
+  role: string;
+  fields_contributed?: string[];
+}
+
+interface MergeInfo {
+  sources: MergeSource[];
+  cluster_entity: string | null;
+  merged: boolean;
+  schemas_merged?: number;
+}
+
 interface CalibrationArticle {
   id: string;
   comparison_id: string;
@@ -145,6 +163,8 @@ interface CalibrationArticle {
   config_b_total_tokens: number | null;
   config_a_total_latency_ms: number | null;
   config_b_total_latency_ms: number | null;
+  config_a_merge_info: MergeInfo | null;
+  config_b_merge_info: MergeInfo | null;
   review_status: string;
   chosen_config: string | null;
   golden_extraction: Record<string, any> | null;
@@ -663,8 +683,9 @@ export function PipelineTestingTab() {
                 </thead>
                 <tbody>
                   {comparisons.map(c => {
-                    const summary = c.summary_stats as ComparisonSummary | null;
-                    const hasSummary = summary && 'winner' in summary;
+                    const rawSummary = c.summary_stats;
+                    const summary = (typeof rawSummary === 'string' ? (() => { try { return JSON.parse(rawSummary); } catch { return null; } })() : rawSummary) as ComparisonSummary | null;
+                    const hasSummary = summary && typeof summary === 'object' && 'winner' in summary;
                     const isCalibration = c.mode === 'calibration';
                     const isPipeline = (c.comparison_type || 'schema') === 'pipeline';
                     return (
@@ -1715,22 +1736,101 @@ function CalibrationReviewModal({ article, comparison, onSave, onCancel }: {
   onCancel: () => void;
 }) {
   const [chosenConfig, setChosenConfig] = useState<string | null>(article.chosen_config);
+  const [fieldPreferences, setFieldPreferences] = useState<FieldPreferences>({});
   const [goldenJson, setGoldenJson] = useState(() => {
-    if (article.golden_extraction) return JSON.stringify(article.golden_extraction, null, 2);
-    if (article.chosen_config === 'A' && article.config_a_extraction) return JSON.stringify(article.config_a_extraction, null, 2);
-    if (article.chosen_config === 'B' && article.config_b_extraction) return JSON.stringify(article.config_b_extraction, null, 2);
+    const parseInit = (v: unknown) => {
+      if (v == null) return null;
+      if (typeof v === 'string') { try { return JSON.parse(v); } catch { return null; } }
+      return typeof v === 'object' ? v : null;
+    };
+    const golden = parseInit(article.golden_extraction);
+    if (golden) return JSON.stringify(golden, null, 2);
+    const initA = parseInit(article.config_a_extraction);
+    const initB = parseInit(article.config_b_extraction);
+    if (article.chosen_config === 'A' && initA) return JSON.stringify(initA, null, 2);
+    if (article.chosen_config === 'B' && initB) return JSON.stringify(initB, null, 2);
     return '';
   });
   const [notes, setNotes] = useState(article.reviewer_notes || '');
   const [editing, setEditing] = useState(false);
   const [jsonError, setJsonError] = useState<string | null>(null);
+  const [showPromptImprovement, setShowPromptImprovement] = useState(false);
+  const [promptImprovement, setPromptImprovement] = useState<any>(null);
+  const [generatingImprovement, setGeneratingImprovement] = useState(false);
   const isPipeline = (comparison.comparison_type || 'schema') === 'pipeline';
+
+  const parseJsonb = (val: unknown): Record<string, any> | null => {
+    if (val == null) return null;
+    if (typeof val === 'string') { try { const p = JSON.parse(val); return typeof p === 'object' && p !== null ? p : null; } catch { return null; } }
+    if (typeof val === 'object' && !Array.isArray(val)) return val as Record<string, any>;
+    return null;
+  };
+
+  const parsedA = parseJsonb(article.config_a_extraction);
+  const parsedB = parseJsonb(article.config_b_extraction);
+  const dataA = parsedA || {};
+  const dataB = parsedB || {};
+
+  // Initialize field preferences from all keys in both extractions
+  const initFieldPreferences = (config: 'A' | 'B'): FieldPreferences => {
+    const allKeys = new Set([...Object.keys(dataA), ...Object.keys(dataB)]);
+    const prefs: FieldPreferences = {};
+    for (const key of allKeys) {
+      prefs[key] = config;
+    }
+    return prefs;
+  };
+
+  const updateGoldenFromPreferences = (prefs: FieldPreferences, defaultCfg: 'A' | 'B') => {
+    if (!parsedA && !parsedB) return;
+    const merged = buildMergedExtraction(dataA, dataB, prefs, defaultCfg);
+    setGoldenJson(JSON.stringify(merged, null, 2));
+  };
 
   const chooseConfig = (config: string) => {
     setChosenConfig(config);
-    const extraction = config === 'A' ? article.config_a_extraction : article.config_b_extraction;
-    if (extraction) {
-      setGoldenJson(JSON.stringify(extraction, null, 2));
+    const cfg = config as 'A' | 'B';
+    const prefs = initFieldPreferences(cfg);
+    setFieldPreferences(prefs);
+    updateGoldenFromPreferences(prefs, cfg);
+  };
+
+  const handleFieldPreferenceChange = (field: string, config: 'A' | 'B') => {
+    const updated = { ...fieldPreferences, [field]: config };
+    setFieldPreferences(updated);
+    if (chosenConfig && !editing) {
+      updateGoldenFromPreferences(updated, chosenConfig as 'A' | 'B');
+    }
+  };
+
+  // Check if any field preferences diverge from overall choice
+  const hasMixedPreferences = chosenConfig
+    ? Object.values(fieldPreferences).some(v => v !== chosenConfig)
+    : false;
+
+  const handleGenerateImprovement = async () => {
+    setGeneratingImprovement(true);
+    try {
+      const res = await fetch(`/api/admin/prompt-tests/generate-prompt-improvement`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          article_content: article.article_content || '',
+          config_a_extraction: dataA,
+          config_b_extraction: dataB,
+          overall_preferred_config: chosenConfig || 'A',
+          field_preferences: fieldPreferences,
+        }),
+      });
+      if (!res.ok) throw new Error('Failed to generate improvement');
+      const data = await res.json();
+      setPromptImprovement(data);
+      setShowPromptImprovement(true);
+    } catch (err) {
+      setPromptImprovement({ analysis: `Error: ${err instanceof Error ? err.message : 'Unknown error'}`, suggested_prompt_additions: [] });
+      setShowPromptImprovement(true);
+    } finally {
+      setGeneratingImprovement(false);
     }
   };
 
@@ -1759,70 +1859,211 @@ function CalibrationReviewModal({ article, comparison, onSave, onCancel }: {
   const stage1B = parseJsonbField(article.config_b_stage1);
   const stage2A = parseJsonbField(article.config_a_stage2_results) || [];
   const stage2B = parseJsonbField(article.config_b_stage2_results) || [];
+  const mergeInfoA = parseJsonbField(article.config_a_merge_info);
+  const mergeInfoB = parseJsonbField(article.config_b_merge_info);
 
   const configALabel = `${comparison.config_a_provider}/${comparison.config_a_model.split('/').pop()}`;
   const configBLabel = `${comparison.config_b_provider}/${comparison.config_b_model.split('/').pop()}`;
 
+  const articleContent = article.article_content || '';
+  const wordCount = articleContent.split(/\s+/).filter(Boolean).length;
+
+  // Build highlighted article content from extracted field values
+  const highlightedContent = (() => {
+    const extraction = chosenConfig === 'B' ? dataB : dataA;
+    if (!articleContent || !extraction || Object.keys(extraction).length === 0) return null;
+
+    // Collect string values from the extraction to highlight
+    const terms: { text: string; field: string }[] = [];
+    for (const [field, value] of Object.entries(extraction)) {
+      if (field.endsWith('_confidence') || field === 'overall_confidence' || field === 'confidence') continue;
+      if (typeof value === 'string' && value.length >= 3 && value.length <= 200) {
+        terms.push({ text: value, field });
+      } else if (Array.isArray(value)) {
+        for (const item of value) {
+          if (typeof item === 'string' && item.length >= 3 && item.length <= 200) {
+            terms.push({ text: item, field });
+          }
+        }
+      }
+    }
+    if (terms.length === 0) return null;
+
+    // Sort by length descending so longer matches take priority
+    terms.sort((a, b) => b.text.length - a.text.length);
+
+    // Find all match positions
+    const contentLower = articleContent.toLowerCase();
+    const matches: { start: number; end: number; field: string }[] = [];
+    for (const { text, field } of terms) {
+      const termLower = text.toLowerCase();
+      let pos = 0;
+      while ((pos = contentLower.indexOf(termLower, pos)) !== -1) {
+        // Check no overlap with existing matches
+        const overlap = matches.some(m => pos < m.end && pos + text.length > m.start);
+        if (!overlap) {
+          matches.push({ start: pos, end: pos + text.length, field });
+        }
+        pos += text.length;
+      }
+    }
+    if (matches.length === 0) return null;
+
+    // Sort by position
+    matches.sort((a, b) => a.start - b.start);
+
+    // Build JSX fragments
+    const parts: React.ReactNode[] = [];
+    let cursor = 0;
+    for (let i = 0; i < matches.length; i++) {
+      const m = matches[i];
+      if (m.start > cursor) {
+        parts.push(articleContent.slice(cursor, m.start));
+      }
+      parts.push(
+        <mark key={i} className="crc-highlight" title={m.field}>
+          {articleContent.slice(m.start, m.end)}
+        </mark>
+      );
+      cursor = m.end;
+    }
+    if (cursor < articleContent.length) {
+      parts.push(articleContent.slice(cursor));
+    }
+    return parts;
+  })();
+
   return (
     <div className="modal-overlay" onClick={onCancel}>
-      <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: 1100 }}>
+      <div className="modal-content crc-review-modal" onClick={e => e.stopPropagation()}>
         <h3>Review Article</h3>
 
-        {/* Article info */}
-        <div style={{ marginBottom: 16 }}>
-          <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4 }}>
-            {article.article_title || 'Untitled'}
-          </div>
-          {article.article_source_url && (
-            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 4 }}>
-              {article.article_source_url}
-            </div>
+        <div className="crc-review-body">
+          {/* Left panel: full article content */}
+          <SplitPane
+            storageKey="calibration-review"
+            defaultLeftWidth={500}
+            minLeftWidth={300}
+            maxLeftWidth={800}
+            left={
+              <div className="crc-article-panel">
+                <div className="crc-article-meta">
+                  <div className="crc-article-title">{article.article_title || 'Untitled'}</div>
+                  {article.article_source_url && (
+                    <div className="crc-article-url">
+                      <a href={article.article_source_url} target="_blank" rel="noopener noreferrer">
+                        {article.article_source_url}
+                      </a>
+                    </div>
+                  )}
+                  <div className="crc-article-stats">
+                    {article.article_published_date && (
+                      <span>{new Date(article.article_published_date).toLocaleDateString()}</span>
+                    )}
+                    <span className="crc-stat-badge">{wordCount.toLocaleString()} words</span>
+                  </div>
+                </div>
+                <div className="crc-article-content">
+                  {highlightedContent || articleContent}
+                </div>
+              </div>
+            }
+            right={
+              <div className="crc-comparison-panel">
+                {/* Pipeline: Stage 1 IR Comparison */}
+                {isPipeline && <Stage1SummaryBar stage1A={stage1A} stage1B={stage1B} />}
+
+                {/* Pipeline: Stage 2 Results */}
+                {isPipeline && <Stage2ComparisonGrid stage2A={stage2A} stage2B={stage2B} />}
+
+                {/* Best extraction diff with choose buttons + per-field toggles */}
+                <BestExtractionDiff
+                  configALabel={configALabel}
+                  configBLabel={configBLabel}
+                  extractionA={parsedA}
+                  extractionB={parsedB}
+                  confidenceA={article.config_a_confidence}
+                  confidenceB={article.config_b_confidence}
+                  errorA={article.config_a_error}
+                  errorB={article.config_b_error}
+                  chosenConfig={chosenConfig}
+                  onChoose={chooseConfig}
+                  selectable
+                  fieldPreferences={fieldPreferences}
+                  mergeInfoA={mergeInfoA}
+                  mergeInfoB={mergeInfoB}
+                  onFieldPreferenceChange={handleFieldPreferenceChange}
+                />
+                {hasMixedPreferences && (
+                  <div style={{ fontSize: 11, color: '#f59e0b', marginBottom: 8 }}>
+                    Mixed field preferences detected — golden extraction reflects merged values.
+                  </div>
+                )}
+
+                {/* Golden extraction */}
+                <GoldenExtractionView
+                  goldenJson={goldenJson}
+                  editing={editing}
+                  onToggleEdit={() => setEditing(v => !v)}
+                  onJsonChange={v => { setGoldenJson(v); setJsonError(null); }}
+                  jsonError={jsonError}
+                />
+
+                {/* Notes */}
+                <div style={{ marginBottom: 16 }}>
+                  <label style={{ fontSize: 12, fontWeight: 600, display: 'block', marginBottom: 4 }}>Notes</label>
+                  <input value={notes} onChange={e => setNotes(e.target.value)} style={inputStyle} placeholder="Optional reviewer notes" />
+                </div>
+
+                {/* Prompt improvement section */}
+                {showPromptImprovement && promptImprovement && (
+                  <div className="crc-prompt-improvement">
+                    <h4>Prompt Improvement Suggestions</h4>
+                    <div className="crc-improvement-analysis">{promptImprovement.analysis}</div>
+                    {promptImprovement.suggested_prompt_additions?.map((s: any, i: number) => (
+                      <div key={i} className="crc-improvement-suggestion">
+                        <div className="crc-suggestion-target">{s.target}</div>
+                        <div className="crc-suggestion-text">{s.addition}</div>
+                        {s.rationale && <div className="crc-suggestion-rationale">{s.rationale}</div>}
+                        <button
+                          className="action-btn crc-copy-btn"
+                          style={{ marginTop: 4 }}
+                          onClick={() => navigator.clipboard.writeText(s.addition)}
+                        >
+                          Copy
+                        </button>
+                      </div>
+                    ))}
+                    {promptImprovement.suggested_field_instructions && (
+                      <div style={{ marginTop: 8 }}>
+                        <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 4 }}>FIELD INSTRUCTIONS</div>
+                        {Object.entries(promptImprovement.suggested_field_instructions).map(([field, instruction]) => (
+                          <div key={field} className="crc-improvement-suggestion">
+                            <div className="crc-suggestion-target">{field}</div>
+                            <div className="crc-suggestion-text">{instruction as string}</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            }
+          />
+        </div>
+
+        {/* Footer actions */}
+        <div className="crc-review-footer">
+          {hasMixedPreferences && (
+            <button
+              className="action-btn"
+              onClick={handleGenerateImprovement}
+              disabled={generatingImprovement}
+              style={{ marginRight: 'auto' }}
+            >
+              {generatingImprovement ? 'Generating...' : 'Generate Prompt Improvement'}
+            </button>
           )}
-          <div style={{
-            maxHeight: 120, overflow: 'auto', fontSize: 12, color: 'var(--text-secondary)',
-            padding: 8, background: 'var(--bg-secondary)', borderRadius: 6,
-          }}>
-            {(article.article_content || '').substring(0, 500)}
-            {(article.article_content || '').length > 500 && '...'}
-          </div>
-        </div>
-
-        {/* Pipeline: Stage 1 IR Comparison */}
-        {isPipeline && <Stage1SummaryBar stage1A={stage1A} stage1B={stage1B} />}
-
-        {/* Pipeline: Stage 2 Results */}
-        {isPipeline && <Stage2ComparisonGrid stage2A={stage2A} stage2B={stage2B} />}
-
-        {/* Best extraction diff */}
-        <BestExtractionDiff
-          configALabel={configALabel}
-          configBLabel={configBLabel}
-          extractionA={article.config_a_extraction}
-          extractionB={article.config_b_extraction}
-          confidenceA={article.config_a_confidence}
-          confidenceB={article.config_b_confidence}
-          errorA={article.config_a_error}
-          errorB={article.config_b_error}
-          chosenConfig={chosenConfig}
-          onChoose={chooseConfig}
-        />
-
-        {/* Golden extraction */}
-        <GoldenExtractionView
-          goldenJson={goldenJson}
-          editing={editing}
-          onToggleEdit={() => setEditing(v => !v)}
-          onJsonChange={v => { setGoldenJson(v); setJsonError(null); }}
-          jsonError={jsonError}
-        />
-
-        {/* Notes */}
-        <div style={{ marginBottom: 16 }}>
-          <label style={{ fontSize: 12, fontWeight: 600, display: 'block', marginBottom: 4 }}>Notes</label>
-          <input value={notes} onChange={e => setNotes(e.target.value)} style={inputStyle} placeholder="Optional reviewer notes" />
-        </div>
-
-        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
           <button className="action-btn" onClick={onCancel}>Cancel</button>
           <button className="action-btn primary" onClick={handleSave}>Save Review</button>
         </div>

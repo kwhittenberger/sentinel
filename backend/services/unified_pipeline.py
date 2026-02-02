@@ -258,7 +258,14 @@ class UnifiedPipeline:
                 }
                 result.steps_completed.append('two_stage_extraction')
 
-            # Step 3: Auto-Approval (uses best Stage 2 confidence)
+                # Select and merge best stage2 result into article extracted_data
+                from .stage2_selector import select_and_merge_stage2
+                merged = select_and_merge_stage2(pipeline_result.get('stage2_results', []))
+                if merged and merged.get('extracted_data'):
+                    article['extracted_data'] = merged['extracted_data']
+                    result.extraction_result['merge_info'] = merged.get('merge_info')
+
+            # Step 3: Auto-Approval (uses merged Stage 2 extraction)
             if not skip_approval:
                 extraction_data = article.get('extracted_data')
                 approval = self.approver.evaluate(article, extraction_data)

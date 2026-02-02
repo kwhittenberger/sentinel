@@ -12,6 +12,7 @@ import type {
   EventListItem,
   IncidentConnections,
   QueueMetrics,
+  ExtractionStatus,
 } from './types';
 
 const API_BASE = '/api';
@@ -447,6 +448,84 @@ export async function fetchAISuggestions(articleId: string): Promise<{ article_i
   return response.json();
 }
 
+// Extraction status and batch operations
+export async function fetchExtractionStatus(): Promise<ExtractionStatus> {
+  const response = await fetch(`${API_BASE}/admin/queue/extraction-status`);
+  return response.json();
+}
+
+export interface BatchResult {
+  success: boolean;
+  processed?: number;
+  extracted?: number;
+  relevant?: number;
+  not_relevant?: number;
+  errors?: number;
+  extract_recommended?: number;
+  reject_recommended?: number;
+  review_recommended?: number;
+  auto_rejected?: number;
+  rejected_count?: number;
+  auto_approved?: number;
+  needs_review?: number;
+  items?: Array<{
+    id: string;
+    title: string;
+    is_relevant?: boolean;
+    confidence?: number;
+    category?: string;
+    error?: string;
+  }>;
+  error?: string;
+  approved?: number;
+  approved_count?: number;
+}
+
+export async function runBatchExtract(limit: number): Promise<BatchResult> {
+  const response = await fetch(`${API_BASE}/admin/queue/batch-extract`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ limit }),
+  });
+  return response.json();
+}
+
+export async function runTriage(limit: number, autoReject = false): Promise<BatchResult> {
+  const response = await fetch(`${API_BASE}/admin/queue/triage`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ limit, auto_reject: autoReject }),
+  });
+  return response.json();
+}
+
+export async function runAutoApprove(limit: number): Promise<BatchResult> {
+  const response = await fetch(`${API_BASE}/admin/queue/auto-approve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ limit }),
+  });
+  return response.json();
+}
+
+export async function rejectNotRelevant(): Promise<BatchResult> {
+  const response = await fetch(`${API_BASE}/admin/queue/bulk-reject-by-criteria`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ reject_not_relevant: true }),
+  });
+  return response.json();
+}
+
+export async function upgradeSchema(limit: number): Promise<BatchResult> {
+  const response = await fetch(`${API_BASE}/admin/queue/batch-extract`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ limit, re_extract: true }),
+  });
+  return response.json();
+}
+
 // Analytics API functions
 export async function fetchAnalyticsOverview(dateStart?: string, dateEnd?: string): Promise<Record<string, unknown>> {
   const params = new URLSearchParams();
@@ -581,6 +660,38 @@ export async function unstickJob(jobId: string): Promise<{ success: boolean; uns
   if (!response.ok) {
     const err = await response.json().catch(() => ({ detail: 'Unstick failed' }));
     throw new Error(err.detail || 'Unstick failed');
+  }
+  return response.json();
+}
+
+// Prompt improvement generation
+export interface PromptImprovementResult {
+  analysis: string;
+  suggested_prompt_additions: Array<{
+    target: string;
+    addition: string;
+    rationale: string;
+  }>;
+  suggested_field_instructions: Record<string, string>;
+}
+
+export async function generatePromptImprovement(data: {
+  article_content: string;
+  config_a_extraction: Record<string, any>;
+  config_b_extraction: Record<string, any>;
+  overall_preferred_config: string;
+  field_preferences: Record<string, 'A' | 'B'>;
+  current_system_prompt?: string;
+  current_user_prompt_template?: string;
+}): Promise<PromptImprovementResult> {
+  const response = await fetch(`${API_BASE}/admin/prompt-tests/generate-prompt-improvement`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ detail: 'Failed to generate prompt improvement' }));
+    throw new Error(err.detail || 'Failed to generate prompt improvement');
   }
   return response.json();
 }
