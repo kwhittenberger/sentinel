@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Ensure all articles have proper merge_info from the two-stage pipeline.
+Ensure all articles have proper merge_info and are fully processed.
 
 1. Two-stage articles missing merge_info: reconstruct from stored stage2 results.
-2. Legacy pipeline articles: reset to 'pending' so the batch extraction endpoint
-   reprocesses them through the full two-stage pipeline.
+2. Legacy/incomplete articles: reset to 'pending' for full re-extraction.
+3. Re-evaluate all 'in_review' articles: auto-approve eligible ones, create incidents.
 
 Usage:
     python scripts/backfill_merge_info.py          # dry-run (default)
@@ -120,14 +120,27 @@ async def reconstruct_merge_info(apply: bool) -> dict:
             print(f"    {label} {article_id} ({title}) — {source_count} sources, schemas={schema_ids}")
 
             if apply:
-                await execute("""
-                    UPDATE ingested_articles
-                    SET extracted_data = jsonb_set(
-                            extracted_data, '{merge_info}', $2::jsonb
-                        ),
-                        updated_at = NOW()
-                    WHERE id = $1
-                """, article_id, json.dumps(merge_info, default=str))
+                # Some articles have extracted_data as a JSON string scalar
+                # rather than a JSONB object — parse and replace the whole value
+                current = await fetch(
+                    "SELECT extracted_data FROM ingested_articles WHERE id = $1",
+                    article_id,
+                )
+                if current:
+                    ed = current[0]["extracted_data"]
+                    if isinstance(ed, str):
+                        try:
+                            ed = json.loads(ed)
+                        except (json.JSONDecodeError, TypeError):
+                            ed = {}
+                    if not isinstance(ed, dict):
+                        ed = {}
+                    ed["merge_info"] = merge_info
+                    await execute("""
+                        UPDATE ingested_articles
+                        SET extracted_data = $2::jsonb, updated_at = NOW()
+                        WHERE id = $1
+                    """, article_id, json.dumps(ed, default=str))
 
             stats["updated"] += 1
 
@@ -217,6 +230,113 @@ async def reset_articles_for_reextraction(
 
 
 # ---------------------------------------------------------------------------
+# Step 3: Re-evaluate in_review articles and auto-approve eligible ones
+# ---------------------------------------------------------------------------
+
+async def reevaluate_in_review(apply: bool) -> dict:
+    """Re-run auto-approval on all in_review articles.
+
+    Articles that now pass (e.g., because offender_immigration_status is no
+    longer required) get approved and incidents are created.
+    """
+    from datetime import datetime
+    from uuid import UUID as _UUID
+    from backend.services.auto_approval import get_auto_approval_service, normalize_extracted_fields
+    from backend.services.incident_creation_service import get_incident_creation_service
+    from backend.services.stage2_selector import resolve_category_from_merge_info
+
+    rows = await fetch("""
+        SELECT id, title, content, source_url, published_date,
+               extracted_data, extraction_confidence
+        FROM ingested_articles
+        WHERE status = 'in_review'
+          AND extracted_data IS NOT NULL
+          AND extraction_confidence IS NOT NULL
+        ORDER BY extraction_confidence DESC
+    """)
+    print(f"  Found {len(rows)} articles in 'in_review'")
+
+    if not rows:
+        return {"approved": 0, "rejected": 0, "still_review": 0, "errors": 0}
+
+    approval_service = get_auto_approval_service()
+    incident_service = get_incident_creation_service()
+
+    stats = {"approved": 0, "rejected": 0, "still_review": 0, "errors": 0}
+
+    for row in rows:
+        article_id = str(row["id"])
+        title = (row.get("title") or "(untitled)")[:60]
+        extracted_data = row.get("extracted_data") or {}
+        if isinstance(extracted_data, str):
+            extracted_data = json.loads(extracted_data)
+
+        merge_info = extracted_data.pop("merge_info", None)
+        if isinstance(merge_info, str):
+            try:
+                merge_info = json.loads(merge_info)
+            except (json.JSONDecodeError, TypeError):
+                merge_info = None
+        category = resolve_category_from_merge_info(merge_info, extracted_data)
+
+        extracted_data = normalize_extracted_fields(extracted_data)
+
+        decision = await approval_service.evaluate_async(
+            dict(row), extracted_data, category=category
+        )
+
+        if decision.decision == "auto_approve":
+            label = "APPROVE" if apply else "WOULD APPROVE"
+            print(f"    {label} {article_id} ({title}) — {decision.reason}")
+
+            if apply:
+                try:
+                    article_dict = {
+                        "id": article_id,
+                        "title": row.get("title"),
+                        "source_url": row.get("source_url"),
+                        "published_date": str(row["published_date"]) if row.get("published_date") else None,
+                        "extraction_confidence": row.get("extraction_confidence"),
+                    }
+                    inc_result = await incident_service.create_incident_from_extraction(
+                        extracted_data=extracted_data,
+                        article=article_dict,
+                        category=category,
+                        merge_info=merge_info,
+                    )
+                    incident_id = inc_result["incident_id"]
+                    await execute("""
+                        UPDATE ingested_articles
+                        SET status = 'approved', incident_id = $1, reviewed_at = $2
+                        WHERE id = $3
+                    """, _UUID(incident_id), datetime.utcnow(), row["id"])
+                except Exception as e:
+                    print(f"      ERROR creating incident: {e}")
+                    stats["errors"] += 1
+                    continue
+
+            stats["approved"] += 1
+
+        elif decision.decision == "auto_reject":
+            label = "REJECT" if apply else "WOULD REJECT"
+            print(f"    {label} {article_id} ({title}) — {decision.reason}")
+
+            if apply:
+                await execute("""
+                    UPDATE ingested_articles
+                    SET status = 'rejected', rejection_reason = $1, reviewed_at = $2
+                    WHERE id = $3
+                """, decision.reason[:400], datetime.utcnow(), row["id"])
+
+            stats["rejected"] += 1
+
+        else:
+            stats["still_review"] += 1
+
+    return stats
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -236,7 +356,15 @@ async def run(apply: bool):
           f"({reset_stats['legacy']} legacy, "
           f"{reset_stats['incomplete_two_stage']} incomplete two-stage)\n")
 
-    if not apply and (merge_stats["updated"] > 0 or total_reset > 0):
+    # Step 3: re-evaluate in_review articles through auto-approval
+    print("Step 3: Re-evaluate in_review articles")
+    eval_stats = await reevaluate_in_review(apply)
+    print(f"  Result: {eval_stats['approved']} {'approved' if apply else 'would approve'}, "
+          f"{eval_stats['rejected']} {'rejected' if apply else 'would reject'}, "
+          f"{eval_stats['still_review']} still need review, "
+          f"{eval_stats['errors']} errors\n")
+
+    if not apply and (merge_stats["updated"] > 0 or total_reset > 0 or eval_stats["approved"] > 0):
         print("Run with --apply to persist changes.")
         if total_reset > 0:
             print("After applying, run batch extraction to process the reset articles.")
