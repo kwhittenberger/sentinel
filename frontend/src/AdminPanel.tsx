@@ -18,11 +18,10 @@ import { DomainManager } from './DomainManager';
 import { CaseManager } from './CaseManager';
 import { ProsecutorDashboard } from './ProsecutorDashboard';
 import { RecidivismDashboard } from './RecidivismDashboard';
-import { ExtractionView } from './ExtractionView';
 import { PipelineView } from './PipelineView';
 import './AdminPanel.css';
 
-type AdminView = 'dashboard' | 'pipeline' | 'incidents' | 'analytics' | 'settings' | 'types' | 'prompts' | 'events' | 'actors' | 'domains' | 'cases' | 'prosecutors' | 'extraction' | 'recidivism';
+type AdminView = 'dashboard' | 'pipeline' | 'incidents' | 'analytics' | 'settings' | 'types' | 'prompts' | 'events' | 'actors' | 'domains' | 'cases' | 'prosecutors' | 'recidivism';
 
 interface QueueStats {
   pending: number;
@@ -113,14 +112,6 @@ export function AdminPanel({ onClose, onRefresh }: AdminPanelProps) {
             <span className="nav-icon">🤖</span>
             Pipeline
           </button>
-          <button
-            className={`admin-nav-item ${view === 'extraction' ? 'active' : ''}`}
-            onClick={() => setView('extraction')}
-          >
-            <span className="nav-icon">🧬</span>
-            Extraction
-          </button>
-
           {/* Data Section */}
           <div className="admin-nav-divider">
             <span>Data</span>
@@ -301,8 +292,8 @@ export function AdminPanel({ onClose, onRefresh }: AdminPanelProps) {
                     <h3>Quick Links</h3>
                     <div className="quick-actions">
                       <button className="action-btn" onClick={() => setView('pipeline')}>Pipeline</button>
-                      <button className="action-btn" onClick={() => setView('extraction')}>Extraction</button>
                       <button className="action-btn" onClick={() => setView('analytics')}>Analytics</button>
+                      <button className="action-btn" onClick={() => setView('incidents')}>Incidents</button>
                     </div>
                   </div>
                 </div>
@@ -364,11 +355,6 @@ export function AdminPanel({ onClose, onRefresh }: AdminPanelProps) {
         {/* Prosecutor Dashboard View */}
         {view === 'prosecutors' && (
           <ProsecutorDashboard />
-        )}
-
-        {/* Extraction View (merged schemas + pipeline + datasets + testing) */}
-        {view === 'extraction' && (
-          <ExtractionView />
         )}
 
         {/* Recidivism Dashboard View */}

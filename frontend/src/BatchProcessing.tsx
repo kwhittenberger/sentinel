@@ -80,6 +80,18 @@ export function BatchProcessing({ onClose, onRefresh, hideOpsBar }: BatchProcess
   } | null>(null);
   const [rejectReason, setRejectReason] = useState('');
 
+  // Duplicate detection dialog state
+  const [duplicateInfo, setDuplicateInfo] = useState<{
+    articleId: string;
+    message: string;
+    confidence: number | null;
+    existingIncidentId: string | null;
+    existingDate: string | null;
+    existingLocation: string | null;
+    existingName: string | null;
+    existingSource: string | null;
+  } | null>(null);
+
   const loadTieredQueue = useCallback(async () => {
     setLoading(true);
     try {
@@ -160,33 +172,71 @@ export function BatchProcessing({ onClose, onRefresh, hideOpsBar }: BatchProcess
     loadSuggestions(item.id);
   };
 
-  const handleApprove = async () => {
+  const handleApprove = async (forceCreate?: boolean, linkToExistingId?: string) => {
     if (!selectedItem) return;
     setProcessing(true);
     try {
-      // Pass edit data as overrides if in edit mode or if data was modified
       const overrides = editMode ? editData : undefined;
       const response = await fetch(`${API_BASE}/admin/queue/${selectedItem.id}/approve`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(overrides || {}),
+        body: JSON.stringify({
+          ...(overrides || {}),
+          force_create: forceCreate || undefined,
+          link_to_existing_id: linkToExistingId || undefined,
+        }),
       });
-      if (response.ok) {
+      const data = await response.json();
+
+      // Handle duplicate detection
+      if (data.error === 'duplicate_detected') {
+        setDuplicateInfo({
+          articleId: selectedItem.id,
+          message: data.message || 'Potential duplicate detected',
+          confidence: data.confidence ?? null,
+          existingIncidentId: data.existing_incident_id ?? null,
+          existingDate: data.existing_date ?? null,
+          existingLocation: data.existing_location ?? null,
+          existingName: data.existing_name ?? null,
+          existingSource: data.existing_source ?? null,
+        });
+        setProcessing(false);
+        return;
+      }
+
+      if (response.ok && data.success !== false) {
         setMessage({ type: 'success', text: 'Article approved' });
         setSelectedItem(null);
         setFullArticle(null);
         setEditMode(false);
         setEditData({});
+        setDuplicateInfo(null);
         loadTieredQueue();
         onRefresh?.();
       } else {
-        setMessage({ type: 'error', text: 'Failed to approve' });
+        setMessage({ type: 'error', text: data.error || 'Failed to approve' });
       }
     } catch {
       setMessage({ type: 'error', text: 'Failed to approve' });
     } finally {
       setProcessing(false);
     }
+  };
+
+  const handleDuplicateLink = () => {
+    if (duplicateInfo?.existingIncidentId) {
+      setDuplicateInfo(null);
+      handleApprove(false, duplicateInfo.existingIncidentId);
+    }
+  };
+
+  const handleDuplicateCreateNew = () => {
+    setDuplicateInfo(null);
+    handleApprove(true);
+  };
+
+  const handleDuplicateCancel = () => {
+    setDuplicateInfo(null);
   };
 
   const handleReject = async (reason?: string) => {
@@ -429,6 +479,48 @@ export function BatchProcessing({ onClose, onRefresh, hideOpsBar }: BatchProcess
         </div>
       )}
 
+      {/* Duplicate Detection Dialog */}
+      {duplicateInfo && (
+        <div className="bp-confirm-dialog">
+          <div className="bp-confirm-content">
+            <p><strong>Potential Duplicate Detected</strong></p>
+            <p>{duplicateInfo.message}</p>
+            {duplicateInfo.confidence != null && (
+              <p>Match confidence: <strong>{(duplicateInfo.confidence * 100).toFixed(0)}%</strong></p>
+            )}
+            <div className="bp-duplicate-details">
+              {duplicateInfo.existingDate && (
+                <p>Date: {duplicateInfo.existingDate}</p>
+              )}
+              {duplicateInfo.existingLocation && (
+                <p>Location: {duplicateInfo.existingLocation}</p>
+              )}
+              {duplicateInfo.existingName && (
+                <p>Matched person: {duplicateInfo.existingName}</p>
+              )}
+              {duplicateInfo.existingSource && (
+                <p>Original source: {duplicateInfo.existingSource.length > 80
+                  ? duplicateInfo.existingSource.substring(0, 80) + '...'
+                  : duplicateInfo.existingSource}</p>
+              )}
+            </div>
+            <div className="bp-confirm-actions">
+              {duplicateInfo.existingIncidentId && (
+                <button className="action-btn approve" onClick={handleDuplicateLink} disabled={processing}>
+                  Link to Existing
+                </button>
+              )}
+              <button className="action-btn primary" onClick={handleDuplicateCreateNew} disabled={processing}>
+                Create New Anyway
+              </button>
+              <button className="action-btn" onClick={handleDuplicateCancel} disabled={processing}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Content */}
       <SplitPane
         storageKey="batch-processing"
@@ -599,7 +691,7 @@ export function BatchProcessing({ onClose, onRefresh, hideOpsBar }: BatchProcess
             <div className="detail-actions">
               <button
                 className="action-btn approve"
-                onClick={handleApprove}
+                onClick={() => handleApprove()}
                 disabled={processing}
               >
                 {processing ? 'Processing...' : editMode ? 'Save & Approve' : 'Approve & Create Incident'}

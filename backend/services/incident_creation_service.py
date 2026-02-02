@@ -225,6 +225,11 @@ class IncidentCreationService:
                 f"{category}: {', '.join(missing)}"
             )
 
+        # --- Geocode ---
+        from backend.utils.geocoding import get_coords
+        normalized_state = normalize_state(state_str)
+        lat, lon = get_coords(city_str, normalized_state)
+
         # --- INSERT incident ---
         incident_id = uuid.uuid4()
         insert_query = """
@@ -235,6 +240,7 @@ class IncidentCreationService:
                 outcome_type_id, offender_immigration_status,
                 prior_deportations, gang_affiliated,
                 domain_id, category_id, tags, custom_fields,
+                latitude, longitude,
                 created_at
             ) VALUES (
                 $1, $2, $3, $4, $5, $6,
@@ -243,7 +249,8 @@ class IncidentCreationService:
                 $15, $16,
                 $17, $18,
                 $19, $20, $21, $22,
-                $23
+                $23, $24,
+                $25
             )
             RETURNING id
         """
@@ -253,7 +260,7 @@ class IncidentCreationService:
             incident_id,
             legacy_category,
             incident_date,
-            normalize_state(state_str),
+            normalized_state,
             city_str,
             incident_type_id,
             description,
@@ -272,6 +279,8 @@ class IncidentCreationService:
             category_id,
             tags or [],
             custom_fields or {},
+            lat,
+            lon,
             datetime.utcnow(),
         )
 

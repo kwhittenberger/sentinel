@@ -1,5 +1,5 @@
 /**
- * Dynamic extraction field editor shared by BatchProcessing and CurationQueue.
+ * Dynamic extraction field editor used by BatchProcessing.
  *
  * Renders editable form fields for any extraction schema — not limited to
  * the hardcoded enforcement/crime field set.
