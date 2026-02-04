@@ -867,13 +867,26 @@ STAGE1_IR_SCHEMA = {
         },
         "source_attributions": {"type": "array", "items": {"type": "string"}},
         "extraction_confidence": {"type": "number", "minimum": 0, "maximum": 1},
-        "extraction_notes": {"type": "string"}
+        "extraction_notes": {"type": "string"},
+        "domain_relevance": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "domain_slug": {"type": "string"},
+                    "is_relevant": {"type": "boolean"},
+                    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                    "reasoning": {"type": "string"}
+                },
+                "required": ["domain_slug", "is_relevant", "confidence"]
+            }
+        }
     },
-    "required": ["entities", "events", "classification_hints"]
+    "required": ["entities", "events", "classification_hints", "domain_relevance"]
 }
 
 # Current Stage 1 schema version - bump when prompt changes materially
-STAGE1_SCHEMA_VERSION = 1
+STAGE1_SCHEMA_VERSION = 2
 
 
 def compute_prompt_hash(system_prompt: str, user_prompt_template: str) -> str:

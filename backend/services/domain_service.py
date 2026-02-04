@@ -54,8 +54,8 @@ class DomainService:
         from backend.database import fetchrow
 
         row = await fetchrow("""
-            INSERT INTO event_domains (name, slug, description, icon, color, display_order)
-            VALUES ($1, $2, $3, $4, $5, $6)
+            INSERT INTO event_domains (name, slug, description, icon, color, display_order, relevance_scope)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             RETURNING *
         """,
             data["name"],
@@ -64,6 +64,7 @@ class DomainService:
             data.get("icon"),
             data.get("color"),
             data.get("display_order", 0),
+            data.get("relevance_scope"),
         )
         logger.info(f"Created domain: {data['slug']}")
         return self._serialize_domain(row)
@@ -80,6 +81,7 @@ class DomainService:
                 color = COALESCE($5, color),
                 is_active = COALESCE($6, is_active),
                 display_order = COALESCE($7, display_order),
+                relevance_scope = COALESCE($8, relevance_scope),
                 updated_at = NOW()
             WHERE slug = $1
             RETURNING *
@@ -91,6 +93,7 @@ class DomainService:
             data.get("color"),
             data.get("is_active"),
             data.get("display_order"),
+            data.get("relevance_scope"),
         )
         if row:
             logger.info(f"Updated domain: {slug}")

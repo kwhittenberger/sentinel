@@ -5659,6 +5659,8 @@ async def two_stage_batch_extract(data: dict = Body(...)):
 
     limit = min(data.get("limit", 50), 200)
     include_previously_failed = data.get("include_previously_failed", False)
+    provider_override = data.get("provider_override")
+    model_override = data.get("model_override")
     service = get_two_stage_service()
     approval_service = get_auto_approval_service()
     incident_service = get_incident_creation_service()
@@ -5714,7 +5716,11 @@ async def two_stage_batch_extract(data: dict = Body(...)):
 
         try:
             # Run two-stage extraction
-            pipeline_result = await service.run_full_pipeline(article_id)
+            pipeline_result = await service.run_full_pipeline(
+                article_id,
+                provider_override=provider_override,
+                model_override=model_override,
+            )
 
             # Merge stage2 results using domain-priority selector
             stage2_results = pipeline_result.get('stage2_results', [])

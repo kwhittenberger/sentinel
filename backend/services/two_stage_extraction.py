@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 CLASSIFICATION_CONFIDENCE_THRESHOLD = 0.3
 
 # Default timeout (seconds) for individual LLM calls
-LLM_CALL_TIMEOUT_SECONDS = 120
+LLM_CALL_TIMEOUT_SECONDS = 300
 
 
 class TwoStageExtractionService:
@@ -91,7 +91,33 @@ class TwoStageExtractionService:
 
         system_prompt = stage1_schema["system_prompt"]
         user_prompt_template = stage1_schema["user_prompt_template"]
-        user_prompt = user_prompt_template.replace("{article_text}", article_text)
+
+        # Inject domain relevance criteria into user prompt
+        domain_rows = await fetch(
+            """SELECT slug, name, relevance_scope
+               FROM event_domains
+               WHERE is_active = TRUE AND relevance_scope IS NOT NULL
+               ORDER BY display_order""",
+        )
+        if domain_rows:
+            criteria_lines = []
+            for dr in domain_rows:
+                criteria_lines.append(
+                    f"- **{dr['name']}** (domain_slug: \"{dr['slug']}\"):\n"
+                    f"  {dr['relevance_scope']}"
+                )
+            domain_criteria_text = "\n".join(criteria_lines)
+        else:
+            domain_criteria_text = "(No domain relevance criteria configured.)"
+
+        # Substitute template variables: domain criteria (trusted) first,
+        # article text (untrusted) second — prevents article text from
+        # containing {domain_relevance_criteria} literal.
+        user_prompt = user_prompt_template.replace(
+            "{domain_relevance_criteria}", domain_criteria_text
+        )
+        user_prompt = user_prompt.replace("{article_text}", article_text)
+
         prompt_hash = compute_prompt_hash(system_prompt, user_prompt_template)
 
         # Create pending extraction row
@@ -423,7 +449,7 @@ class TwoStageExtractionService:
             raise
 
     async def _auto_select_schemas(self, extraction_data: Dict[str, Any]) -> list:
-        """Select Stage 2 schemas based on classification_hints."""
+        """Select Stage 2 schemas based on classification_hints and domain relevance."""
         from backend.database import fetch
 
         hints = extraction_data.get("classification_hints", [])
@@ -437,6 +463,35 @@ class TwoStageExtractionService:
         ]
         if not qualified:
             return []
+
+        # --- Domain relevance gate ---
+        # Build set of relevant domains from domain_relevance assessment.
+        # If domain_relevance is absent (v1 extractions), skip the gate.
+        domain_relevance = extraction_data.get("domain_relevance", [])
+        if domain_relevance:
+            relevant_domains = {
+                dr["domain_slug"].replace("-", "_").lower()
+                for dr in domain_relevance
+                if dr.get("is_relevant") and dr.get("confidence", 0) >= 0.5
+            }
+            if not relevant_domains:
+                logger.info(
+                    "Domain relevance gate: no domains relevant — article is off-topic"
+                )
+                return []
+            # Filter qualified hints to only relevant domains
+            qualified = [
+                h for h in qualified
+                if h.get("domain_slug", "").replace("-", "_").lower()
+                in relevant_domains
+            ]
+            if not qualified:
+                logger.info(
+                    "Domain relevance gate: no classification hints match relevant domains"
+                )
+                return []
+        else:
+            relevant_domains = None  # Legacy v1 extraction, skip gate
 
         # Build domain/category pairs
         pairs = [(h["domain_slug"], h["category_slug"]) for h in qualified]
