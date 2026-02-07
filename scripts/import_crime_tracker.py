@@ -28,7 +28,7 @@ SOURCE_DB = os.getenv(
 )
 TARGET_DB = os.getenv(
     "TARGET_DATABASE_URL",
-    "postgresql://sentinel:devpassword@localhost:5433/sentinel"
+    "postgresql://sentinel:sentinel@localhost:5433/sentinel"
 )
 
 # Mapping from crime-tracker crime types to our incident types

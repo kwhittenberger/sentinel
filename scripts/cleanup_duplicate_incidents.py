@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql://sentinel:devpassword@localhost:5433/sentinel",
+    "postgresql://sentinel:sentinel@localhost:5433/sentinel",
 )
 
 

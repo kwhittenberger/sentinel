@@ -5,7 +5,17 @@ import logging
 
 from celery.exceptions import SoftTimeLimitExceeded
 
-from backend.celery_app import app
+from backend.celery_app import (
+    app,
+    EXTRACT_MAX_RETRIES,
+    EXTRACT_RETRY_BACKOFF,
+    EXTRACT_RETRY_BACKOFF_MAX,
+    EXTRACT_MANUAL_RETRY_BASE,
+    BATCH_EXTRACT_MAX_RETRIES,
+    BATCH_EXTRACT_RETRY_BACKOFF,
+    BATCH_EXTRACT_RETRY_BACKOFF_MAX,
+    BATCH_EXTRACT_MANUAL_RETRY_BASE,
+)
 from backend.tasks.db import (
     async_fetch,
     async_execute,
@@ -173,10 +183,10 @@ async def _async_batch_extract_handler(job_id: str, params: dict) -> dict:
     acks_late=True,
     soft_time_limit=600,
     time_limit=720,
-    max_retries=3,
+    max_retries=EXTRACT_MAX_RETRIES,
     autoretry_for=(ConnectionError,),
-    retry_backoff=300,
-    retry_backoff_max=1800,
+    retry_backoff=EXTRACT_RETRY_BACKOFF,
+    retry_backoff_max=EXTRACT_RETRY_BACKOFF_MAX,
 )
 def run_process(self, job_id: str, params: dict):
     """Process pending articles with LLM extraction."""
@@ -192,7 +202,7 @@ def run_process(self, job_id: str, params: dict):
             raise  # Don't retry
         # Transient/partial — retry with backoff
         logger.warning("Transient LLM error in run_process, retrying: %s", e)
-        raise self.retry(exc=e, countdown=60 * (self.request.retries + 1))
+        raise self.retry(exc=e, countdown=EXTRACT_MANUAL_RETRY_BASE * (self.request.retries + 1))
 
 
 @app.task(
@@ -201,10 +211,10 @@ def run_process(self, job_id: str, params: dict):
     acks_late=True,
     soft_time_limit=3600,
     time_limit=3720,
-    max_retries=2,
+    max_retries=BATCH_EXTRACT_MAX_RETRIES,
     autoretry_for=(ConnectionError,),
-    retry_backoff=300,
-    retry_backoff_max=1800,
+    retry_backoff=BATCH_EXTRACT_RETRY_BACKOFF,
+    retry_backoff_max=BATCH_EXTRACT_RETRY_BACKOFF_MAX,
 )
 def run_batch_extract(self, job_id: str, params: dict):
     """Batch extract articles with universal extraction."""
@@ -219,4 +229,4 @@ def run_batch_extract(self, job_id: str, params: dict):
             logger.error("Permanent LLM error in run_batch_extract, failing task: %s", e)
             raise  # Don't retry
         logger.warning("Transient LLM error in run_batch_extract, retrying: %s", e)
-        raise self.retry(exc=e, countdown=120 * (self.request.retries + 1))
+        raise self.retry(exc=e, countdown=BATCH_EXTRACT_MANUAL_RETRY_BASE * (self.request.retries + 1))

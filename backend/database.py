@@ -32,8 +32,12 @@ async def _init_connection(conn: Connection):
 # Database URL from environment
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql://sentinel:devpassword@localhost:5433/sentinel"
+    "postgresql://sentinel:sentinel@localhost:5433/sentinel"
 )
+
+# Connection pool sizing (configurable via environment)
+POOL_MIN_SIZE = int(os.getenv("DB_POOL_MIN_SIZE", "2"))
+POOL_MAX_SIZE = int(os.getenv("DB_POOL_MAX_SIZE", "10"))
 
 # Global connection pool
 _pool: Optional[Pool] = None
@@ -45,12 +49,15 @@ async def get_pool() -> Pool:
     if _pool is None:
         _pool = await asyncpg.create_pool(
             DATABASE_URL,
-            min_size=2,
-            max_size=10,
+            min_size=POOL_MIN_SIZE,
+            max_size=POOL_MAX_SIZE,
             command_timeout=60,
             init=_init_connection,  # Register JSON codecs on each connection
         )
-        logger.info("Database connection pool created")
+        logger.info(
+            "Database connection pool created (min=%d, max=%d)",
+            POOL_MIN_SIZE, POOL_MAX_SIZE,
+        )
     return _pool
 
 

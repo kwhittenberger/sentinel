@@ -4,7 +4,12 @@ import logging
 
 from celery.exceptions import SoftTimeLimitExceeded
 
-from backend.celery_app import app
+from backend.celery_app import (
+    app,
+    PIPELINE_MAX_RETRIES,
+    PIPELINE_RETRY_BACKOFF,
+    PIPELINE_RETRY_BACKOFF_MAX,
+)
 from backend.tasks.db import (
     async_update_progress,
     run_task,
@@ -48,10 +53,10 @@ async def _async_full_pipeline_handler(job_id: str, params: dict) -> dict:
     acks_late=True,
     soft_time_limit=3600,
     time_limit=3720,
-    max_retries=1,
+    max_retries=PIPELINE_MAX_RETRIES,
     autoretry_for=(ConnectionError,),
-    retry_backoff=600,
-    retry_backoff_max=1800,
+    retry_backoff=PIPELINE_RETRY_BACKOFF,
+    retry_backoff_max=PIPELINE_RETRY_BACKOFF_MAX,
 )
 def run_full_pipeline(self, job_id: str, params: dict):
     """Run complete pipeline: fetch, enrich, extract."""

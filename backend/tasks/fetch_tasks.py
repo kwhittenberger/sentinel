@@ -7,7 +7,12 @@ from datetime import datetime, timezone
 
 from celery.exceptions import SoftTimeLimitExceeded
 
-from backend.celery_app import app
+from backend.celery_app import (
+    app,
+    FETCH_MAX_RETRIES,
+    FETCH_RETRY_BACKOFF,
+    FETCH_RETRY_BACKOFF_MAX,
+)
 from backend.tasks.db import (
     async_fetch,
     async_execute,
@@ -120,10 +125,10 @@ async def _async_fetch_handler(job_id: str, params: dict) -> dict:
     acks_late=True,
     soft_time_limit=300,
     time_limit=360,
-    max_retries=5,
+    max_retries=FETCH_MAX_RETRIES,
     autoretry_for=(ConnectionError,),
-    retry_backoff=60,
-    retry_backoff_max=600,
+    retry_backoff=FETCH_RETRY_BACKOFF,
+    retry_backoff_max=FETCH_RETRY_BACKOFF_MAX,
 )
 def run_fetch(self, job_id: str, params: dict):
     """Fetch articles from RSS feeds."""

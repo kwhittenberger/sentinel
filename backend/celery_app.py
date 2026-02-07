@@ -11,6 +11,42 @@ from kombu import Exchange, Queue
 BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
 RESULT_BACKEND = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
+# ---------------------------------------------------------------------------
+# Per-task retry policies (override via environment variables)
+# ---------------------------------------------------------------------------
+
+# Fetch tasks (RSS feed fetching — network errors are common, generous retries)
+FETCH_MAX_RETRIES = int(os.getenv("CELERY_FETCH_MAX_RETRIES", "5"))
+FETCH_RETRY_BACKOFF = int(os.getenv("CELERY_FETCH_RETRY_BACKOFF", "60"))
+FETCH_RETRY_BACKOFF_MAX = int(os.getenv("CELERY_FETCH_RETRY_BACKOFF_MAX", "600"))
+
+# Extraction: single-article processing (LLM calls — moderate retries)
+EXTRACT_MAX_RETRIES = int(os.getenv("CELERY_EXTRACT_MAX_RETRIES", "3"))
+EXTRACT_RETRY_BACKOFF = int(os.getenv("CELERY_EXTRACT_RETRY_BACKOFF", "300"))
+EXTRACT_RETRY_BACKOFF_MAX = int(os.getenv("CELERY_EXTRACT_RETRY_BACKOFF_MAX", "1800"))
+EXTRACT_MANUAL_RETRY_BASE = int(os.getenv("CELERY_EXTRACT_MANUAL_RETRY_BASE", "60"))
+
+# Extraction: batch processing (long-running LLM batch — fewer retries)
+BATCH_EXTRACT_MAX_RETRIES = int(os.getenv("CELERY_BATCH_EXTRACT_MAX_RETRIES", "2"))
+BATCH_EXTRACT_RETRY_BACKOFF = int(os.getenv("CELERY_BATCH_EXTRACT_RETRY_BACKOFF", "300"))
+BATCH_EXTRACT_RETRY_BACKOFF_MAX = int(os.getenv("CELERY_BATCH_EXTRACT_RETRY_BACKOFF_MAX", "1800"))
+BATCH_EXTRACT_MANUAL_RETRY_BASE = int(os.getenv("CELERY_BATCH_EXTRACT_MANUAL_RETRY_BASE", "120"))
+
+# Enrichment: batch article enrichment (HTTP fetches — moderate retries)
+BATCH_ENRICH_MAX_RETRIES = int(os.getenv("CELERY_BATCH_ENRICH_MAX_RETRIES", "3"))
+BATCH_ENRICH_RETRY_BACKOFF = int(os.getenv("CELERY_BATCH_ENRICH_RETRY_BACKOFF", "120"))
+BATCH_ENRICH_RETRY_BACKOFF_MAX = int(os.getenv("CELERY_BATCH_ENRICH_RETRY_BACKOFF_MAX", "600"))
+
+# Enrichment: cross-reference enrichment (long-running — fewer retries)
+ENRICH_MAX_RETRIES = int(os.getenv("CELERY_ENRICH_MAX_RETRIES", "2"))
+ENRICH_RETRY_BACKOFF = int(os.getenv("CELERY_ENRICH_RETRY_BACKOFF", "300"))
+ENRICH_RETRY_BACKOFF_MAX = int(os.getenv("CELERY_ENRICH_RETRY_BACKOFF_MAX", "1800"))
+
+# Full pipeline (fetch + enrich + extract — conservative retries)
+PIPELINE_MAX_RETRIES = int(os.getenv("CELERY_PIPELINE_MAX_RETRIES", "1"))
+PIPELINE_RETRY_BACKOFF = int(os.getenv("CELERY_PIPELINE_RETRY_BACKOFF", "600"))
+PIPELINE_RETRY_BACKOFF_MAX = int(os.getenv("CELERY_PIPELINE_RETRY_BACKOFF_MAX", "1800"))
+
 app = Celery(
     "sentinel",
     include=[

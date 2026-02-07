@@ -1,12 +1,35 @@
 """
-City/state → lat/lon geocoding using a hardcoded coordinate lookup.
+City/state → lat/lon geocoding using a hardcoded coordinate lookup with
+optional Nominatim API fallback.
 
 Handles both full state names ("California") and 2-letter codes ("CA").
+When a city is not found in the local lookup, optionally queries the
+Nominatim geocoding API (OpenStreetMap). API fallback is opt-in via
+the ``GEOCODING_API_ENABLED`` environment variable.
 """
 
-from typing import Optional, Tuple
+import logging
+import os
+import time
+from typing import Dict, Optional, Tuple
+
+import httpx
 
 from backend.utils.state_normalizer import get_state_name
+
+logger = logging.getLogger(__name__)
+
+# In-memory cache for Nominatim API results.  Keyed by "city, state" string,
+# values are (lat, lon) tuples or None for negative lookups.
+_api_cache: Dict[str, Optional[Tuple[float, float]]] = {}
+
+# Timestamp of last Nominatim API request, used to enforce rate limiting.
+_last_api_call: float = 0.0
+
+_NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
+_NOMINATIM_USER_AGENT = "Sentinel/1.0 (incident-analysis-platform)"
+_NOMINATIM_TIMEOUT = 10  # seconds
+_NOMINATIM_MIN_INTERVAL = 1.0  # seconds between requests (rate limit)
 
 CITY_COORDS = {
     # Major cities
@@ -165,10 +188,70 @@ CITY_COORDS = {
 }
 
 
+def _is_api_enabled() -> bool:
+    """Check if the Nominatim API fallback is enabled via environment variable."""
+    return os.environ.get("GEOCODING_API_ENABLED", "false").lower() in ("true", "1", "yes")
+
+
+def _geocode_via_api(city: str, state: str) -> Optional[Tuple[float, float]]:
+    """Query the Nominatim API for coordinates of a city/state pair.
+
+    Returns (lat, lon) on success, None on failure.  Results (including
+    negative lookups) are cached in-memory to avoid redundant API calls.
+    Enforces a 1-second minimum interval between requests to respect
+    Nominatim's usage policy.
+    """
+    global _last_api_call
+
+    cache_key = f"{city}, {state}"
+
+    # Return cached result (including cached misses)
+    if cache_key in _api_cache:
+        logger.debug("Geocoding cache hit for %r", cache_key)
+        return _api_cache[cache_key]
+
+    # Rate limit: wait if needed to maintain 1-second interval
+    elapsed = time.monotonic() - _last_api_call
+    if elapsed < _NOMINATIM_MIN_INTERVAL:
+        time.sleep(_NOMINATIM_MIN_INTERVAL - elapsed)
+
+    try:
+        logger.debug("Querying Nominatim API for %r", cache_key)
+        with httpx.Client(timeout=_NOMINATIM_TIMEOUT) as client:
+            response = client.get(
+                _NOMINATIM_URL,
+                params={"q": cache_key, "format": "json", "limit": 1},
+                headers={"User-Agent": _NOMINATIM_USER_AGENT},
+            )
+            _last_api_call = time.monotonic()
+            response.raise_for_status()
+
+        results = response.json()
+        if results and len(results) > 0:
+            lat = float(results[0]["lat"])
+            lon = float(results[0]["lon"])
+            _api_cache[cache_key] = (lat, lon)
+            logger.debug("Nominatim resolved %r -> (%s, %s)", cache_key, lat, lon)
+            return lat, lon
+
+        # Valid response but no results -- cache the miss
+        logger.debug("Nominatim returned no results for %r", cache_key)
+        _api_cache[cache_key] = None
+        return None
+
+    except (httpx.HTTPError, httpx.InvalidURL, KeyError, ValueError, TypeError) as e:
+        logger.warning("Nominatim API request failed for %r: %s", cache_key, e)
+        # Cache the failure to avoid hammering the API on repeated lookups
+        _api_cache[cache_key] = None
+        return None
+
+
 def get_coords(city: Optional[str], state: Optional[str]) -> Tuple[Optional[float], Optional[float]]:
     """Get coordinates for a city/state pair.
 
     Accepts state as either a full name ("California") or 2-letter code ("CA").
+    Falls back to the Nominatim geocoding API when enabled via the
+    ``GEOCODING_API_ENABLED`` environment variable (default: disabled).
     """
     if not city or not state:
         return None, None
@@ -197,5 +280,11 @@ def get_coords(city: Optional[str], state: Optional[str]) -> Tuple[Optional[floa
             key_state = key_state.strip()
             if state_full == key_state and city_clean.lower() in key_city.lower():
                 return coords
+
+    # Fallback: Nominatim API (opt-in)
+    if _is_api_enabled():
+        result = _geocode_via_api(city_clean, state_full)
+        if result:
+            return result
 
     return None, None
