@@ -326,6 +326,85 @@ REFRESH MATERIALIZED VIEW CONCURRENTLY recidivism_analysis;
 
 ---
 
+## Database Backups
+
+Sentinel includes `pg_dump`-based backup and restore scripts. Backups use PostgreSQL's custom format (`-Fc`) which is compressed, verifiable, and supports selective restore.
+
+### Quick Reference
+
+```bash
+# Take a backup
+./scripts/backup-db.sh
+
+# Take a backup and verify the archive
+./scripts/backup-db.sh --verify
+
+# Take a named backup (before migrations, risky operations)
+./scripts/backup-db.sh --label pre-migration
+
+# List available backups
+./scripts/restore-db.sh
+
+# Preview archive contents (no changes made)
+./scripts/restore-db.sh --dry-run backups/daily/sentinel_20260206_030000.dump
+
+# Restore the most recent backup
+./scripts/restore-db.sh --latest
+
+# Restore a specific backup
+./scripts/restore-db.sh backups/daily/sentinel_20260206_030000.dump
+```
+
+### Storage Layout
+
+```
+backups/
+├── daily/      # Last 7 daily backups (configurable)
+└── weekly/     # Last 4 Sunday backups (configurable)
+```
+
+Labeled backups (via `--label`) are stored in `daily/` and count toward daily retention. If you want to preserve a labeled backup permanently, copy it out of the retention directory.
+
+### Automated Backups (Cron)
+
+The backup runs independently of the application stack — it works even if the backend/Celery is down, as long as PostgreSQL is running.
+
+```bash
+# Edit crontab
+crontab -e
+
+# Add this line for daily 3 AM backups with verification:
+0 3 * * * /home/kwhittenberger/repos/sentinel/scripts/backup-db.sh --verify >> /home/kwhittenberger/repos/sentinel/.logs/backup-cron.log 2>&1
+```
+
+### Restore Safety
+
+The restore script includes multiple safety measures:
+
+1. **Confirmation gate** — requires typing "restore" to proceed
+2. **Pre-restore backup** — automatically calls `backup-db.sh --label pre-restore` before restoring
+3. **Non-destructive** — uses `pg_restore --clean --if-exists` (drops and recreates objects, does not DROP DATABASE)
+4. **Post-restore verification** — prints table, incident, article, extraction, and actor counts
+
+### Configuration
+
+All backup settings have sensible defaults. Override via `.env` or environment:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DB_BACKUP_HOST` | `localhost` | Database host for pg_dump/pg_restore |
+| `DB_BACKUP_PORT` | `5433` | Database port (host-mapped Docker port) |
+| `DB_BACKUP_USER` | `sentinel` | Database user |
+| `DB_BACKUP_NAME` | `sentinel` | Database name |
+| `BACKUP_RETAIN_DAILY` | `7` | Number of daily backups to retain |
+| `BACKUP_RETAIN_WEEKLY` | `4` | Number of weekly backups to retain |
+
+### Logs
+
+Backup operations log to `.logs/backup.log`. Cron output goes to `.logs/backup-cron.log`.
+
+---
+
 ## Troubleshooting
 
 ### Port 5433 already in use

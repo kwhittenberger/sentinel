@@ -38,6 +38,7 @@ frontend/dist/
 # Database
 *.sql.backup
 pgdata/
+backups/
 
 # Celery
 celerybeat-schedule
