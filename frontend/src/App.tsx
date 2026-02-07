@@ -161,6 +161,9 @@ function App() {
       setIncidents(incData.incidents);
       setStats(statsData);
       setLoading(false);
+    }).catch((err) => {
+      console.error('Failed to load incidents/stats:', err);
+      setLoading(false);
     });
   }, [filters]);
 

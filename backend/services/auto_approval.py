@@ -475,7 +475,7 @@ class AutoApprovalService:
         field_confidence = extracted.get('field_confidence', {})
         low_confidence_fields = []
         for field_name in config.required_fields:
-            fc = field_confidence.get(field_name, extracted.get(f'{field_name}_confidence', 1.0))
+            fc = field_confidence.get(field_name, extracted.get(f'{field_name}_confidence', 0.0))
             if fc < config.field_confidence_threshold:
                 low_confidence_fields.append(f'{field_name} ({fc:.0%})')
 
