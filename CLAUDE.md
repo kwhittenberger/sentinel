@@ -1,141 +1,104 @@
-# CLAUDE.md
+# CLAUDE.md — Sentinel
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides project-specific guidance for this codebase. For universal workflow rules, see the root `../CLAUDE.md`.
 
-## Project Overview
+---
 
-**Sentinel** — Incident analysis and pattern detection platform. Ingests articles via RSS, extracts structured incident data using LLM pipelines, and provides curation workflows, analytics, and geographic visualization.
+## Project Context
 
-The system supports configurable event domains and categories (e.g., Immigration, Criminal Justice, Civil Rights) with LLM-powered extraction, confidence-based auto-approval, and deduplication.
+- **Product:** Incident analysis and pattern detection platform — RSS ingestion, LLM-powered entity extraction, curation workflows, analytics, geographic visualization
+- **Stack:** Python (FastAPI, Celery), React (Vite, TypeScript), PostgreSQL, Redis
+- **Architecture:** Data pipeline: Fetch → Extract → Dedupe → Auto-Approve → Curate → Incident
+- **Deploy:** Docker Compose (db, redis, backend, celery workers, beat)
+- **Key integrations:** Claude Sonnet (LLM extraction), RSS feeds, Celery (background processing)
 
-## Quick Start
+## Build & Run
 
 ```bash
 # Start all services (db, redis, backend, celery workers, beat)
 ./start-dev.sh
 
-# Frontend (in a separate terminal)
+# Frontend (separate terminal)
 cd frontend && npm run dev
+
+# Backend-only (no Celery workers)
+./start-backend.sh
+
+# Check service status / stop
+./start-dev.sh status
+./start-dev.sh stop
+
+# Docker
+docker-compose up -d              # Start everything
+docker-compose up -d db           # Database only
+docker exec -it sentinel_db psql -U sentinel -d sentinel
+
+# Scripts
+python scripts/migrate_data.py          # Migrate JSON → DB (one-time)
+python scripts/import_crime_tracker.py  # Import crime tracker data
 ```
 
-`start-dev.sh` handles Docker containers, .env loading, uvicorn, and all Celery workers. Logs go to `.logs/`. Use `./start-dev.sh status` to check services and `./start-dev.sh stop` to stop non-Docker processes.
-
-For backend-only (no Celery workers): `./start-backend.sh`
-
-Access the dashboard at http://localhost:5174
+Dashboard: http://localhost:5174
 
 ## Architecture
 
-```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│   React + Vite  │────▶│  FastAPI        │────▶│  PostgreSQL     │
-│   (frontend/)   │     │  (backend/)     │     │  (docker)       │
-└─────────────────┘     └─────────────────┘     └─────────────────┘
-                              │
-                              ▼
-                        ┌─────────────────┐
-                        │  Claude Sonnet  │
-                        │  (LLM Extract)  │
-                        └─────────────────┘
-```
-
-### Backend (`backend/`)
-
-- `main.py` - FastAPI routes for incidents, admin, analytics
-- `database.py` - PostgreSQL connection pool
-- `services/` - Business logic:
-  - `llm_extraction.py` - Article-to-incident extraction via Claude
-  - `auto_approval.py` - Confidence-based auto-approval
-  - `duplicate_detection.py` - URL, title, content, entity matching
-  - `unified_pipeline.py` - Orchestrates fetch → extract → dedupe → approve
-  - `job_executor.py` - Background job processing
-  - `settings.py` - Runtime configuration management
-
-### Frontend (`frontend/src/`)
-
-- `App.tsx` - Main dashboard with map, charts, filters
-- `AdminPanel.tsx` - Admin navigation and routing
-- `CurationQueue.tsx` - Review extracted articles
-- `BatchProcessing.tsx` - Tiered confidence queue processing
-- `IncidentBrowser.tsx` - Search/edit approved incidents
-- `JobManager.tsx` - Background job monitoring
-- `SettingsPanel.tsx` - Configuration UI
-- `AnalyticsDashboard.tsx` - Pipeline metrics and funnels
-
-### Database (`database/`)
-
-- `schema.sql` - Full PostgreSQL schema
-- `migrations/` - Incremental migrations
-
-Key tables: `incidents`, `articles`, `curation_queue`, `persons`, `jurisdictions`, `background_jobs`
-
-## Data Pipeline
-
-1. **Fetch** - RSS feeds → `articles` table
-2. **Extract** - Claude Sonnet analyzes article → `extracted_data` JSON
-3. **Dedupe** - Check URL, title similarity, entity overlap
-4. **Auto-Approve** - High confidence (≥85%) auto-approved
-5. **Curation** - Human review for medium/low confidence
-6. **Incident** - Approved items → `incidents` table
-
-## Scripts
-
-```bash
-# Migrate JSON data to database (one-time)
-python scripts/migrate_data.py
-
-# Import crime tracker data
-python scripts/import_crime_tracker.py
-
-# Validate JSON schema (legacy data files)
-python scripts/validate_schema.py
-```
-
-## Data Files
-
-- `data/incidents/tier*.json` - Original incident data (backup/reference)
-- `data/reference/sanctuary_jurisdictions.json` - Sanctuary policy classifications
-- `data/methodology.json` - Source tier definitions
-
-## Docker
-
-```bash
-# Start everything
-docker-compose up -d
-
-# Database only
-docker-compose up -d db
-
-# View logs
-docker-compose logs -f
-
-# Connect to database
-docker exec -it sentinel_db psql -U sentinel -d sentinel
-```
-
-## Environment Variables
-
-Copy `.env.example` to `.env` and configure:
+### Key Directories
 
 ```
-DATABASE_URL=postgresql://sentinel:devpassword@localhost:5433/sentinel
-ANTHROPIC_API_KEY=sk-ant-...
+backend/
+├── main.py                     # FastAPI routes
+├── database.py                 # PostgreSQL connection pool
+└── services/
+    ├── llm_extraction.py       # Article→incident extraction via Claude
+    ├── auto_approval.py        # Confidence-based auto-approval
+    ├── duplicate_detection.py  # URL, title, content, entity matching
+    ├── unified_pipeline.py     # Fetch → Extract → Dedupe → Approve
+    ├── job_executor.py         # Background job processing
+    └── settings.py             # Runtime config
+
+frontend/src/
+├── App.tsx                     # Main dashboard (map, charts, filters)
+├── AdminPanel.tsx              # Admin navigation/routing
+├── CurationQueue.tsx           # Review extracted articles
+├── BatchProcessing.tsx         # Tiered confidence queue
+├── IncidentBrowser.tsx         # Search/edit approved incidents
+├── JobManager.tsx              # Background job monitoring
+└── AnalyticsDashboard.tsx      # Pipeline metrics/funnels
+
+database/
+├── schema.sql                  # Full PostgreSQL schema
+└── migrations/                 # Incremental migrations
 ```
 
-## Confidence Tiers
+### Key Design Decisions
+
+- **LLM-powered extraction:** Claude Sonnet analyzes articles to produce structured incident data with confidence scores
+- **Confidence-based auto-approval:** High confidence (>=85%) items auto-approved; medium/low go to human curation
+- **Configurable event domains:** Supports multiple categories (Immigration, Criminal Justice, Civil Rights) with per-category extraction rules
+
+## Session Continuity
+
+**At session start:** Read `docs/active-work/WORK-LOG.md` to understand current state.
+**At session end:** Update it with accomplishments, in-progress work, blockers, and next steps.
+
+## Domain-Specific Rules
+
+### Confidence Tiers
 
 | Tier | Confidence | Action |
 |------|------------|--------|
-| HIGH | ≥ 85% | Auto-approve candidates |
+| HIGH | >= 85% | Auto-approve candidates |
 | MEDIUM | 50-85% | Quick human review |
 | LOW | < 50% | Full manual review |
 
-## Incident Categories
+### Incident Categories
 
-**Enforcement** (higher scrutiny - 90% threshold):
-- Focus: victim details, officer involvement, outcome severity
-- Required: date, state, incident_type, victim_category, outcome_category
+- **Enforcement** (higher scrutiny — 90% threshold): Focus on victim details, officer involvement, outcome severity. Required: date, state, incident_type, victim_category, outcome_category
+- **Crime** (standard — 85% threshold): Focus on offender details, criminal history, deportation status. Required: date, state, incident_type, immigration_status
 
-**Crime** (standard - 85% threshold):
-- Focus: offender details, criminal history, deportation status
-- Required: date, state, incident_type, immigration_status
+### Environment
+
+Copy `.env.example` to `.env`. Key vars: `DATABASE_URL`, `ANTHROPIC_API_KEY`.
+Logs go to `.logs/` directory.
+
+Key tables: `incidents`, `articles`, `curation_queue`, `persons`, `jurisdictions`, `background_jobs`
