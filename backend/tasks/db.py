@@ -13,7 +13,7 @@ import asyncio
 import json
 import os
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 import asyncpg
@@ -100,7 +100,7 @@ async def async_mark_job_started(job_id: str, celery_task_id: str):
             celery_task_id = $2
         WHERE id = $3::uuid
         """,
-        datetime.utcnow(),
+        datetime.now(timezone.utc),
         celery_task_id,
         job_id,
     )
@@ -117,7 +117,7 @@ async def async_mark_job_completed(job_id: str, message: str = "Completed"):
             message = $2
         WHERE id = $3::uuid
         """,
-        datetime.utcnow(),
+        datetime.now(timezone.utc),
         message,
         job_id,
     )
@@ -134,7 +134,7 @@ async def async_mark_job_failed(job_id: str, error: str):
             error = $2
         WHERE id = $3::uuid
         """,
-        datetime.utcnow(),
+        datetime.now(timezone.utc),
         error,
         job_id,
     )
@@ -237,7 +237,7 @@ async def _run_task_lifecycle(
     This avoids creating multiple event loops (which breaks asyncpg pools).
     Also records execution metrics in task_metrics.
     """
-    started_at = datetime.utcnow()
+    started_at = datetime.now(timezone.utc)
     await async_mark_job_started(job_id, celery_task_id)
 
     # Resolve task name and queue from the job row
@@ -256,7 +256,7 @@ async def _run_task_lifecycle(
 
     try:
         result = await handler(job_id, params)
-        completed_at = datetime.utcnow()
+        completed_at = datetime.now(timezone.utc)
         await async_mark_job_completed(job_id, result.get("message", "Completed"))
 
         items = result.get("items_processed") or result.get("total", 0)
@@ -268,7 +268,7 @@ async def _run_task_lifecycle(
         )
         return result
     except Exception as exc:
-        completed_at = datetime.utcnow()
+        completed_at = datetime.now(timezone.utc)
         await async_mark_job_failed(job_id, str(exc))
         await _record_task_metric(
             job_id, task_name, queue, "failed",

@@ -8,7 +8,7 @@ and pipeline reset utilities.
 
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List
 
 from fastapi import APIRouter, Query, HTTPException, Body, Depends
@@ -19,6 +19,13 @@ from backend.routes._shared import (
     INCIDENTS_DIR,
     clear_incidents_cache,
     load_incidents,
+)
+from backend.services.thresholds import (
+    AUTO_APPROVE_CONFIDENCE,
+    REVIEW_CONFIDENCE,
+    FIELD_CONFIDENCE_THRESHOLD,
+    DUPLICATE_NAME_SIMILARITY,
+    DUPLICATE_ENTITY_DATE_WINDOW,
 )
 
 logger = logging.getLogger(__name__)
@@ -375,7 +382,7 @@ async def submit_article_for_curation(
 ):
     """Submit an article for curation (and optionally run LLM extraction)."""
     import uuid
-    from datetime import datetime
+    from datetime import datetime, timezone
 
     if not USE_DATABASE:
         return {"success": False, "error": "Database not enabled"}
@@ -412,7 +419,7 @@ async def submit_article_for_curation(
     await execute(
         query,
         uuid.UUID(article_id), url, title, content, source_name,
-        datetime.utcnow(), "pending",
+        datetime.now(timezone.utc), "pending",
         extraction_result,  # Pass dict directly, asyncpg JSON codec handles it
         extraction_confidence, relevance_score
     )
@@ -459,9 +466,9 @@ async def get_tiered_queue(category: Optional[str] = Query(None)):
         }
 
         confidence = item["extraction_confidence"] or 0
-        if confidence >= 0.85:
+        if confidence >= AUTO_APPROVE_CONFIDENCE:
             tiers["high"].append(item)
-        elif confidence >= 0.50:
+        elif confidence >= REVIEW_CONFIDENCE:
             tiers["medium"].append(item)
         else:
             tiers["low"].append(item)
@@ -481,13 +488,13 @@ async def bulk_approve(
 
     from backend.database import fetch, execute
     import uuid
-    from datetime import datetime
+    from datetime import datetime, timezone
 
     # Map tier to confidence threshold (use <= for upper bound to include 1.0)
     tier_filters = {
-        "high": "extraction_confidence >= 0.85",
-        "medium": "extraction_confidence >= 0.50 AND extraction_confidence < 0.85",
-        "low": "extraction_confidence < 0.50 OR extraction_confidence IS NULL",
+        "high": f"extraction_confidence >= {AUTO_APPROVE_CONFIDENCE}",
+        "medium": f"extraction_confidence >= {REVIEW_CONFIDENCE} AND extraction_confidence < {AUTO_APPROVE_CONFIDENCE}",
+        "low": f"extraction_confidence < {REVIEW_CONFIDENCE} OR extraction_confidence IS NULL",
     }
 
     if tier not in tier_filters:
@@ -540,7 +547,7 @@ async def bulk_approve(
                     UPDATE ingested_articles
                     SET status = 'rejected', rejection_reason = $1, reviewed_at = $2
                     WHERE id = $3
-                """, f"Duplicate of {dup_id}: {dup_reason}"[:400], datetime.utcnow(), article_id)
+                """, f"Duplicate of {dup_id}: {dup_reason}"[:400], datetime.now(timezone.utc), article_id)
                 error_details.append(f"{row.get('title', article_id)}: duplicate of {dup_id}")
                 errors += 1
                 continue
@@ -558,7 +565,7 @@ async def bulk_approve(
                 UPDATE ingested_articles
                 SET status = 'approved', incident_id = $1, reviewed_at = $2
                 WHERE id = $3
-            """, uuid.UUID(incident_id), datetime.utcnow(), article_id)
+            """, uuid.UUID(incident_id), datetime.now(timezone.utc), article_id)
 
             approved_count += 1
             incident_ids.append(incident_id)
@@ -569,7 +576,7 @@ async def bulk_approve(
                 UPDATE ingested_articles
                 SET status = 'error', rejection_reason = $1, reviewed_at = $2
                 WHERE id = $3
-            """, f"Bulk approve error: {str(e)[:400]}", datetime.utcnow(), article_id)
+            """, f"Bulk approve error: {str(e)[:400]}", datetime.now(timezone.utc), article_id)
             error_details.append(f"{row.get('title', article_id)}: {str(e)[:200]}")
             errors += 1
 
@@ -594,12 +601,12 @@ async def bulk_reject(
         raise HTTPException(status_code=501, detail="Database not enabled")
 
     from backend.database import fetch, execute
-    from datetime import datetime
+    from datetime import datetime, timezone
 
     tier_filters = {
-        "high": "extraction_confidence >= 0.85",
-        "medium": "extraction_confidence >= 0.50 AND extraction_confidence < 0.85",
-        "low": "extraction_confidence < 0.50 OR extraction_confidence IS NULL",
+        "high": f"extraction_confidence >= {AUTO_APPROVE_CONFIDENCE}",
+        "medium": f"extraction_confidence >= {REVIEW_CONFIDENCE} AND extraction_confidence < {AUTO_APPROVE_CONFIDENCE}",
+        "low": f"extraction_confidence < {REVIEW_CONFIDENCE} OR extraction_confidence IS NULL",
     }
 
     if tier not in tier_filters:
@@ -614,7 +621,7 @@ async def bulk_reject(
               AND ({tier_filters[tier]})
             LIMIT $3
         )
-    """, reason, datetime.utcnow(), limit)
+    """, reason, datetime.now(timezone.utc), limit)
 
     # Parse result to get count
     rejected_count = 0
@@ -642,7 +649,7 @@ async def auto_approve_extracted(data: dict = Body(...)):
 
     import uuid as uuid_mod
     import json as _json
-    from datetime import datetime
+    from datetime import datetime, timezone
     from backend.database import get_pool
     from backend.services.auto_approval import get_auto_approval_service
     from backend.services.incident_creation_service import get_incident_creation_service
@@ -723,7 +730,7 @@ async def auto_approve_extracted(data: dict = Body(...)):
                         UPDATE ingested_articles
                         SET status = 'approved', incident_id = $1, reviewed_at = $2
                         WHERE id = $3
-                    """, uuid_mod.UUID(incident_id), datetime.utcnow(), row["id"])
+                    """, uuid_mod.UUID(incident_id), datetime.now(timezone.utc), row["id"])
                     item["status"] = "auto_approved"
                     item["incident_id"] = incident_id
                     auto_approved += 1
@@ -733,7 +740,7 @@ async def auto_approve_extracted(data: dict = Body(...)):
                         UPDATE ingested_articles
                         SET status = 'error', rejection_reason = $1, reviewed_at = $2
                         WHERE id = $3
-                    """, f"Auto-approve error: {str(e)[:400]}", datetime.utcnow(), row["id"])
+                    """, f"Auto-approve error: {str(e)[:400]}", datetime.now(timezone.utc), row["id"])
                     item["status"] = "error"
                     item["error"] = str(e)[:200]
                     errors += 1
@@ -743,7 +750,7 @@ async def auto_approve_extracted(data: dict = Body(...)):
                     UPDATE ingested_articles
                     SET status = 'rejected', rejection_reason = $1, reviewed_at = $2
                     WHERE id = $3
-                """, decision.reason[:500], datetime.utcnow(), row["id"])
+                """, decision.reason[:500], datetime.now(timezone.utc), row["id"])
                 item["status"] = "auto_rejected"
                 auto_rejected += 1
 
@@ -788,7 +795,7 @@ async def get_queue_extraction_status():
     from backend.database import fetch
 
     # Get stage-based counts for clearer pipeline view
-    stage_rows = await fetch("""
+    stage_rows = await fetch(f"""
         SELECT
             CASE
                 -- Not yet extracted (keyword matching only or nothing)
@@ -801,7 +808,7 @@ async def get_queue_extraction_status():
                 -- Extracted, relevant, high confidence (ready to approve)
                 WHEN (extracted_data->>'is_relevant' = 'true'
                       OR extracted_data->>'isRelevant' = 'true')
-                     AND COALESCE(extraction_confidence, 0) >= 0.85 THEN 'ready_to_approve'
+                     AND COALESCE(extraction_confidence, 0) >= {AUTO_APPROVE_CONFIDENCE} THEN 'ready_to_approve'
                 -- Extracted, relevant, needs review (low/medium confidence)
                 WHEN (extracted_data->>'is_relevant' = 'true'
                       OR extracted_data->>'isRelevant' = 'true') THEN 'needs_review'
@@ -1260,7 +1267,7 @@ async def get_ai_suggestions(article_id: str):
     for field in confidence_fields:
         conf_key = f"{field}_confidence"
         confidence = extracted_data.get(conf_key, 1.0)
-        if confidence < 0.7:
+        if confidence < FIELD_CONFIDENCE_THRESHOLD:
             suggestions.append({
                 "field": field,
                 "current_value": extracted_data.get(field),
@@ -1340,7 +1347,7 @@ async def approve_article(
     to the existing incident instead of creating a new one.
     """
     import uuid
-    from datetime import datetime
+    from datetime import datetime, timezone
 
     if not USE_DATABASE:
         return {"success": False, "error": "Database not enabled"}
@@ -1414,8 +1421,8 @@ async def approve_article(
         duplicate = await find_duplicate_incident(
             extracted_data,
             source_url=article.get("source_url"),
-            date_window_days=30,
-            name_threshold=0.7
+            date_window_days=DUPLICATE_ENTITY_DATE_WINDOW,
+            name_threshold=DUPLICATE_NAME_SIMILARITY
         )
 
         if duplicate:
@@ -1453,7 +1460,7 @@ async def approve_article(
         SET status = 'approved', incident_id = $1, reviewed_at = $2
         WHERE id = $3
     """
-    await execute(update_query, uuid.UUID(incident_id), datetime.utcnow(), uuid.UUID(article_id))
+    await execute(update_query, uuid.UUID(incident_id), datetime.now(timezone.utc), uuid.UUID(article_id))
 
     # Add article as primary source in incident_sources
     source_query = """
@@ -1484,7 +1491,7 @@ async def reject_article(
 ):
     """Reject an article."""
     import uuid
-    from datetime import datetime
+    from datetime import datetime, timezone
 
     if not USE_DATABASE:
         return {"success": False, "error": "Database not enabled"}
@@ -1496,7 +1503,7 @@ async def reject_article(
         SET status = 'rejected', rejection_reason = $1, reviewed_at = $2
         WHERE id = $3
     """
-    await execute(query, reason, datetime.utcnow(), uuid.UUID(article_id))
+    await execute(query, reason, datetime.now(timezone.utc), uuid.UUID(article_id))
 
     return {"success": True}
 

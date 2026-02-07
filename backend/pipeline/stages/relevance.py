@@ -106,7 +106,7 @@ class RelevanceStage(PipelineStage):
             from backend.services.prompt_manager import get_prompt_manager, PromptType
             from backend.services.llm_provider import get_llm_router
             from backend.services.settings import get_settings_service
-            import json
+            from backend.utils.llm_parsing import parse_llm_json
 
             prompt_manager = get_prompt_manager()
             prompt = await prompt_manager.get_prompt(
@@ -141,19 +141,7 @@ class RelevanceStage(PipelineStage):
                 fallback_model=llm_settings.fallback_model,
             )
 
-            response_text = llm_response.text
-
-            # Parse JSON response
-            if "```json" in response_text:
-                json_start = response_text.find("```json") + 7
-                json_end = response_text.find("```", json_start)
-                response_text = response_text[json_start:json_end].strip()
-            elif "```" in response_text:
-                json_start = response_text.find("```") + 3
-                json_end = response_text.find("```", json_start)
-                response_text = response_text[json_start:json_end].strip()
-
-            data = json.loads(response_text)
+            data = parse_llm_json(llm_response.text)
 
             if not data.get("is_relevant", False):
                 return StageExecutionResult(

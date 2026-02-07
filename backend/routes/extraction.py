@@ -6,7 +6,7 @@ and two-stage extraction endpoints.
 
 import uuid
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Query, HTTPException, Body
 from typing import Optional, List
@@ -158,7 +158,7 @@ async def run_enrichment(
     await execute("""
         INSERT INTO background_jobs (id, job_type, status, params, created_at)
         VALUES ($1, 'cross_reference_enrich', 'pending', $2, $3)
-    """, job_id, params, datetime.utcnow())
+    """, job_id, params, datetime.now(timezone.utc))
 
     return {"success": True, "job_id": str(job_id)}
 
@@ -396,7 +396,7 @@ async def two_stage_batch_extract(data: dict = Body(...)):
     import asyncio
     import json
     import uuid as uuid_mod
-    from datetime import datetime as dt
+    from datetime import datetime as dt, timezone
     from backend.services.two_stage_extraction import get_two_stage_service
     from backend.services.stage2_selector import select_and_merge_stage2, resolve_category_from_merge_info
     from backend.services.llm_errors import LLMError
@@ -557,7 +557,7 @@ async def two_stage_batch_extract(data: dict = Body(...)):
                         UPDATE ingested_articles
                         SET status = 'approved', incident_id = $1, reviewed_at = $2
                         WHERE id = $3
-                    """, uuid_mod.UUID(incident_id), dt.utcnow(), row['id'])
+                    """, uuid_mod.UUID(incident_id), dt.now(timezone.utc), row['id'])
                     result_item["status"] = "auto_approved"
                     result_item["incident_id"] = incident_id
                     auto_approved += 1
@@ -571,7 +571,7 @@ async def two_stage_batch_extract(data: dict = Body(...)):
                     UPDATE ingested_articles
                     SET status = 'rejected', rejection_reason = $1, reviewed_at = $2
                     WHERE id = $3
-                """, decision.reason[:500], dt.utcnow(), row['id'])
+                """, decision.reason[:500], dt.now(timezone.utc), row['id'])
                 result_item["status"] = "auto_rejected"
                 auto_rejected += 1
             else:

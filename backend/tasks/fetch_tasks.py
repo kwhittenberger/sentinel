@@ -3,7 +3,7 @@
 import hashlib
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from celery.exceptions import SoftTimeLimitExceeded
 
@@ -88,14 +88,14 @@ async def _async_fetch_handler(job_id: str, params: dict) -> dict:
                     raw_content,
                     content_hash,
                     feed["name"],
-                    datetime.utcnow(),
-                    datetime.utcnow(),
+                    datetime.now(timezone.utc),
+                    datetime.now(timezone.utc),
                 )
                 total_fetched += 1
 
             await async_execute(
                 "UPDATE sources SET last_fetched = $1, last_error = NULL WHERE id = $2",
-                datetime.utcnow(),
+                datetime.now(timezone.utc),
                 feed["id"],
             )
 

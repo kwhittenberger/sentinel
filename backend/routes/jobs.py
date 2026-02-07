@@ -6,7 +6,7 @@ Extracted from main.py — job CRUD, WebSocket updates, Celery metrics.
 import uuid
 import logging
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Query, HTTPException, Body, WebSocket, WebSocketDisconnect
 
@@ -117,7 +117,7 @@ async def create_job(
     await execute("""
         INSERT INTO background_jobs (id, job_type, status, params, created_at, queue)
         VALUES ($1, $2, 'pending', $3, $4, $5)
-    """, job_id, job_type, params or {}, datetime.utcnow(), queue)
+    """, job_id, job_type, params or {}, datetime.now(timezone.utc), queue)
 
     if USE_CELERY:
         _dispatch_celery_task(job_type, str(job_id), params or {})
@@ -187,7 +187,7 @@ async def cancel_job(job_id: str):
         UPDATE background_jobs
         SET status = 'cancelled', completed_at = $1
         WHERE id = $2 AND status IN ('pending', 'running')
-    """, datetime.utcnow(), job_uuid)
+    """, datetime.now(timezone.utc), job_uuid)
 
     # Notify WebSocket clients
     from backend.jobs_ws import job_update_manager
@@ -252,7 +252,7 @@ async def retry_job(job_id: str):
     await execute("""
         INSERT INTO background_jobs (id, job_type, status, params, created_at, queue)
         VALUES ($1, $2, 'pending', $3, $4, $5)
-    """, new_id, original["job_type"], original.get("params") or {}, datetime.utcnow(), queue)
+    """, new_id, original["job_type"], original.get("params") or {}, datetime.now(timezone.utc), queue)
 
     if USE_CELERY:
         _dispatch_celery_task(original["job_type"], str(new_id), original.get("params") or {})

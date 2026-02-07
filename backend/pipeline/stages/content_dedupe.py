@@ -11,6 +11,11 @@ from backend.services.pipeline_orchestrator import (
     StageExecutionResult,
     StageResult,
 )
+from backend.services.thresholds import (
+    CONTENT_DEDUPE_TITLE_THRESHOLD,
+    CONTENT_DEDUPE_CONTENT_THRESHOLD,
+    DUPLICATE_ENTITY_DATE_WINDOW,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,9 +50,9 @@ class ContentDedupeStage(PipelineStage):
                 data={"skipped": True, "reason": "No title or content"}
             )
 
-        title_threshold = config.get("title_threshold", 0.85)
-        content_threshold = config.get("content_threshold", 0.80)
-        check_days = config.get("check_days", 30)
+        title_threshold = config.get("title_threshold", CONTENT_DEDUPE_TITLE_THRESHOLD)
+        content_threshold = config.get("content_threshold", CONTENT_DEDUPE_CONTENT_THRESHOLD)
+        check_days = config.get("check_days", DUPLICATE_ENTITY_DATE_WINDOW)
 
         # Check title similarity
         if title:

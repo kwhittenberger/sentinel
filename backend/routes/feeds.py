@@ -63,13 +63,13 @@ async def create_feed(
 
     from backend.database import execute
     import uuid
-    from datetime import datetime
+    from datetime import datetime, timezone
 
     feed_id = uuid.uuid4()
     await execute("""
         INSERT INTO sources (id, name, url, source_type, tier, interval_minutes, is_active, created_at)
         VALUES ($1, $2, $3, $4, $5, $6, true, $7)
-    """, feed_id, name, url, source_type, str(tier), interval_minutes, datetime.utcnow())
+    """, feed_id, name, url, source_type, str(tier), interval_minutes, datetime.now(timezone.utc))
 
     return {"success": True, "feed_id": str(feed_id)}
 
@@ -163,11 +163,11 @@ async def fetch_feed(feed_id: str):
             response_data = httpx.get(source['url'], timeout=30)
             parsed = feedparser.parse(response_data.text)
             count = len(parsed.entries) if parsed.entries else 0
-            from datetime import datetime
-            await execute("UPDATE sources SET last_fetched = $1, last_error = NULL WHERE id = $2", datetime.utcnow(), feed_uuid)
+            from datetime import datetime, timezone
+            await execute("UPDATE sources SET last_fetched = $1, last_error = NULL WHERE id = $2", datetime.now(timezone.utc), feed_uuid)
             return {"success": True, "message": f"Fetched {count} entries from {source['name']}"}
         except Exception as e:
-            from datetime import datetime
+            from datetime import datetime, timezone
             await execute("UPDATE sources SET last_error = $1 WHERE id = $2", str(e), feed_uuid)
             return {"success": False, "message": f"Fetch failed: {e}"}
     else:

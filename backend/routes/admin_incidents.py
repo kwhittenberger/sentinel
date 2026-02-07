@@ -274,7 +274,7 @@ async def admin_update_incident(incident_id: str, updates: dict = Body(...)):
 
     from backend.database import execute, fetch
     import uuid
-    from datetime import datetime
+    from datetime import datetime, timezone
 
     try:
         incident_uuid = uuid.UUID(incident_id)
@@ -303,7 +303,7 @@ async def admin_update_incident(incident_id: str, updates: dict = Body(...)):
         raise HTTPException(status_code=400, detail="No valid fields to update")
 
     set_clauses.append(f"updated_at = ${param_num}")
-    params.append(datetime.utcnow())
+    params.append(datetime.now(timezone.utc))
     param_num += 1
 
     params.append(incident_uuid)
@@ -330,7 +330,7 @@ async def admin_delete_incident(incident_id: str, hard_delete: bool = Query(Fals
 
     from backend.database import execute
     import uuid
-    from datetime import datetime
+    from datetime import datetime, timezone
 
     try:
         incident_uuid = uuid.UUID(incident_id)
@@ -342,7 +342,7 @@ async def admin_delete_incident(incident_id: str, hard_delete: bool = Query(Fals
     else:
         result = await execute(
             "UPDATE incidents SET curation_status = 'archived', updated_at = $1 WHERE id = $2",
-            datetime.utcnow(), incident_uuid
+            datetime.now(timezone.utc), incident_uuid
         )
 
     return {"success": True, "deleted": incident_id}

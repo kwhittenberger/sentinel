@@ -16,6 +16,22 @@ logger = logging.getLogger(__name__)
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
+# Default timeout for LLM API calls (seconds).
+# Extraction calls can take 30-90s for long articles; 120s provides headroom.
+LLM_API_TIMEOUT_SECONDS = float(os.getenv("LLM_API_TIMEOUT_SECONDS", "120"))
+
+DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-20250514"
+
+
+def _get_configured_model(field: str = "default_model") -> str:
+    """Get the configured model from settings, falling back to the hardcoded default."""
+    try:
+        from .settings import get_settings_service
+        llm_settings = get_settings_service().get_llm()
+        return llm_settings.get(field, DEFAULT_ANTHROPIC_MODEL)
+    except Exception:
+        return DEFAULT_ANTHROPIC_MODEL
+
 
 @dataclass
 class LLMResponse:
@@ -42,7 +58,10 @@ class AnthropicProvider:
     def client(self):
         if self._client is None and self._api_key:
             import anthropic
-            self._client = anthropic.Anthropic(api_key=self._api_key)
+            self._client = anthropic.Anthropic(
+                api_key=self._api_key,
+                timeout=LLM_API_TIMEOUT_SECONDS,
+            )
         return self._client
 
     def is_available(self) -> bool:
@@ -52,20 +71,25 @@ class AnthropicProvider:
         self,
         system_prompt: str,
         user_message: str,
-        model: str = "claude-sonnet-4-20250514",
+        model: Optional[str] = None,
         max_tokens: int = 2000,
+        timeout: Optional[float] = None,
     ) -> LLMResponse:
         if not self.client:
             raise RuntimeError("Anthropic API key not configured")
+        model = model or _get_configured_model("default_model")
 
         start = time.time()
         try:
-            message = self.client.messages.create(
+            kwargs = dict(
                 model=model,
                 max_tokens=max_tokens,
                 system=system_prompt,
                 messages=[{"role": "user", "content": user_message}],
             )
+            if timeout is not None:
+                kwargs["timeout"] = timeout
+            message = self.client.messages.create(**kwargs)
         except Exception as e:
             from .llm_errors import classify_anthropic_error, LLMError
             if isinstance(e, LLMError):
@@ -100,6 +124,7 @@ class OllamaProvider:
             self._client = OpenAI(
                 base_url=self._base_url,
                 api_key="ollama",  # Ollama doesn't need a real key
+                timeout=LLM_API_TIMEOUT_SECONDS,
             )
         return self._client
 
@@ -125,10 +150,11 @@ class OllamaProvider:
         user_message: str,
         model: str = "llama3.1",
         max_tokens: int = 2000,
+        timeout: Optional[float] = None,
     ) -> LLMResponse:
         start = time.time()
         try:
-            response = self.client.chat.completions.create(
+            kwargs = dict(
                 model=model,
                 max_tokens=max_tokens,
                 response_format={"type": "json_object"},
@@ -137,6 +163,9 @@ class OllamaProvider:
                     {"role": "user", "content": user_message},
                 ],
             )
+            if timeout is not None:
+                kwargs["timeout"] = timeout
+            response = self.client.chat.completions.create(**kwargs)
         except Exception as e:
             from .llm_errors import classify_ollama_error, LLMError
             if isinstance(e, LLMError):
@@ -194,7 +223,7 @@ class LLMRouter:
         self,
         system_prompt: str,
         user_message: str,
-        model: str = "claude-sonnet-4-20250514",
+        model: Optional[str] = None,
         max_tokens: int = 2000,
         provider_name: str = "anthropic",
         fallback_provider: Optional[str] = "anthropic",
@@ -210,8 +239,9 @@ class LLMRouter:
             max_tokens: Max tokens for the response
             provider_name: Primary provider to use
             fallback_provider: Provider to fall back to on failure (None to disable)
-            fallback_model: Model to use with fallback provider (defaults to Claude Sonnet)
+            fallback_model: Model to use with fallback provider (defaults to configured model)
         """
+        model = model or _get_configured_model("default_model")
         provider = self._providers.get(provider_name)
         if not provider:
             raise ValueError(f"Unknown provider: {provider_name}")
@@ -237,7 +267,7 @@ class LLMRouter:
                 and fallback_provider in self._providers
             ):
                 fb = self._providers[fallback_provider]
-                fb_model = fallback_model or "claude-sonnet-4-20250514"
+                fb_model = fallback_model or _get_configured_model("fallback_model")
                 logger.info(
                     f"Falling back to '{fallback_provider}' (model={fb_model})"
                 )
@@ -264,7 +294,7 @@ class LLMRouter:
                 and fallback_provider in self._providers
             ):
                 fb = self._providers[fallback_provider]
-                fb_model = fallback_model or "claude-sonnet-4-20250514"
+                fb_model = fallback_model or _get_configured_model("fallback_model")
                 logger.info(
                     f"Falling back to '{fallback_provider}' (model={fb_model})"
                 )

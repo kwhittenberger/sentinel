@@ -3,7 +3,7 @@
 import asyncio
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from backend.celery_app import app
 from backend.tasks.db import (
@@ -32,7 +32,7 @@ async def _async_scheduled_fetch() -> dict:
         """,
         job_id,
         {},
-        datetime.utcnow(),
+        datetime.now(timezone.utc),
     )
 
     await async_mark_job_started(job_id, "beat-scheduled")
@@ -92,7 +92,7 @@ async def _async_cleanup_stale_jobs() -> dict:
                     error = 'Worker crash detected (stale timeout)'
                 WHERE id = $2::uuid
                 """,
-                datetime.utcnow(),
+                datetime.now(timezone.utc),
                 job_id,
             )
             marked_failed += 1
@@ -164,7 +164,7 @@ async def _async_aggregate_metrics() -> dict:
     # Default: aggregate from 24h ago if no prior aggregation
     from_time = latest[0]["latest"] if latest and latest[0]["latest"] else None
     if from_time is None:
-        from_time = datetime.utcnow() - __import__("datetime").timedelta(hours=24)
+        from_time = datetime.now(timezone.utc) - __import__("datetime").timedelta(hours=24)
 
     result = await async_execute("""
         INSERT INTO task_metrics_aggregate

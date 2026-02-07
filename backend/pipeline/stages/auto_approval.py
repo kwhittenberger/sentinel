@@ -11,6 +11,12 @@ from backend.services.pipeline_orchestrator import (
     StageExecutionResult,
     StageResult,
 )
+from backend.services.thresholds import (
+    AUTO_APPROVE_CONFIDENCE,
+    REVIEW_CONFIDENCE,
+    AUTO_REJECT_CONFIDENCE,
+    FIELD_CONFIDENCE_THRESHOLD,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -146,12 +152,12 @@ class AutoApprovalStage(PipelineStage):
         config: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Get approval thresholds from type config or defaults."""
-        # Default thresholds
+        # Default thresholds from centralized constants
         defaults = {
-            "min_confidence_auto_approve": 0.85,
-            "min_confidence_review": 0.50,
-            "auto_reject_below": 0.30,
-            "field_confidence_threshold": 0.70,
+            "min_confidence_auto_approve": AUTO_APPROVE_CONFIDENCE,
+            "min_confidence_review": REVIEW_CONFIDENCE,
+            "auto_reject_below": AUTO_REJECT_CONFIDENCE,
+            "field_confidence_threshold": FIELD_CONFIDENCE_THRESHOLD,
             "required_fields": ["date", "state", "incident_type"]
         }
 
