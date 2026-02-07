@@ -6,7 +6,8 @@ import { SplitPane } from './SplitPane';
 import { ExtractionDetailView } from './ExtractionDetailView';
 import { HighlightedArticle, collectHighlightsFromRecord } from './articleHighlight';
 import { OperationsBar } from './OperationsBar';
-import { DynamicExtractionFields, buildEditData, parseExtractedData } from './DynamicExtractionFields';
+import { DynamicExtractionFields, buildEditData, parseExtractedData, PRIORITY_FIELDS, isExcludedField, snakeCaseToLabel } from './DynamicExtractionFields';
+import { ArticleContextMenu } from './ArticleContextMenu';
 
 const API_BASE = '/api';
 
@@ -117,6 +118,15 @@ export function BatchProcessing({ onClose, onRefresh, hideOpsBar }: BatchProcess
     count: number;
   } | null>(null);
   const [rejectReason, setRejectReason] = useState('');
+
+  // Article content refs for context menu
+  const tieredArticleRef = useRef<HTMLDivElement>(null);
+  const issuesArticleRef = useRef<HTMLDivElement>(null);
+
+  const handleAssignField = useCallback((fieldKey: string, value: string) => {
+    setEditMode(true);
+    setEditData(prev => ({ ...prev, [fieldKey]: value }));
+  }, []);
 
   // Duplicate detection dialog state
   const [duplicateInfo, setDuplicateInfo] = useState<{
@@ -266,12 +276,19 @@ export function BatchProcessing({ onClose, onRefresh, hideOpsBar }: BatchProcess
 
       if (response.ok && data.success !== false) {
         showMessage({ type: 'success', text: 'Article approved' });
+        const wasIssue = selectedTier === 'issues';
         setSelectedItem(null);
+        setSelectedIssueItem(null);
         setFullArticle(null);
         setEditMode(false);
         setEditData({});
         setDuplicateInfo(null);
-        loadTieredQueue();
+        setSuggestions([]);
+        if (wasIssue) {
+          loadIssues();
+        } else {
+          loadTieredQueue();
+        }
         onRefresh?.();
       } else {
         showMessage({ type: 'error', text: data.error || data.detail || 'Failed to approve' });
@@ -313,12 +330,19 @@ export function BatchProcessing({ onClose, onRefresh, hideOpsBar }: BatchProcess
       });
       if (response.ok) {
         showMessage({ type: 'success', text: 'Article rejected' });
+        const wasIssue = selectedTier === 'issues';
         setSelectedItem(null);
+        setSelectedIssueItem(null);
         setFullArticle(null);
         setEditMode(false);
         setEditData({});
         setRejectReason('');
-        loadTieredQueue();
+        setSuggestions([]);
+        if (wasIssue) {
+          loadIssues();
+        } else {
+          loadTieredQueue();
+        }
       } else {
         const data = await response.json().catch(() => null);
         showMessage({ type: 'error', text: `Failed to reject: ${data?.detail || data?.error || `HTTP ${response.status}`}` });
@@ -415,21 +439,24 @@ export function BatchProcessing({ onClose, onRefresh, hideOpsBar }: BatchProcess
       case 'low':
         return 'Low confidence (<50%) - Full review required';
       case 'issues':
-        return 'Approved articles with data quality issues';
+        return 'Articles needing attention — errors, missing fields, or data quality issues';
     }
   };
 
   // Issues tab helpers
   const getIssueDescriptions = (article: ArticleAuditItem): string[] => {
     const issues: string[] = [];
+    if (article.status === 'error') {
+      issues.push('Processing error — needs re-extraction or manual review');
+    }
     if (article.status === 'approved' && !article.incident_id) {
       issues.push('Approved but not linked to incident');
     }
-    if (article.status === 'approved' && article.extraction_format === 'keyword_only') {
+    if (article.extraction_format === 'keyword_only') {
       issues.push('Keyword-only extraction (needs LLM re-extraction)');
     }
-    if (article.status === 'approved' && !article.has_required_fields) {
-      issues.push(`Missing fields: ${article.missing_fields.join(', ')}`);
+    if (!article.has_required_fields) {
+      issues.push(`Missing required fields: ${article.missing_fields.join(', ')}`);
     }
     return issues;
   };
@@ -447,7 +474,9 @@ export function BatchProcessing({ onClose, onRefresh, hideOpsBar }: BatchProcess
     switch (status) {
       case 'approved': return '#22c55e';
       case 'pending': return '#eab308';
+      case 'in_review': return '#3b82f6';
       case 'rejected': return '#ef4444';
+      case 'error': return '#ef4444';
       default: return '#888';
     }
   };
@@ -478,6 +507,11 @@ export function BatchProcessing({ onClose, onRefresh, hideOpsBar }: BatchProcess
       await reExtractArticle(articleId);
       showMessage({ type: 'success', text: 'Re-extraction started' });
       setSelectedIssueItem(null);
+      setSelectedItem(null);
+      setFullArticle(null);
+      setEditMode(false);
+      setEditData({});
+      setSuggestions([]);
       await loadIssues();
     } catch (err) {
       showMessage({ type: 'error', text: err instanceof Error ? err.message : 'Re-extraction failed' });
@@ -493,6 +527,11 @@ export function BatchProcessing({ onClose, onRefresh, hideOpsBar }: BatchProcess
       await rejectArticle(articleId, rejectReason);
       showMessage({ type: 'success', text: 'Article rejected' });
       setSelectedIssueItem(null);
+      setSelectedItem(null);
+      setFullArticle(null);
+      setEditMode(false);
+      setEditData({});
+      setSuggestions([]);
       setRejectReason('');
       await loadIssues();
     } catch (err) {
@@ -500,6 +539,48 @@ export function BatchProcessing({ onClose, onRefresh, hideOpsBar }: BatchProcess
     } finally {
       setIssueActionLoading(false);
     }
+  };
+
+  const handleSelectIssueItem = (item: ArticleAuditItem) => {
+    // Abort any in-flight fetches from previous selection
+    if (fetchControllerRef.current) {
+      fetchControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    fetchControllerRef.current = controller;
+
+    setSelectedIssueItem(item);
+    setRejectReason('');
+    setEditMode(false);
+
+    // Parse and initialize edit data from the issue item's extracted_data
+    const parsed = parseExtractedData(item.extracted_data);
+    setEditData(buildEditData(parsed));
+
+    // Set selectedItem so handleApprove/handleReject/duplicate detection works
+    setSelectedItem({
+      id: item.id,
+      title: item.title,
+      source_name: item.source_name,
+      extraction_confidence: item.extraction_confidence,
+      published_date: item.published_date ?? undefined,
+    });
+
+    // Also populate fullArticle so the approve flow has extraction data
+    setFullArticle({
+      id: item.id,
+      title: item.title,
+      source_name: item.source_name,
+      source_url: item.source_url,
+      content: item.content,
+      published_date: item.published_date ?? undefined,
+      extraction_confidence: item.extraction_confidence ?? undefined,
+      extracted_data: parsed as ExtractedIncidentData,
+      status: item.status,
+    });
+
+    // Fetch AI suggestions
+    loadSuggestions(item.id, controller.signal);
   };
 
   const currentItems = selectedTier !== 'issues' ? tieredQueue[selectedTier] : [];
@@ -722,7 +803,7 @@ export function BatchProcessing({ onClose, onRefresh, hideOpsBar }: BatchProcess
                     <div
                       key={item.id}
                       className={`batch-item warning ${selectedIssueItem?.id === item.id ? 'selected' : ''}`}
-                      onClick={() => { setSelectedIssueItem(item); setRejectReason(''); }}
+                      onClick={() => handleSelectIssueItem(item)}
                     >
                       <div className="item-header">
                         <span className="item-title">{item.title || 'Untitled'}</span>
@@ -755,9 +836,28 @@ export function BatchProcessing({ onClose, onRefresh, hideOpsBar }: BatchProcess
             </div>
           }
           right={selectedIssueItem ? (
-            <div className="batch-detail">
+            <div className="batch-detail queue-detail">
               <div className="detail-header">
                 <h3>{selectedIssueItem.title || 'Untitled Article'}</h3>
+                <div className="header-actions">
+                  {editMode ? (
+                    <button className="action-btn small" onClick={() => setEditMode(false)}>
+                      Cancel
+                    </button>
+                  ) : (
+                    <button className="action-btn small primary" onClick={() => setEditMode(true)}>
+                      Edit
+                    </button>
+                  )}
+                  <span
+                    className="confidence-badge"
+                    style={{ background: getConfidenceColor(selectedIssueItem.extraction_confidence) }}
+                  >
+                    {selectedIssueItem.extraction_confidence != null
+                      ? `${(selectedIssueItem.extraction_confidence * 100).toFixed(0)}%`
+                      : 'N/A'}
+                  </span>
+                </div>
               </div>
 
               {/* Issues Summary */}
@@ -788,28 +888,107 @@ export function BatchProcessing({ onClose, onRefresh, hideOpsBar }: BatchProcess
                 )}
               </div>
 
-              {/* Extracted Data */}
-              {selectedIssueItem.extracted_data && Object.keys(selectedIssueItem.extracted_data).length > 0 && (
+              {/* Edit Form or Extracted Data Display */}
+              {editMode ? (
                 <div className="detail-section">
-                  <h4>Extracted Data</h4>
-                  <ExtractionTable data={selectedIssueItem.extracted_data} />
+                  <h4>Edit Extracted Data</h4>
+                  <DynamicExtractionFields
+                    data={editData}
+                    onChange={setEditData}
+                  />
+                </div>
+              ) : (
+                selectedIssueItem.extracted_data && Object.keys(selectedIssueItem.extracted_data).length > 0 && (
+                  (selectedIssueItem.extracted_data as Record<string, unknown>)?.incident ||
+                  (selectedIssueItem.extracted_data as Record<string, unknown>)?.actors ? (
+                    <ExtractionDetailView
+                      data={selectedIssueItem.extracted_data as unknown as UniversalExtractionData}
+                      articleContent={selectedIssueItem.content}
+                      sourceUrl={selectedIssueItem.source_url}
+                    />
+                  ) : (
+                    <div className="detail-section">
+                      <h4>Extracted Data</h4>
+                      <ExtractionTable data={selectedIssueItem.extracted_data} />
+                    </div>
+                  )
+                )
+              )}
+
+              {/* AI Suggestions */}
+              {!editMode && (
+                <div className="detail-section">
+                  <h4>AI Suggestions</h4>
+                  {loadingSuggestions ? (
+                    <p className="loading-text">Loading suggestions...</p>
+                  ) : suggestions.length === 0 ? (
+                    <p className="no-data">No suggestions - all fields have high confidence</p>
+                  ) : (
+                    <div className="suggestions-list">
+                      {suggestions.map(suggestion => (
+                        <div key={suggestion.field} className="suggestion-item">
+                          <div className="suggestion-header">
+                            <span className="field-name">{suggestion.field}</span>
+                            <span
+                              className="field-confidence"
+                              style={{ color: getConfidenceColor(suggestion.confidence) }}
+                            >
+                              {(suggestion.confidence * 100).toFixed(0)}%
+                            </span>
+                          </div>
+                          <div className="suggestion-content">
+                            <div className="current-value">
+                              <span className="label">Current:</span>
+                              <span className="value">{String(suggestion.current_value) || 'Empty'}</span>
+                            </div>
+                            {suggestion.suggestion != null && (
+                              <div className="suggested-value">
+                                <span className="label">Suggested:</span>
+                                <span className="value">{String(suggestion.suggestion)}</span>
+                              </div>
+                            )}
+                            <p className="reason">{suggestion.reason}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
 
               {/* Article Content */}
               <div className="detail-section">
                 <h4>Article Content</h4>
-                <div className="article-content" style={{ maxHeight: '300px', overflow: 'auto', fontSize: '0.9rem' }}>
-                  {selectedIssueItem.content || 'No content available'}
+                <div className="article-content" ref={issuesArticleRef}>
+                  {selectedIssueItem.content ? (
+                    <HighlightedArticle
+                      content={selectedIssueItem.content}
+                      highlights={collectHighlightsFromRecord(selectedIssueItem.extracted_data)}
+                    />
+                  ) : (
+                    <p className="no-data">No content available</p>
+                  )}
                 </div>
+                <ArticleContextMenu
+                  containerRef={issuesArticleRef}
+                  editData={editData}
+                  onAssignField={handleAssignField}
+                />
               </div>
 
               {/* Actions */}
               <div className="detail-actions">
+                <button
+                  className="action-btn approve"
+                  onClick={() => handleApprove()}
+                  disabled={processing || issueActionLoading}
+                >
+                  {processing ? 'Processing...' : editMode ? 'Save & Approve' : 'Approve & Create Incident'}
+                </button>
                 {(selectedIssueItem.extraction_format !== 'llm' || !selectedIssueItem.has_required_fields) && (
                   <button
                     className="action-btn"
-                    disabled={issueActionLoading}
+                    disabled={issueActionLoading || processing}
                     onClick={() => handleIssueReExtract(selectedIssueItem.id)}
                   >
                     {issueActionLoading ? 'Processing...' : 'Re-extract'}
@@ -998,12 +1177,17 @@ export function BatchProcessing({ onClose, onRefresh, hideOpsBar }: BatchProcess
                   {fullArticle?.content && (
                     <div className="detail-section">
                       <h4>Article Content</h4>
-                      <div className="article-content">
+                      <div className="article-content" ref={tieredArticleRef}>
                         <HighlightedArticle
                           content={fullArticle.content}
                           highlights={fullArticle.extracted_data ? collectHighlightsFromRecord(fullArticle.extracted_data as Record<string, unknown>) : []}
                         />
                       </div>
+                      <ArticleContextMenu
+                        containerRef={tieredArticleRef}
+                        editData={editData}
+                        onAssignField={handleAssignField}
+                      />
                     </div>
                   )}
                 </>
@@ -1045,29 +1229,6 @@ export function BatchProcessing({ onClose, onRefresh, hideOpsBar }: BatchProcess
       )}
     </div>
   );
-}
-
-// Priority fields shown first in display order
-const PRIORITY_FIELDS = [
-  'date', 'state', 'city', 'incident_type', 'description',
-  'person_name', 'victim_name', 'offender_name', 'defendant_name',
-];
-
-// Metadata fields excluded from display
-const EXCLUDED_FIELDS = new Set([
-  'confidence', 'overall_confidence', 'extraction_notes', 'is_relevant',
-  'categories', 'category', 'extraction_type', 'success',
-]);
-
-function isExcludedField(key: string): boolean {
-  return EXCLUDED_FIELDS.has(key) || key.endsWith('_confidence');
-}
-
-function snakeCaseToLabel(key: string): string {
-  return key
-    .split('_')
-    .map(w => w.charAt(0).toUpperCase() + w.slice(1))
-    .join(' ');
 }
 
 // Dynamic extraction table component

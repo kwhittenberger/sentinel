@@ -6,7 +6,7 @@
  */
 
 // Priority fields shown first in edit form
-const PRIORITY_FIELDS = [
+export const PRIORITY_FIELDS = [
   'date', 'state', 'city', 'incident_type', 'description',
   'person_name', 'victim_name', 'offender_name', 'defendant_name',
   'victim_age', 'victim_category', 'outcome_category',
@@ -18,11 +18,11 @@ const EXCLUDED_FIELDS = new Set([
   'categories', 'category', 'extraction_type', 'success',
 ]);
 
-function isExcludedField(key: string): boolean {
+export function isExcludedField(key: string): boolean {
   return EXCLUDED_FIELDS.has(key) || key.endsWith('_confidence');
 }
 
-function snakeCaseToLabel(key: string): string {
+export function snakeCaseToLabel(key: string): string {
   return key
     .split('_')
     .map(w => w.charAt(0).toUpperCase() + w.slice(1))

@@ -199,7 +199,7 @@ export interface ArticleAuditItem {
   title: string;
   source_name: string;
   source_url: string;
-  status: 'pending' | 'approved' | 'rejected';
+  status: 'pending' | 'approved' | 'rejected' | 'error' | 'in_review';
   extraction_confidence: number | null;
   extraction_format: 'keyword_only' | 'llm' | 'none';
   incident_id: string | null;
