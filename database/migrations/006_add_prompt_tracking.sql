@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS prompts (
     ab_test_group VARCHAR(50),  -- e.g., 'control', 'variant_a', 'variant_b'
 
     -- Audit
+    -- NOTE: admin_users has no auth implementation. This FK is a placeholder. See audit D13.
     created_by UUID REFERENCES admin_users(id),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
@@ -63,6 +64,7 @@ CREATE TABLE IF NOT EXISTS prompt_executions (
     -- Context
     article_id UUID REFERENCES ingested_articles(id),  -- Optional link to article
     incident_id UUID REFERENCES incidents(id),  -- Optional link to incident
+    -- NOTE: admin_users has no auth implementation. This FK is a placeholder. See audit D13.
     user_id UUID REFERENCES admin_users(id),  -- Optional user who triggered this
 
     -- Input

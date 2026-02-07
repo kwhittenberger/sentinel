@@ -4,7 +4,15 @@ import logging
 
 from celery.exceptions import SoftTimeLimitExceeded
 
-from backend.celery_app import app
+from backend.celery_app import (
+    app,
+    BATCH_ENRICH_MAX_RETRIES,
+    BATCH_ENRICH_RETRY_BACKOFF,
+    BATCH_ENRICH_RETRY_BACKOFF_MAX,
+    ENRICH_MAX_RETRIES,
+    ENRICH_RETRY_BACKOFF,
+    ENRICH_RETRY_BACKOFF_MAX,
+)
 from backend.tasks.db import (
     async_fetch,
     async_execute,
@@ -114,10 +122,10 @@ async def _async_enrichment_handler(job_id: str, params: dict) -> dict:
     acks_late=True,
     soft_time_limit=600,
     time_limit=720,
-    max_retries=3,
+    max_retries=BATCH_ENRICH_MAX_RETRIES,
     autoretry_for=(ConnectionError,),
-    retry_backoff=120,
-    retry_backoff_max=600,
+    retry_backoff=BATCH_ENRICH_RETRY_BACKOFF,
+    retry_backoff_max=BATCH_ENRICH_RETRY_BACKOFF_MAX,
 )
 def run_batch_enrich(self, job_id: str, params: dict):
     """Enrich articles with additional data."""
@@ -133,10 +141,10 @@ def run_batch_enrich(self, job_id: str, params: dict):
     acks_late=True,
     soft_time_limit=1800,
     time_limit=1920,
-    max_retries=2,
+    max_retries=ENRICH_MAX_RETRIES,
     autoretry_for=(ConnectionError,),
-    retry_backoff=300,
-    retry_backoff_max=1800,
+    retry_backoff=ENRICH_RETRY_BACKOFF,
+    retry_backoff_max=ENRICH_RETRY_BACKOFF_MAX,
 )
 def run_enrichment(self, job_id: str, params: dict):
     """Run cross-reference enrichment on incidents."""

@@ -573,7 +573,7 @@ export function CaseManager() {
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3>Create Case</h3>
-              <button className="close-btn" onClick={() => setShowCreateCase(false)}>&times;</button>
+              <button className="close-btn" onClick={() => setShowCreateCase(false)} aria-label="Close create case dialog">&times;</button>
             </div>
             <form onSubmit={handleCreateCase}>
               <div className="modal-body">
@@ -657,7 +657,7 @@ export function CaseManager() {
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3>Add Charge</h3>
-              <button className="close-btn" onClick={() => setShowCreateCharge(false)}>&times;</button>
+              <button className="close-btn" onClick={() => setShowCreateCharge(false)} aria-label="Close add charge dialog">&times;</button>
             </div>
             <form onSubmit={handleCreateCharge}>
               <div className="modal-body">

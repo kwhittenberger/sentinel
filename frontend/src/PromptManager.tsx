@@ -427,7 +427,7 @@ export function PromptManager({ onRefresh }: PromptManagerProps) {
           <div className="modal large" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3>Create New Prompt</h3>
-              <button className="close-btn" onClick={() => setShowCreateForm(false)}>&times;</button>
+              <button className="close-btn" onClick={() => setShowCreateForm(false)} aria-label="Close create prompt dialog">&times;</button>
             </div>
             <form onSubmit={handleCreatePrompt}>
               <div className="modal-body">

@@ -9,7 +9,7 @@ Two strategies for filling missing incident data:
 import logging
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Dict, Any, List, Optional
 
@@ -135,14 +135,14 @@ class EnrichmentService:
                 SET incidents_enriched = $1, fields_filled = $2,
                     completed_at = $3, status = 'completed'
                 WHERE id = $4
-            """, result.incidents_enriched, result.fields_filled, datetime.utcnow(), run_id)
+            """, result.incidents_enriched, result.fields_filled, datetime.now(timezone.utc), run_id)
 
         except Exception as e:
             logger.error(f"Enrichment run {run_id} failed: {e}")
             result.status = "failed"
             await execute("""
                 UPDATE enrichment_runs SET status = 'failed', completed_at = $1 WHERE id = $2
-            """, datetime.utcnow(), run_id)
+            """, datetime.now(timezone.utc), run_id)
             raise
 
         return result

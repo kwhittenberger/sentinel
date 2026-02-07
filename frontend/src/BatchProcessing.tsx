@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import type { ExtractedIncidentData, UniversalExtractionData } from './types';
 import { SplitPane } from './SplitPane';
 import { ExtractionDetailView } from './ExtractionDetailView';
@@ -62,6 +62,35 @@ export function BatchProcessing({ onClose, onRefresh, hideOpsBar }: BatchProcess
   const [processing, setProcessing] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
+  // AbortController for in-flight article/suggestion fetches
+  const fetchControllerRef = useRef<AbortController | null>(null);
+
+  // Timer ref for auto-dismissing messages
+  const messageTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const showMessage = useCallback((msg: { type: 'success' | 'error'; text: string } | null) => {
+    if (messageTimerRef.current) {
+      clearTimeout(messageTimerRef.current);
+      messageTimerRef.current = null;
+    }
+    setMessage(msg);
+    if (msg) {
+      messageTimerRef.current = setTimeout(() => {
+        setMessage(null);
+        messageTimerRef.current = null;
+      }, 5000);
+    }
+  }, []);
+
+  // Clean up message timer on unmount
+  useEffect(() => {
+    return () => {
+      if (messageTimerRef.current) {
+        clearTimeout(messageTimerRef.current);
+      }
+    };
+  }, []);
+
   // Operations bar state - persisted in localStorage
   const [opsExpanded, setOpsExpanded] = useState<boolean>(() => {
     const stored = localStorage.getItem('ops-bar-expanded');
@@ -101,15 +130,24 @@ export function BatchProcessing({ onClose, onRefresh, hideOpsBar }: BatchProcess
         setTieredQueue(data);
       }
     } catch {
-      setMessage({ type: 'error', text: 'Failed to load queue' });
+      showMessage({ type: 'error', text: 'Failed to load queue' });
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [showMessage]);
 
   useEffect(() => {
     loadTieredQueue();
   }, [loadTieredQueue]);
+
+  // Abort in-flight fetches on unmount
+  useEffect(() => {
+    return () => {
+      if (fetchControllerRef.current) {
+        fetchControllerRef.current.abort();
+      }
+    };
+  }, []);
 
   const handleOpsToggle = useCallback(() => {
     setOpsExpanded(prev => {
@@ -124,12 +162,12 @@ export function BatchProcessing({ onClose, onRefresh, hideOpsBar }: BatchProcess
     onRefresh?.();
   }, [loadTieredQueue, onRefresh]);
 
-  const loadFullArticle = async (articleId: string) => {
+  const loadFullArticle = async (articleId: string, signal: AbortSignal) => {
     setLoadingArticle(true);
     setFullArticle(null);
     setEditMode(false);
     try {
-      const response = await fetch(`${API_BASE}/admin/queue/${articleId}`);
+      const response = await fetch(`${API_BASE}/admin/queue/${articleId}`, { signal });
       if (response.ok) {
         const data = await response.json();
         // Parse extracted_data — API may return it as a JSON string
@@ -140,36 +178,49 @@ export function BatchProcessing({ onClose, onRefresh, hideOpsBar }: BatchProcess
           setEditData(buildEditData(data.extracted_data));
         }
       }
-    } catch {
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return;
       // Will show limited info from selectedItem
     } finally {
-      setLoadingArticle(false);
+      if (!signal.aborted) {
+        setLoadingArticle(false);
+      }
     }
   };
 
-  const loadSuggestions = async (articleId: string) => {
+  const loadSuggestions = async (articleId: string, signal: AbortSignal) => {
     setLoadingSuggestions(true);
     setSuggestions([]);
     try {
-      const response = await fetch(`${API_BASE}/admin/queue/${articleId}/suggestions`);
+      const response = await fetch(`${API_BASE}/admin/queue/${articleId}/suggestions`, { signal });
       if (response.ok) {
         const data = await response.json();
         setSuggestions(data.suggestions || []);
       }
-    } catch {
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return;
       // Suggestions are optional, don't show error
     } finally {
-      setLoadingSuggestions(false);
+      if (!signal.aborted) {
+        setLoadingSuggestions(false);
+      }
     }
   };
 
   const handleSelectItem = (item: TieredItem) => {
+    // Abort any in-flight fetches from previous selection
+    if (fetchControllerRef.current) {
+      fetchControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    fetchControllerRef.current = controller;
+
     setSelectedItem(item);
     setFullArticle(null);
     setEditMode(false);
     setEditData({});
-    loadFullArticle(item.id);
-    loadSuggestions(item.id);
+    loadFullArticle(item.id, controller.signal);
+    loadSuggestions(item.id, controller.signal);
   };
 
   const handleApprove = async (forceCreate?: boolean, linkToExistingId?: string) => {
@@ -205,7 +256,7 @@ export function BatchProcessing({ onClose, onRefresh, hideOpsBar }: BatchProcess
       }
 
       if (response.ok && data.success !== false) {
-        setMessage({ type: 'success', text: 'Article approved' });
+        showMessage({ type: 'success', text: 'Article approved' });
         setSelectedItem(null);
         setFullArticle(null);
         setEditMode(false);
@@ -214,10 +265,10 @@ export function BatchProcessing({ onClose, onRefresh, hideOpsBar }: BatchProcess
         loadTieredQueue();
         onRefresh?.();
       } else {
-        setMessage({ type: 'error', text: data.error || data.detail || 'Failed to approve' });
+        showMessage({ type: 'error', text: data.error || data.detail || 'Failed to approve' });
       }
     } catch (err) {
-      setMessage({ type: 'error', text: `Failed to approve: ${err instanceof Error ? err.message : 'Network error'}` });
+      showMessage({ type: 'error', text: `Failed to approve: ${err instanceof Error ? err.message : 'Network error'}` });
     } finally {
       setProcessing(false);
     }
@@ -252,7 +303,7 @@ export function BatchProcessing({ onClose, onRefresh, hideOpsBar }: BatchProcess
         body: JSON.stringify({ reason: finalReason }),
       });
       if (response.ok) {
-        setMessage({ type: 'success', text: 'Article rejected' });
+        showMessage({ type: 'success', text: 'Article rejected' });
         setSelectedItem(null);
         setFullArticle(null);
         setEditMode(false);
@@ -261,10 +312,10 @@ export function BatchProcessing({ onClose, onRefresh, hideOpsBar }: BatchProcess
         loadTieredQueue();
       } else {
         const data = await response.json().catch(() => null);
-        setMessage({ type: 'error', text: `Failed to reject: ${data?.detail || data?.error || `HTTP ${response.status}`}` });
+        showMessage({ type: 'error', text: `Failed to reject: ${data?.detail || data?.error || `HTTP ${response.status}`}` });
       }
     } catch (err) {
-      setMessage({ type: 'error', text: `Failed to reject: ${err instanceof Error ? err.message : 'Network error'}` });
+      showMessage({ type: 'error', text: `Failed to reject: ${err instanceof Error ? err.message : 'Network error'}` });
     } finally {
       setProcessing(false);
     }
@@ -272,7 +323,7 @@ export function BatchProcessing({ onClose, onRefresh, hideOpsBar }: BatchProcess
 
   const handleBulkApprove = async () => {
     setProcessing(true);
-    setMessage(null);
+    showMessage(null);
     setConfirmAction(null);
     try {
       const response = await fetch(`${API_BASE}/admin/queue/bulk-approve`, {
@@ -287,21 +338,21 @@ export function BatchProcessing({ onClose, onRefresh, hideOpsBar }: BatchProcess
       if (response.ok && data) {
         if (data.errors > 0) {
           const details = (data.error_details || []).join('\n');
-          setMessage({
+          showMessage({
             type: 'error',
             text: `Approved ${data.approved_count} items, ${data.errors} failed:\n${details}`,
           });
         } else {
-          setMessage({ type: 'success', text: `Approved ${data.approved_count} items` });
+          showMessage({ type: 'success', text: `Approved ${data.approved_count} items` });
         }
         loadTieredQueue();
         onRefresh?.();
       } else {
         const detail = data?.detail || data?.message || `HTTP ${response.status}`;
-        setMessage({ type: 'error', text: `Bulk approve failed: ${detail}` });
+        showMessage({ type: 'error', text: `Bulk approve failed: ${detail}` });
       }
     } catch (err) {
-      setMessage({ type: 'error', text: `Bulk approve failed: ${err instanceof Error ? err.message : 'Network error'}` });
+      showMessage({ type: 'error', text: `Bulk approve failed: ${err instanceof Error ? err.message : 'Network error'}` });
     } finally {
       setProcessing(false);
     }
@@ -311,7 +362,7 @@ export function BatchProcessing({ onClose, onRefresh, hideOpsBar }: BatchProcess
     if (!rejectReason.trim()) return;
 
     setProcessing(true);
-    setMessage(null);
+    showMessage(null);
     setConfirmAction(null);
     try {
       const response = await fetch(`${API_BASE}/admin/queue/bulk-reject`, {
@@ -325,15 +376,15 @@ export function BatchProcessing({ onClose, onRefresh, hideOpsBar }: BatchProcess
       });
       const data = await response.json().catch(() => null);
       if (response.ok && data) {
-        setMessage({ type: 'success', text: `Rejected ${data.rejected_count} items` });
+        showMessage({ type: 'success', text: `Rejected ${data.rejected_count} items` });
         setRejectReason('');
         loadTieredQueue();
       } else {
         const detail = data?.detail || data?.message || `HTTP ${response.status}`;
-        setMessage({ type: 'error', text: `Bulk reject failed: ${detail}` });
+        showMessage({ type: 'error', text: `Bulk reject failed: ${detail}` });
       }
     } catch (err) {
-      setMessage({ type: 'error', text: `Bulk reject failed: ${err instanceof Error ? err.message : 'Network error'}` });
+      showMessage({ type: 'error', text: `Bulk reject failed: ${err instanceof Error ? err.message : 'Network error'}` });
     } finally {
       setProcessing(false);
     }
@@ -365,7 +416,7 @@ export function BatchProcessing({ onClose, onRefresh, hideOpsBar }: BatchProcess
       <div className="batch-header">
         <h2>AI-Assisted Queue Processing</h2>
         {onClose && (
-          <button className="admin-close-btn" onClick={onClose}>&times;</button>
+          <button className="admin-close-btn" onClick={onClose} aria-label="Close batch processing">&times;</button>
         )}
       </div>
 

@@ -9,6 +9,8 @@ import logging
 from typing import Optional, Literal
 from uuid import UUID
 
+from backend.utils.llm_parsing import parse_llm_json
+
 from .extraction_prompts import (
     EXTRACTION_SCHEMA,
     UNIVERSAL_EXTRACTION_SCHEMA,
@@ -99,19 +101,7 @@ class LLMExtractor:
                 fallback_model=llm_settings.fallback_model,
             )
 
-            response_text = response.text
-
-            # Extract JSON
-            if "```json" in response_text:
-                json_start = response_text.find("```json") + 7
-                json_end = response_text.find("```", json_start)
-                response_text = response_text[json_start:json_end].strip()
-            elif "```" in response_text:
-                json_start = response_text.find("```") + 3
-                json_end = response_text.find("```", json_start)
-                response_text = response_text[json_start:json_end].strip()
-
-            data = json.loads(response_text)
+            data = parse_llm_json(response.text)
 
             return {
                 "success": True,
@@ -211,19 +201,7 @@ class LLMExtractor:
                 fallback_model=llm_settings.fallback_model,
             )
 
-            response_text = response.text
-
-            # Extract JSON from response
-            if "```json" in response_text:
-                json_start = response_text.find("```json") + 7
-                json_end = response_text.find("```", json_start)
-                response_text = response_text[json_start:json_end].strip()
-            elif "```" in response_text:
-                json_start = response_text.find("```") + 3
-                json_end = response_text.find("```", json_start)
-                response_text = response_text[json_start:json_end].strip()
-
-            data = json.loads(response_text)
+            data = parse_llm_json(response.text)
 
             result = {
                 "success": True,
@@ -354,19 +332,7 @@ class LLMExtractor:
             )
 
             # Parse response
-            response_text = llm_response.text
-
-            # Extract JSON from response
-            if "```json" in response_text:
-                json_start = response_text.find("```json") + 7
-                json_end = response_text.find("```", json_start)
-                response_text = response_text[json_start:json_end].strip()
-            elif "```" in response_text:
-                json_start = response_text.find("```") + 3
-                json_end = response_text.find("```", json_start)
-                response_text = response_text[json_start:json_end].strip()
-
-            data = json.loads(response_text)
+            data = parse_llm_json(llm_response.text)
 
             result = {
                 "success": True,
@@ -483,19 +449,7 @@ class LLMExtractor:
             )
 
             # Parse response
-            response_text = llm_response.text
-
-            # Extract JSON from response (handle markdown code blocks)
-            if "```json" in response_text:
-                json_start = response_text.find("```json") + 7
-                json_end = response_text.find("```", json_start)
-                response_text = response_text[json_start:json_end].strip()
-            elif "```" in response_text:
-                json_start = response_text.find("```") + 3
-                json_end = response_text.find("```", json_start)
-                response_text = response_text[json_start:json_end].strip()
-
-            data = json.loads(response_text)
+            data = parse_llm_json(llm_response.text)
 
             result = {
                 "success": True,

@@ -492,7 +492,7 @@ export function IncidentTypeManager({ onRefresh }: IncidentTypeManagerProps) {
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3>Create Incident Type</h3>
-              <button className="close-btn" onClick={() => setShowCreateForm(false)}>&times;</button>
+              <button className="close-btn" onClick={() => setShowCreateForm(false)} aria-label="Close create incident type dialog">&times;</button>
             </div>
             <form onSubmit={handleCreateType}>
               <div className="modal-body">
@@ -584,7 +584,7 @@ export function IncidentTypeManager({ onRefresh }: IncidentTypeManagerProps) {
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3>Add Custom Field</h3>
-              <button className="close-btn" onClick={() => setShowFieldForm(false)}>&times;</button>
+              <button className="close-btn" onClick={() => setShowFieldForm(false)} aria-label="Close add custom field dialog">&times;</button>
             </div>
             <form onSubmit={handleCreateField}>
               <div className="modal-body">

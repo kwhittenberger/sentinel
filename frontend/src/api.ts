@@ -17,6 +17,25 @@ import type {
 
 const API_BASE = '/api';
 
+export class ApiError extends Error {
+  constructor(message: string, public status: number, public detail?: string) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
+async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
+  const response = await fetch(url, options);
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    const detail = body.detail || response.statusText || 'Request failed';
+    throw new ApiError(detail, response.status, body.detail);
+  }
+  return response.json();
+}
+
+const JSON_HEADERS = { 'Content-Type': 'application/json' } as const;
+
 export async function fetchIncidents(filters: Filters): Promise<{ incidents: Incident[]; total: number }> {
   const params = new URLSearchParams();
 
@@ -64,8 +83,7 @@ export async function fetchIncidents(filters: Filters): Promise<{ incidents: Inc
     params.set('event_id', filters.event_id);
   }
 
-  const response = await fetch(`${API_BASE}/incidents?${params}`);
-  return response.json();
+  return fetchJSON(`${API_BASE}/incidents?${params}`);
 }
 
 export async function fetchStats(filters: Filters): Promise<Stats> {
@@ -100,38 +118,31 @@ export async function fetchStats(filters: Filters): Promise<Stats> {
     params.set('category', filters.incident_category);
   }
 
-  const response = await fetch(`${API_BASE}/stats?${params}`);
-  return response.json();
+  return fetchJSON(`${API_BASE}/stats?${params}`);
 }
 
 export async function fetchFilterOptions(): Promise<FilterOptions> {
-  const response = await fetch(`${API_BASE}/filters`);
-  return response.json();
+  return fetchJSON(`${API_BASE}/filters`);
 }
 
 // Domain summary for filter dropdowns
 export async function fetchDomainsSummary(): Promise<{ domains: DomainSummary[] }> {
-  const response = await fetch(`${API_BASE}/domains-summary`);
-  return response.json();
+  return fetchJSON(`${API_BASE}/domains-summary`);
 }
 
 // Event list for filter dropdown
 export async function fetchEventList(): Promise<EventListItem[]> {
-  const response = await fetch(`${API_BASE}/events?limit=200`);
-  return response.json();
+  return fetchJSON(`${API_BASE}/events?limit=200`);
 }
 
 // Incident connections (event siblings + duplicate links)
 export async function fetchIncidentConnections(incidentId: string): Promise<IncidentConnections> {
-  const response = await fetch(`${API_BASE}/incidents/${incidentId}/connections`);
-  if (!response.ok) throw new Error('Failed to fetch connections');
-  return response.json();
+  return fetchJSON(`${API_BASE}/incidents/${incidentId}/connections`);
 }
 
 // Admin API functions
 export async function fetchAdminStatus(): Promise<AdminStatus> {
-  const response = await fetch(`${API_BASE}/admin/status`);
-  return response.json();
+  return fetchJSON(`${API_BASE}/admin/status`);
 }
 
 export async function runPipelineFetch(source?: string, forceRefresh = false): Promise<PipelineResult> {
@@ -139,51 +150,39 @@ export async function runPipelineFetch(source?: string, forceRefresh = false): P
   if (source) params.set('source', source);
   if (forceRefresh) params.set('force_refresh', 'true');
 
-  const response = await fetch(`${API_BASE}/admin/pipeline/fetch?${params}`, {
-    method: 'POST',
-  });
-  return response.json();
+  return fetchJSON(`${API_BASE}/admin/pipeline/fetch?${params}`, { method: 'POST' });
 }
 
 export async function runPipelineProcess(): Promise<PipelineResult> {
-  const response = await fetch(`${API_BASE}/admin/pipeline/process`, {
-    method: 'POST',
-  });
-  return response.json();
+  return fetchJSON(`${API_BASE}/admin/pipeline/process`, { method: 'POST' });
 }
 
 export async function runFullPipeline(forceRefresh = false): Promise<PipelineResult> {
   const params = new URLSearchParams();
   if (forceRefresh) params.set('force_refresh', 'true');
 
-  const response = await fetch(`${API_BASE}/admin/pipeline/run?${params}`, {
-    method: 'POST',
-  });
-  return response.json();
+  return fetchJSON(`${API_BASE}/admin/pipeline/run?${params}`, { method: 'POST' });
 }
 
 // Curation Queue API functions
 export async function fetchCurationQueue(status = 'pending'): Promise<{ items: CurationQueueItem[]; total: number }> {
-  const response = await fetch(`${API_BASE}/admin/queue?status=${status}`);
-  return response.json();
+  return fetchJSON(`${API_BASE}/admin/queue?status=${status}`);
 }
 
 export async function approveArticle(articleId: string, overrides?: Record<string, unknown>): Promise<{ success: boolean; incident_id?: string }> {
-  const response = await fetch(`${API_BASE}/admin/queue/${articleId}/approve`, {
+  return fetchJSON(`${API_BASE}/admin/queue/${articleId}/approve`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: JSON_HEADERS,
     body: JSON.stringify({ overrides }),
   });
-  return response.json();
 }
 
 export async function rejectArticle(articleId: string, reason: string): Promise<{ success: boolean }> {
-  const response = await fetch(`${API_BASE}/admin/queue/${articleId}/reject`, {
+  return fetchJSON(`${API_BASE}/admin/queue/${articleId}/reject`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: JSON_HEADERS,
     body: JSON.stringify({ reason }),
   });
-  return response.json();
 }
 
 // Analytics API functions
@@ -192,8 +191,7 @@ export async function fetchComparisonStats(dateStart?: string, dateEnd?: string)
   if (dateStart) params.set('date_start', dateStart);
   if (dateEnd) params.set('date_end', dateEnd);
 
-  const response = await fetch(`${API_BASE}/stats/comparison?${params}`);
-  return response.json();
+  return fetchJSON(`${API_BASE}/stats/comparison?${params}`);
 }
 
 export async function fetchSanctuaryCorrelation(dateStart?: string, dateEnd?: string): Promise<Record<string, unknown>> {
@@ -201,8 +199,7 @@ export async function fetchSanctuaryCorrelation(dateStart?: string, dateEnd?: st
   if (dateStart) params.set('date_start', dateStart);
   if (dateEnd) params.set('date_end', dateEnd);
 
-  const response = await fetch(`${API_BASE}/stats/sanctuary?${params}`);
-  return response.json();
+  return fetchJSON(`${API_BASE}/stats/sanctuary?${params}`);
 }
 
 // Person API functions
@@ -212,27 +209,24 @@ export async function fetchPersons(params?: { role?: string; gang_affiliated?: b
   if (params?.gang_affiliated !== undefined) searchParams.set('gang_affiliated', String(params.gang_affiliated));
   if (params?.limit) searchParams.set('limit', String(params.limit));
 
-  const response = await fetch(`${API_BASE}/persons?${searchParams}`);
-  return response.json();
+  return fetchJSON(`${API_BASE}/persons?${searchParams}`);
 }
 
 export async function fetchPerson(personId: string): Promise<Person> {
-  const response = await fetch(`${API_BASE}/persons/${personId}`);
-  return response.json();
+  return fetchJSON(`${API_BASE}/persons/${personId}`);
 }
 
 // Health check
 export async function checkHealth(): Promise<{ status: string; database: string }> {
-  const response = await fetch(`${API_BASE}/health`);
-  return response.json();
+  return fetchJSON(`${API_BASE}/health`);
 }
 
 // Queue stats for sidebar
 export async function fetchQueueStats(): Promise<{ pending: number; in_review: number; approved: number; rejected: number }> {
   const [pending, approved, rejected] = await Promise.all([
-    fetch(`${API_BASE}/admin/queue?status=pending`).then(r => r.json()),
-    fetch(`${API_BASE}/admin/queue?status=approved&limit=1`).then(r => r.json()).catch(() => ({ total: 0 })),
-    fetch(`${API_BASE}/admin/queue?status=rejected&limit=1`).then(r => r.json()).catch(() => ({ total: 0 })),
+    fetchJSON<{ total: number }>(`${API_BASE}/admin/queue?status=pending`),
+    fetchJSON<{ total: number }>(`${API_BASE}/admin/queue?status=approved&limit=1`).catch(() => ({ total: 0 })),
+    fetchJSON<{ total: number }>(`${API_BASE}/admin/queue?status=rejected&limit=1`).catch(() => ({ total: 0 })),
   ]);
   return {
     pending: pending.total || 0,
@@ -244,82 +238,71 @@ export async function fetchQueueStats(): Promise<{ pending: number; in_review: n
 
 // Pipeline config for sidebar
 export async function fetchPipelineConfig(): Promise<Record<string, unknown>> {
-  const response = await fetch(`${API_BASE}/admin/pipeline/config`);
-  return response.json();
+  return fetchJSON(`${API_BASE}/admin/pipeline/config`);
 }
 
 // LLM extraction status
 export async function fetchLLMStatus(): Promise<{ available: boolean; model: string | null }> {
-  const response = await fetch(`${API_BASE}/admin/llm-extraction/status`);
-  return response.json();
+  return fetchJSON(`${API_BASE}/admin/llm-extraction/status`);
 }
 
 // Submit article for curation
 export async function submitArticle(data: { url: string; title?: string; content: string; source_name?: string; run_extraction?: boolean }): Promise<{ success: boolean; article_id?: string; extraction_result?: unknown }> {
-  const response = await fetch(`${API_BASE}/admin/queue/submit`, {
+  return fetchJSON(`${API_BASE}/admin/queue/submit`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: JSON_HEADERS,
     body: JSON.stringify(data),
   });
-  return response.json();
 }
 
 // Check duplicate
 export async function checkDuplicate(article: Record<string, unknown>): Promise<{ is_duplicate: boolean; match_type?: string; confidence?: number }> {
-  const response = await fetch(`${API_BASE}/admin/duplicates/check`, {
+  return fetchJSON(`${API_BASE}/admin/duplicates/check`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: JSON_HEADERS,
     body: JSON.stringify({ article }),
   });
-  return response.json();
 }
 
 // Settings API functions
 export async function fetchSettings(): Promise<Record<string, unknown>> {
-  const response = await fetch(`${API_BASE}/admin/settings`);
-  return response.json();
+  return fetchJSON(`${API_BASE}/admin/settings`);
 }
 
 export async function fetchAutoApprovalSettings(): Promise<Record<string, unknown>> {
-  const response = await fetch(`${API_BASE}/admin/settings/auto-approval`);
-  return response.json();
+  return fetchJSON(`${API_BASE}/admin/settings/auto-approval`);
 }
 
 export async function updateAutoApprovalSettings(config: Record<string, unknown>): Promise<Record<string, unknown>> {
-  const response = await fetch(`${API_BASE}/admin/settings/auto-approval`, {
+  return fetchJSON(`${API_BASE}/admin/settings/auto-approval`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: JSON_HEADERS,
     body: JSON.stringify(config),
   });
-  return response.json();
 }
 
 export async function fetchDuplicateSettings(): Promise<Record<string, unknown>> {
-  const response = await fetch(`${API_BASE}/admin/settings/duplicate`);
-  return response.json();
+  return fetchJSON(`${API_BASE}/admin/settings/duplicate`);
 }
 
 export async function updateDuplicateSettings(config: Record<string, unknown>): Promise<Record<string, unknown>> {
-  const response = await fetch(`${API_BASE}/admin/settings/duplicate`, {
+  return fetchJSON(`${API_BASE}/admin/settings/duplicate`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: JSON_HEADERS,
     body: JSON.stringify(config),
   });
-  return response.json();
 }
 
 export async function fetchPipelineSettings(): Promise<Record<string, unknown>> {
-  const response = await fetch(`${API_BASE}/admin/settings/pipeline`);
-  return response.json();
+  return fetchJSON(`${API_BASE}/admin/settings/pipeline`);
 }
 
 export async function updatePipelineSettings(config: Record<string, unknown>): Promise<Record<string, unknown>> {
-  const response = await fetch(`${API_BASE}/admin/settings/pipeline`, {
+  return fetchJSON(`${API_BASE}/admin/settings/pipeline`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: JSON_HEADERS,
     body: JSON.stringify(config),
   });
-  return response.json();
 }
 
 // Incident Browser API functions
@@ -341,33 +324,28 @@ export async function fetchAdminIncidents(params: {
   if (params.page) searchParams.set('page', String(params.page));
   if (params.page_size) searchParams.set('page_size', String(params.page_size));
 
-  const response = await fetch(`${API_BASE}/admin/incidents?${searchParams}`);
-  return response.json();
+  return fetchJSON(`${API_BASE}/admin/incidents?${searchParams}`);
 }
 
 export async function fetchAdminIncident(incidentId: string): Promise<unknown> {
-  const response = await fetch(`${API_BASE}/admin/incidents/${incidentId}`);
-  return response.json();
+  return fetchJSON(`${API_BASE}/admin/incidents/${incidentId}`);
 }
 
 export async function updateIncident(incidentId: string, updates: Record<string, unknown>): Promise<{ success: boolean }> {
-  const response = await fetch(`${API_BASE}/admin/incidents/${incidentId}`, {
+  return fetchJSON(`${API_BASE}/admin/incidents/${incidentId}`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: JSON_HEADERS,
     body: JSON.stringify(updates),
   });
-  return response.json();
 }
 
 export async function deleteIncident(incidentId: string, hardDelete = false): Promise<{ success: boolean }> {
   const params = new URLSearchParams();
   if (hardDelete) params.set('hard_delete', 'true');
-  const response = await fetch(`${API_BASE}/admin/incidents/${incidentId}?${params}`, {
-    method: 'DELETE',
-  });
-  return response.json();
+  return fetchJSON(`${API_BASE}/admin/incidents/${incidentId}?${params}`, { method: 'DELETE' });
 }
 
+// Returns raw Response for download handling — not converted to fetchJSON
 export async function exportIncidents(params: {
   format?: 'json' | 'csv';
   category?: string;
@@ -391,29 +369,23 @@ export async function fetchJobs(status?: string, limit = 50): Promise<{ jobs: un
   if (status) params.set('status', status);
   params.set('limit', String(limit));
 
-  const response = await fetch(`${API_BASE}/admin/jobs?${params}`);
-  return response.json();
+  return fetchJSON(`${API_BASE}/admin/jobs?${params}`);
 }
 
 export async function createJob(jobType: string, jobParams?: Record<string, unknown>): Promise<{ success: boolean; job_id?: string }> {
-  const response = await fetch(`${API_BASE}/admin/jobs`, {
+  return fetchJSON(`${API_BASE}/admin/jobs`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: JSON_HEADERS,
     body: JSON.stringify({ job_type: jobType, params: jobParams }),
   });
-  return response.json();
 }
 
 export async function fetchJob(jobId: string): Promise<unknown> {
-  const response = await fetch(`${API_BASE}/admin/jobs/${jobId}`);
-  return response.json();
+  return fetchJSON(`${API_BASE}/admin/jobs/${jobId}`);
 }
 
 export async function cancelJob(jobId: string): Promise<{ success: boolean }> {
-  const response = await fetch(`${API_BASE}/admin/jobs/${jobId}`, {
-    method: 'DELETE',
-  });
-  return response.json();
+  return fetchJSON(`${API_BASE}/admin/jobs/${jobId}`, { method: 'DELETE' });
 }
 
 // Tiered Queue API functions
@@ -421,37 +393,32 @@ export async function fetchTieredQueue(category?: string): Promise<{ high: unkno
   const params = new URLSearchParams();
   if (category) params.set('category', category);
 
-  const response = await fetch(`${API_BASE}/admin/queue/tiered?${params}`);
-  return response.json();
+  return fetchJSON(`${API_BASE}/admin/queue/tiered?${params}`);
 }
 
 export async function bulkApprove(tier: string, category?: string, limit = 50): Promise<{ success: boolean; approved_count: number; incident_ids: string[] }> {
-  const response = await fetch(`${API_BASE}/admin/queue/bulk-approve`, {
+  return fetchJSON(`${API_BASE}/admin/queue/bulk-approve`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: JSON_HEADERS,
     body: JSON.stringify({ tier, category, limit }),
   });
-  return response.json();
 }
 
 export async function bulkReject(tier: string, reason: string, category?: string, limit = 50): Promise<{ success: boolean; rejected_count: number }> {
-  const response = await fetch(`${API_BASE}/admin/queue/bulk-reject`, {
+  return fetchJSON(`${API_BASE}/admin/queue/bulk-reject`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: JSON_HEADERS,
     body: JSON.stringify({ tier, reason, category, limit }),
   });
-  return response.json();
 }
 
 export async function fetchAISuggestions(articleId: string): Promise<{ article_id: string; suggestions: unknown[] }> {
-  const response = await fetch(`${API_BASE}/admin/queue/${articleId}/suggestions`);
-  return response.json();
+  return fetchJSON(`${API_BASE}/admin/queue/${articleId}/suggestions`);
 }
 
 // Extraction status and batch operations
 export async function fetchExtractionStatus(): Promise<ExtractionStatus> {
-  const response = await fetch(`${API_BASE}/admin/queue/extraction-status`);
-  return response.json();
+  return fetchJSON(`${API_BASE}/admin/queue/extraction-status`);
 }
 
 export interface BatchResult {
@@ -482,48 +449,43 @@ export interface BatchResult {
 }
 
 export async function runBatchExtract(limit: number): Promise<BatchResult> {
-  const response = await fetch(`${API_BASE}/admin/queue/batch-extract`, {
+  return fetchJSON(`${API_BASE}/admin/queue/batch-extract`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: JSON_HEADERS,
     body: JSON.stringify({ limit }),
   });
-  return response.json();
 }
 
 export async function runTriage(limit: number, autoReject = false): Promise<BatchResult> {
-  const response = await fetch(`${API_BASE}/admin/queue/triage`, {
+  return fetchJSON(`${API_BASE}/admin/queue/triage`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: JSON_HEADERS,
     body: JSON.stringify({ limit, auto_reject: autoReject }),
   });
-  return response.json();
 }
 
 export async function runAutoApprove(limit: number): Promise<BatchResult> {
-  const response = await fetch(`${API_BASE}/admin/queue/auto-approve`, {
+  return fetchJSON(`${API_BASE}/admin/queue/auto-approve`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: JSON_HEADERS,
     body: JSON.stringify({ limit }),
   });
-  return response.json();
 }
 
 export async function rejectNotRelevant(): Promise<BatchResult> {
-  const response = await fetch(`${API_BASE}/admin/queue/bulk-reject-by-criteria`, {
+  return fetchJSON(`${API_BASE}/admin/queue/bulk-reject-by-criteria`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: JSON_HEADERS,
     body: JSON.stringify({ reject_not_relevant: true }),
   });
-  return response.json();
 }
 
 export async function upgradeSchema(limit: number): Promise<BatchResult> {
-  const response = await fetch(`${API_BASE}/admin/queue/batch-extract`, {
+  return fetchJSON(`${API_BASE}/admin/queue/batch-extract`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: JSON_HEADERS,
     body: JSON.stringify({ limit, re_extract: true }),
   });
-  return response.json();
 }
 
 // Analytics API functions
@@ -532,8 +494,7 @@ export async function fetchAnalyticsOverview(dateStart?: string, dateEnd?: strin
   if (dateStart) params.set('date_start', dateStart);
   if (dateEnd) params.set('date_end', dateEnd);
 
-  const response = await fetch(`${API_BASE}/admin/analytics/overview?${params}`);
-  return response.json();
+  return fetchJSON(`${API_BASE}/admin/analytics/overview?${params}`);
 }
 
 export async function fetchConversionFunnel(dateStart?: string, dateEnd?: string): Promise<{ funnel: unknown[]; rejected: number; pending: number }> {
@@ -541,8 +502,7 @@ export async function fetchConversionFunnel(dateStart?: string, dateEnd?: string
   if (dateStart) params.set('date_start', dateStart);
   if (dateEnd) params.set('date_end', dateEnd);
 
-  const response = await fetch(`${API_BASE}/admin/analytics/conversion?${params}`);
-  return response.json();
+  return fetchJSON(`${API_BASE}/admin/analytics/conversion?${params}`);
 }
 
 export async function fetchSourceAnalytics(dateStart?: string, dateEnd?: string): Promise<{ sources: unknown[] }> {
@@ -550,8 +510,7 @@ export async function fetchSourceAnalytics(dateStart?: string, dateEnd?: string)
   if (dateStart) params.set('date_start', dateStart);
   if (dateEnd) params.set('date_end', dateEnd);
 
-  const response = await fetch(`${API_BASE}/admin/analytics/sources?${params}`);
-  return response.json();
+  return fetchJSON(`${API_BASE}/admin/analytics/sources?${params}`);
 }
 
 export async function fetchGeographicAnalytics(dateStart?: string, dateEnd?: string): Promise<{ states: unknown[] }> {
@@ -559,14 +518,12 @@ export async function fetchGeographicAnalytics(dateStart?: string, dateEnd?: str
   if (dateStart) params.set('date_start', dateStart);
   if (dateEnd) params.set('date_end', dateEnd);
 
-  const response = await fetch(`${API_BASE}/admin/analytics/geographic?${params}`);
-  return response.json();
+  return fetchJSON(`${API_BASE}/admin/analytics/geographic?${params}`);
 }
 
 // Feed Management API functions
 export async function fetchFeeds(): Promise<{ feeds: unknown[] }> {
-  const response = await fetch(`${API_BASE}/admin/feeds`);
-  return response.json();
+  return fetchJSON(`${API_BASE}/admin/feeds`);
 }
 
 export async function createFeed(
@@ -576,44 +533,35 @@ export async function createFeed(
   sourceType = 'news',
   tier = 3,
 ): Promise<{ success: boolean; feed_id?: string }> {
-  const response = await fetch(`${API_BASE}/admin/feeds`, {
+  return fetchJSON(`${API_BASE}/admin/feeds`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: JSON_HEADERS,
     body: JSON.stringify({ name, url, interval_minutes: intervalMinutes, source_type: sourceType, tier }),
   });
-  return response.json();
 }
 
 export async function updateFeed(feedId: string, updates: Record<string, unknown>): Promise<{ success: boolean }> {
-  const response = await fetch(`${API_BASE}/admin/feeds/${feedId}`, {
+  return fetchJSON(`${API_BASE}/admin/feeds/${feedId}`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: JSON_HEADERS,
     body: JSON.stringify(updates),
   });
-  return response.json();
 }
 
 export async function deleteFeed(feedId: string): Promise<{ success: boolean }> {
-  const response = await fetch(`${API_BASE}/admin/feeds/${feedId}`, {
-    method: 'DELETE',
-  });
-  return response.json();
+  return fetchJSON(`${API_BASE}/admin/feeds/${feedId}`, { method: 'DELETE' });
 }
 
 export async function fetchFeed(feedId: string): Promise<{ success: boolean; message: string }> {
-  const response = await fetch(`${API_BASE}/admin/feeds/${feedId}/fetch`, {
-    method: 'POST',
-  });
-  return response.json();
+  return fetchJSON(`${API_BASE}/admin/feeds/${feedId}/fetch`, { method: 'POST' });
 }
 
 export async function toggleFeed(feedId: string, active: boolean): Promise<{ success: boolean; active: boolean }> {
-  const response = await fetch(`${API_BASE}/admin/feeds/${feedId}/toggle`, {
+  return fetchJSON(`${API_BASE}/admin/feeds/${feedId}/toggle`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: JSON_HEADERS,
     body: JSON.stringify({ active }),
   });
-  return response.json();
 }
 
 // Pipeline stages metadata
@@ -621,53 +569,29 @@ export async function fetchPipelineStages(): Promise<{
   id: string; name: string; slug: string;
   description: string | null; default_order: number; is_active: boolean;
 }[]> {
-  const response = await fetch(`${API_BASE}/admin/pipeline/stages`);
-  return response.json();
+  return fetchJSON(`${API_BASE}/admin/pipeline/stages`);
 }
 
 // Metrics API functions
 export async function fetchMetricsOverview(): Promise<QueueMetrics> {
-  const response = await fetch(`${API_BASE}/metrics/overview`);
-  return response.json();
+  return fetchJSON(`${API_BASE}/metrics/overview`);
 }
 
 export async function fetchTaskPerformance(period = '24h'): Promise<{ tasks: { name: string; total: number; successful: number; failed: number; avg_duration_ms: number; p95_duration_ms: number; total_items: number }[] }> {
-  const response = await fetch(`${API_BASE}/metrics/task-performance?period=${period}`);
-  return response.json();
+  return fetchJSON(`${API_BASE}/metrics/task-performance?period=${period}`);
 }
 
 // Enhanced job action API functions
 export async function deleteJob(jobId: string): Promise<{ success: boolean; deleted: string }> {
-  const response = await fetch(`${API_BASE}/admin/jobs/${jobId}/delete`, {
-    method: 'DELETE',
-  });
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({ detail: 'Delete failed' }));
-    throw new Error(err.detail || 'Delete failed');
-  }
-  return response.json();
+  return fetchJSON(`${API_BASE}/admin/jobs/${jobId}/delete`, { method: 'DELETE' });
 }
 
 export async function retryJob(jobId: string): Promise<{ success: boolean; new_job_id: string }> {
-  const response = await fetch(`${API_BASE}/admin/jobs/${jobId}/retry`, {
-    method: 'POST',
-  });
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({ detail: 'Retry failed' }));
-    throw new Error(err.detail || 'Retry failed');
-  }
-  return response.json();
+  return fetchJSON(`${API_BASE}/admin/jobs/${jobId}/retry`, { method: 'POST' });
 }
 
 export async function unstickJob(jobId: string): Promise<{ success: boolean; unstuck: string }> {
-  const response = await fetch(`${API_BASE}/admin/jobs/${jobId}/unstick`, {
-    method: 'POST',
-  });
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({ detail: 'Unstick failed' }));
-    throw new Error(err.detail || 'Unstick failed');
-  }
-  return response.json();
+  return fetchJSON(`${API_BASE}/admin/jobs/${jobId}/unstick`, { method: 'POST' });
 }
 
 // Prompt improvement generation
@@ -690,14 +614,9 @@ export async function generatePromptImprovement(data: {
   current_system_prompt?: string;
   current_user_prompt_template?: string;
 }): Promise<PromptImprovementResult> {
-  const response = await fetch(`${API_BASE}/admin/prompt-tests/generate-prompt-improvement`, {
+  return fetchJSON(`${API_BASE}/admin/prompt-tests/generate-prompt-improvement`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: JSON_HEADERS,
     body: JSON.stringify(data),
   });
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({ detail: 'Failed to generate prompt improvement' }));
-    throw new Error(err.detail || 'Failed to generate prompt improvement');
-  }
-  return response.json();
 }

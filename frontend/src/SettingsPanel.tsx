@@ -57,6 +57,8 @@ interface LLMStageConfig {
   enabled: boolean;
 }
 
+type LLMStageKey = 'triage' | 'extraction_universal' | 'extraction_async' | 'extraction' | 'pipeline_extraction' | 'relevance_ai' | 'enrichment_reextract';
+
 interface LLMSettings {
   default_provider: string;
   default_model: string;
@@ -310,12 +312,12 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
     }
   };
 
-  const updateStageConfig = (stageKey: string, field: string, value: string | number | boolean) => {
+  const updateStageConfig = (stageKey: LLMStageKey, field: string, value: string | number | boolean) => {
     if (!llm) return;
     setLlm({
       ...llm,
       [stageKey]: {
-        ...(llm as any)[stageKey],
+        ...llm[stageKey],
         [field]: value,
       },
     });
@@ -343,7 +345,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
       <div className="settings-header">
         <h2>Settings</h2>
         {onClose && (
-          <button className="admin-close-btn" onClick={onClose}>&times;</button>
+          <button className="admin-close-btn" onClick={onClose} aria-label="Close settings">&times;</button>
         )}
       </div>
 
@@ -992,7 +994,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
                     { key: 'relevance_ai', label: 'AI Relevance' },
                     { key: 'enrichment_reextract', label: 'Enrichment Re-extract' },
                   ] as const).map(stage => {
-                    const cfg = (llm as any)[stage.key] as LLMStageConfig;
+                    const cfg = llm[stage.key];
                     if (!cfg) return null;
                     const providerModels = availableModels[cfg.provider] || [];
                     return (

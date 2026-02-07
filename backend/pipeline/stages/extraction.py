@@ -6,6 +6,8 @@ import json
 import logging
 from typing import Dict, Any
 
+from backend.utils.llm_parsing import parse_llm_json
+
 from backend.services.pipeline_orchestrator import (
     PipelineStage,
     PipelineContext,
@@ -118,19 +120,7 @@ class ExtractionStage(PipelineStage):
             )
 
             latency_ms = llm_response.latency_ms
-            response_text = llm_response.text
-
-            # Parse JSON response
-            if "```json" in response_text:
-                json_start = response_text.find("```json") + 7
-                json_end = response_text.find("```", json_start)
-                response_text = response_text[json_start:json_end].strip()
-            elif "```" in response_text:
-                json_start = response_text.find("```") + 3
-                json_end = response_text.find("```", json_start)
-                response_text = response_text[json_start:json_end].strip()
-
-            data = json.loads(response_text)
+            data = parse_llm_json(llm_response.text)
 
             # Record execution
             await prompt_manager.record_execution(

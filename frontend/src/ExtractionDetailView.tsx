@@ -4,7 +4,7 @@ import type { UniversalExtractionData, ExtractedActor, ExtractedEvent } from './
 import './ExtractionDetailView.css';
 
 interface ExtractionDetailViewProps {
-  data: UniversalExtractionData;
+  data: UniversalExtractionData | null | undefined;
   articleContent?: string;
   sourceUrl?: string;
 }
@@ -78,7 +78,7 @@ function ActorCard({ actor }: { actor: ExtractedActor }) {
           </span>
         </div>
         <div className="edv-actor-roles">
-          {actor.roles.map(role => (
+          {(actor.roles || []).map(role => (
             <span
               key={role}
               className="edv-role-tag"
@@ -147,9 +147,9 @@ function EventRow({ event }: { event: ExtractedEvent }) {
       <div className="edv-event-content">
         <span className="edv-event-type">
           {typeIcons[event.event_type] || '\u2022'}{' '}
-          {event.event_type.replace(/_/g, ' ')}
+          {(event.event_type || 'unknown').replace(/_/g, ' ')}
         </span>
-        <span className="edv-event-desc">{event.description}</span>
+        {event.description && <span className="edv-event-desc">{event.description}</span>}
         {event.relation_to_incident && (
           <span className="edv-event-relation">{event.relation_to_incident.replace(/_/g, ' ')}</span>
         )}
@@ -160,6 +160,15 @@ function EventRow({ event }: { event: ExtractedEvent }) {
 
 export function ExtractionDetailView({ data, articleContent, sourceUrl }: ExtractionDetailViewProps) {
   const [showArticle, setShowArticle] = useState(false);
+
+  if (!data) {
+    return (
+      <div className="edv-container">
+        <div className="edv-missing-warning">No extraction data available.</div>
+      </div>
+    );
+  }
+
   const incident = data.incident;
   const actors = data.actors || [];
   const events = data.events || [];
@@ -190,7 +199,7 @@ export function ExtractionDetailView({ data, articleContent, sourceUrl }: Extrac
   // Group actors by role
   const actorsByRole: Record<string, ExtractedActor[]> = {};
   actors.forEach(a => {
-    a.roles.forEach(role => {
+    (a.roles || []).forEach(role => {
       if (!actorsByRole[role]) actorsByRole[role] = [];
       actorsByRole[role].push(a);
     });

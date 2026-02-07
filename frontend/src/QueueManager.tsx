@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 
 const API_BASE = '/api';
 
@@ -76,6 +76,27 @@ export function QueueManager({ onRefresh }: QueueManagerProps) {
   const [progressMessage, setProgressMessage] = useState('');
   const [activeJob, setActiveJob] = useState<{id: string; progress: number; total: number; message: string; status: string} | null>(null);
 
+  const pollCountRef = useRef(0);
+  const pollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const progressIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const unmountedRef = useRef(false);
+
+  // Cleanup all timers on unmount
+  useEffect(() => {
+    unmountedRef.current = false;
+    return () => {
+      unmountedRef.current = true;
+      if (pollTimeoutRef.current) {
+        clearTimeout(pollTimeoutRef.current);
+        pollTimeoutRef.current = null;
+      }
+      if (progressIntervalRef.current) {
+        clearInterval(progressIntervalRef.current);
+        progressIntervalRef.current = null;
+      }
+    };
+  }, []);
+
   const loadStatus = useCallback(async () => {
     setLoading(true);
     try {
@@ -92,7 +113,6 @@ export function QueueManager({ onRefresh }: QueueManagerProps) {
   }, []);
 
   // Poll job status - defined first so checkForActiveJob can reference it
-  const pollCountRef = { current: 0 };
   const pollJobStatus = useCallback(async (jobId: string) => {
     try {
       const response = await fetch(`${API_BASE}/admin/jobs/${jobId}`);
@@ -113,7 +133,9 @@ export function QueueManager({ onRefresh }: QueueManagerProps) {
           if (pollCountRef.current % 10 === 0) {
             loadStatus();
           }
-          setTimeout(() => pollJobStatus(jobId), 2000);
+          if (!unmountedRef.current) {
+            pollTimeoutRef.current = setTimeout(() => pollJobStatus(jobId), 2000);
+          }
         } else {
           // Job finished - refresh everything
           pollCountRef.current = 0;
@@ -243,18 +265,27 @@ export function QueueManager({ onRefresh }: QueueManagerProps) {
     const interval = 100; // Update every 100ms
     const increment = 100 / (estimatedSeconds * 1000 / interval);
 
+    // Clear any existing progress interval before starting a new one
+    if (progressIntervalRef.current) {
+      clearInterval(progressIntervalRef.current);
+    }
+
     const timer = setInterval(() => {
       setProgress(prev => {
         if (prev >= 95) {
           clearInterval(timer);
+          progressIntervalRef.current = null;
           return 95; // Cap at 95% until complete
         }
         return prev + increment;
       });
     }, interval);
 
+    progressIntervalRef.current = timer;
+
     return () => {
       clearInterval(timer);
+      progressIntervalRef.current = null;
       setProgress(100);
     };
   };
@@ -365,7 +396,7 @@ export function QueueManager({ onRefresh }: QueueManagerProps) {
           status: 'pending',
         });
         // Start polling for updates
-        setTimeout(() => pollJobStatus(data.job_id), 1000);
+        pollTimeoutRef.current = setTimeout(() => pollJobStatus(data.job_id), 1000);
       } else {
         setResult({ success: false, error: data.error });
       }

@@ -9,6 +9,23 @@ from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, List, Literal
 from uuid import UUID
 
+from .thresholds import (
+    AUTO_APPROVE_CONFIDENCE,
+    ENFORCEMENT_AUTO_APPROVE_CONFIDENCE,
+    CRIME_AUTO_APPROVE_CONFIDENCE,
+    DOMAIN_AUTO_APPROVE_CONFIDENCE,
+    REVIEW_CONFIDENCE,
+    AUTO_REJECT_CONFIDENCE,
+    FIELD_CONFIDENCE_THRESHOLD,
+    ENFORCEMENT_FIELD_CONFIDENCE_THRESHOLD,
+    MIN_SEVERITY_AUTO_APPROVE,
+    MAX_SEVERITY_AUTO_REJECT,
+    ENFORCEMENT_MIN_SEVERITY_AUTO_APPROVE,
+    DOMAIN_MIN_SEVERITY_AUTO_APPROVE,
+    DOMAIN_MAX_SEVERITY_AUTO_REJECT,
+    MIN_SOURCE_RELIABILITY,
+)
+
 logger = logging.getLogger(__name__)
 
 IncidentCategory = Literal['enforcement', 'crime']
@@ -25,10 +42,10 @@ except ImportError:
 @dataclass
 class ApprovalConfig:
     """Configuration for auto-approval rules."""
-    # Confidence thresholds
-    min_confidence_auto_approve: float = 0.85
-    min_confidence_review: float = 0.5
-    auto_reject_below: float = 0.3
+    # Confidence thresholds (defaults from thresholds.py)
+    min_confidence_auto_approve: float = AUTO_APPROVE_CONFIDENCE
+    min_confidence_review: float = REVIEW_CONFIDENCE
+    auto_reject_below: float = AUTO_REJECT_CONFIDENCE
 
     # Required fields for auto-approval (minimal universal set — the LLM
     # confidence score already incorporates schema-specific field completeness)
@@ -37,14 +54,14 @@ class ApprovalConfig:
     ])
 
     # Field confidence thresholds
-    field_confidence_threshold: float = 0.7
+    field_confidence_threshold: float = FIELD_CONFIDENCE_THRESHOLD
 
     # Crime severity thresholds
-    min_severity_auto_approve: int = 5
-    max_severity_auto_reject: int = 2
+    min_severity_auto_approve: int = MIN_SEVERITY_AUTO_APPROVE
+    max_severity_auto_reject: int = MAX_SEVERITY_AUTO_REJECT
 
     # Source reliability
-    min_source_reliability: float = 0.6
+    min_source_reliability: float = MIN_SOURCE_RELIABILITY
 
     # Enable/disable auto-actions
     enable_auto_approve: bool = True
@@ -54,24 +71,24 @@ class ApprovalConfig:
 @dataclass
 class EnforcementApprovalConfig(ApprovalConfig):
     """Category-specific config for enforcement incidents (higher scrutiny)."""
-    min_confidence_auto_approve: float = 0.90  # Higher threshold for enforcement
+    min_confidence_auto_approve: float = ENFORCEMENT_AUTO_APPROVE_CONFIDENCE
     required_fields: List[str] = field(default_factory=lambda: [
         'date', 'state', 'incident_type', 'victim_category', 'outcome_category'
     ])
-    field_confidence_threshold: float = 0.75
+    field_confidence_threshold: float = ENFORCEMENT_FIELD_CONFIDENCE_THRESHOLD
     # Enforcement actions (ICE raids, arrests) aren't "crimes" — severity gate
     # from the crime severity map doesn't meaningfully apply
-    min_severity_auto_approve: int = 1
+    min_severity_auto_approve: int = ENFORCEMENT_MIN_SEVERITY_AUTO_APPROVE
 
 
 @dataclass
 class CrimeApprovalConfig(ApprovalConfig):
     """Category-specific config for crime incidents (standard threshold)."""
-    min_confidence_auto_approve: float = 0.85
+    min_confidence_auto_approve: float = CRIME_AUTO_APPROVE_CONFIDENCE
     required_fields: List[str] = field(default_factory=lambda: [
         'date', 'state', 'incident_type'
     ])
-    field_confidence_threshold: float = 0.70
+    field_confidence_threshold: float = FIELD_CONFIDENCE_THRESHOLD
 
 
 @dataclass
@@ -84,13 +101,13 @@ class DomainApprovalConfig(ApprovalConfig):
     because CJ/CR incident types (arrest, prosecution, protest) don't map to
     the crime severity scale.
     """
-    min_confidence_auto_approve: float = 0.85
+    min_confidence_auto_approve: float = DOMAIN_AUTO_APPROVE_CONFIDENCE
     required_fields: List[str] = field(default_factory=lambda: [
         'date', 'state'
     ])
-    field_confidence_threshold: float = 0.70
-    min_severity_auto_approve: int = 0
-    max_severity_auto_reject: int = 0  # disable severity-based rejection
+    field_confidence_threshold: float = FIELD_CONFIDENCE_THRESHOLD
+    min_severity_auto_approve: int = DOMAIN_MIN_SEVERITY_AUTO_APPROVE
+    max_severity_auto_reject: int = DOMAIN_MAX_SEVERITY_AUTO_REJECT
 
 
 # Default configurations
@@ -304,13 +321,13 @@ class AutoApprovalService:
             thresholds = await self._type_service.get_approval_thresholds(incident_type_id)
             if thresholds:
                 config = ApprovalConfig(
-                    min_confidence_auto_approve=thresholds.get('min_confidence_auto_approve', 0.85),
-                    min_confidence_review=thresholds.get('min_confidence_review', 0.5),
-                    auto_reject_below=thresholds.get('auto_reject_below', 0.3),
+                    min_confidence_auto_approve=thresholds.get('min_confidence_auto_approve', AUTO_APPROVE_CONFIDENCE),
+                    min_confidence_review=thresholds.get('min_confidence_review', REVIEW_CONFIDENCE),
+                    auto_reject_below=thresholds.get('auto_reject_below', AUTO_REJECT_CONFIDENCE),
                     required_fields=thresholds.get('required_fields', ['date', 'state', 'incident_type']),
-                    field_confidence_threshold=thresholds.get('field_confidence_threshold', 0.7),
-                    min_severity_auto_approve=thresholds.get('min_severity_auto_approve', 5),
-                    max_severity_auto_reject=thresholds.get('max_severity_auto_reject', 2),
+                    field_confidence_threshold=thresholds.get('field_confidence_threshold', FIELD_CONFIDENCE_THRESHOLD),
+                    min_severity_auto_approve=thresholds.get('min_severity_auto_approve', MIN_SEVERITY_AUTO_APPROVE),
+                    max_severity_auto_reject=thresholds.get('max_severity_auto_reject', MAX_SEVERITY_AUTO_REJECT),
                     enable_auto_approve=thresholds.get('enable_auto_approve', True),
                     enable_auto_reject=thresholds.get('enable_auto_reject', True),
                 )
@@ -475,7 +492,7 @@ class AutoApprovalService:
         field_confidence = extracted.get('field_confidence', {})
         low_confidence_fields = []
         for field_name in config.required_fields:
-            fc = field_confidence.get(field_name, extracted.get(f'{field_name}_confidence', 1.0))
+            fc = field_confidence.get(field_name, extracted.get(f'{field_name}_confidence', 0.0))
             if fc < config.field_confidence_threshold:
                 low_confidence_fields.append(f'{field_name} ({fc:.0%})')
 

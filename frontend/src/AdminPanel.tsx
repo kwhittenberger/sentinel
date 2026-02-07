@@ -87,7 +87,7 @@ export function AdminPanel({ onClose, onRefresh }: AdminPanelProps) {
         <div className="admin-nav-header">
           <h2>Admin Panel</h2>
           {onClose && (
-            <button className="admin-close-btn" onClick={onClose}>&times;</button>
+            <button className="admin-close-btn" onClick={onClose} aria-label="Close admin panel">&times;</button>
           )}
         </div>
 

@@ -60,14 +60,20 @@ export function useJobWebSocket(): JobWebSocketState {
       }
     };
 
-    ws.onclose = () => {
+    ws.onclose = (event) => {
       setConnected(false);
       wsRef.current = null;
+      if (import.meta.env.DEV && event.code !== 1000) {
+        console.error('[WebSocket] Connection closed', { code: event.code, reason: event.reason });
+      }
       // Auto-reconnect after 3 seconds
       reconnectTimer.current = setTimeout(connect, 3000);
     };
 
-    ws.onerror = () => {
+    ws.onerror = (error) => {
+      if (import.meta.env.DEV) {
+        console.error('[WebSocket] Error', error);
+      }
       ws.close();
     };
   }, []);

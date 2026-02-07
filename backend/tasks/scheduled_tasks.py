@@ -1,9 +1,10 @@
-"""Scheduled Celery tasks: periodic fetch and stale-job watchdog."""
+"""Scheduled Celery tasks: periodic fetch, stale-job watchdog, and view refresh."""
 
 import asyncio
 import logging
+import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from backend.celery_app import app
 from backend.tasks.db import (
@@ -32,7 +33,7 @@ async def _async_scheduled_fetch() -> dict:
         """,
         job_id,
         {},
-        datetime.utcnow(),
+        datetime.now(timezone.utc),
     )
 
     await async_mark_job_started(job_id, "beat-scheduled")
@@ -92,7 +93,7 @@ async def _async_cleanup_stale_jobs() -> dict:
                     error = 'Worker crash detected (stale timeout)'
                 WHERE id = $2::uuid
                 """,
-                datetime.utcnow(),
+                datetime.now(timezone.utc),
                 job_id,
             )
             marked_failed += 1
@@ -164,7 +165,7 @@ async def _async_aggregate_metrics() -> dict:
     # Default: aggregate from 24h ago if no prior aggregation
     from_time = latest[0]["latest"] if latest and latest[0]["latest"] else None
     if from_time is None:
-        from_time = datetime.utcnow() - __import__("datetime").timedelta(hours=24)
+        from_time = datetime.now(timezone.utc) - __import__("datetime").timedelta(hours=24)
 
     result = await async_execute("""
         INSERT INTO task_metrics_aggregate
@@ -217,4 +218,112 @@ def aggregate_metrics(self):
         return result
     except Exception as exc:
         logger.error(f"Metrics aggregation failed: {exc}")
+        raise
+
+
+# ---------------------------------------------------------------------------
+# Materialized view refresh
+# ---------------------------------------------------------------------------
+
+# Both views have unique indexes, so CONCURRENTLY is safe and avoids
+# blocking reads during refresh.
+MATERIALIZED_VIEWS = [
+    "prosecutor_stats",
+    "recidivism_analysis",
+]
+
+
+async def _async_refresh_materialized_views() -> dict:
+    """Refresh all materialized views, updating the config table with timing."""
+    results = {}
+
+    for view_name in MATERIALIZED_VIEWS:
+        start = time.monotonic()
+        try:
+            # Mark as running in the config table (best-effort)
+            await async_execute(
+                """
+                UPDATE materialized_view_refresh_config
+                SET last_refresh_status = 'running', updated_at = NOW()
+                WHERE view_name = $1
+                """,
+                view_name,
+            )
+
+            await async_execute(
+                f"REFRESH MATERIALIZED VIEW CONCURRENTLY {view_name}"
+            )
+
+            duration_ms = int((time.monotonic() - start) * 1000)
+
+            # Update config with success
+            await async_execute(
+                """
+                UPDATE materialized_view_refresh_config
+                SET last_refresh_at = NOW(),
+                    last_refresh_duration_ms = $1,
+                    last_refresh_status = 'success',
+                    updated_at = NOW()
+                WHERE view_name = $2
+                """,
+                duration_ms,
+                view_name,
+            )
+
+            results[view_name] = {"status": "success", "duration_ms": duration_ms}
+            logger.info(
+                "Refreshed materialized view %s in %d ms", view_name, duration_ms
+            )
+
+        except Exception as exc:
+            duration_ms = int((time.monotonic() - start) * 1000)
+
+            # Update config with failure (best-effort)
+            try:
+                await async_execute(
+                    """
+                    UPDATE materialized_view_refresh_config
+                    SET last_refresh_status = 'failed',
+                        last_refresh_duration_ms = $1,
+                        updated_at = NOW()
+                    WHERE view_name = $2
+                    """,
+                    duration_ms,
+                    view_name,
+                )
+            except Exception:
+                pass
+
+            results[view_name] = {
+                "status": "failed",
+                "error": str(exc),
+                "duration_ms": duration_ms,
+            }
+            logger.error(
+                "Failed to refresh materialized view %s after %d ms: %s",
+                view_name,
+                duration_ms,
+                exc,
+            )
+
+    return results
+
+
+@app.task(
+    bind=True,
+    name="backend.tasks.scheduled_tasks.refresh_materialized_views",
+    acks_late=True,
+    soft_time_limit=300,
+    time_limit=360,
+)
+def refresh_materialized_views(self):
+    """Periodically refresh all materialized views."""
+    logger.info("Materialized view refresh starting")
+    _db._pool = None  # Force fresh pool
+    try:
+        result = asyncio.run(_async_refresh_materialized_views())
+        logger.info(f"Materialized view refresh completed: {result}")
+        return result
+    except Exception as exc:
+        logger.error(f"Materialized view refresh failed: {exc}")
         raise

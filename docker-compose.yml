@@ -6,7 +6,7 @@ services:
     environment:
       POSTGRES_DB: sentinel
       POSTGRES_USER: sentinel
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devpassword}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sentinel}
     ports:
       - "5433:5432"
     volumes:
@@ -25,7 +25,7 @@ services:
     container_name: sentinel_backend
     restart: unless-stopped
     environment:
-      DATABASE_URL: postgresql://sentinel:${POSTGRES_PASSWORD:-devpassword}@db:5432/sentinel
+      DATABASE_URL: postgresql://sentinel:${POSTGRES_PASSWORD:-sentinel}@db:5432/sentinel
       USE_DATABASE: "true"
       USE_CELERY: ${USE_CELERY:-false}
       REDIS_URL: redis://redis:6379/0
@@ -64,7 +64,7 @@ services:
     container_name: sentinel_celery_worker_default
     restart: unless-stopped
     environment:
-      DATABASE_URL: postgresql://sentinel:${POSTGRES_PASSWORD:-devpassword}@db:5432/sentinel
+      DATABASE_URL: postgresql://sentinel:${POSTGRES_PASSWORD:-sentinel}@db:5432/sentinel
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/0
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
@@ -87,7 +87,7 @@ services:
     container_name: sentinel_celery_worker_extraction
     restart: unless-stopped
     environment:
-      DATABASE_URL: postgresql://sentinel:${POSTGRES_PASSWORD:-devpassword}@db:5432/sentinel
+      DATABASE_URL: postgresql://sentinel:${POSTGRES_PASSWORD:-sentinel}@db:5432/sentinel
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/0
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
@@ -110,7 +110,7 @@ services:
     container_name: sentinel_celery_worker_fetch
     restart: unless-stopped
     environment:
-      DATABASE_URL: postgresql://sentinel:${POSTGRES_PASSWORD:-devpassword}@db:5432/sentinel
+      DATABASE_URL: postgresql://sentinel:${POSTGRES_PASSWORD:-sentinel}@db:5432/sentinel
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/0
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
@@ -133,7 +133,7 @@ services:
     container_name: sentinel_celery_beat
     restart: unless-stopped
     environment:
-      DATABASE_URL: postgresql://sentinel:${POSTGRES_PASSWORD:-devpassword}@db:5432/sentinel
+      DATABASE_URL: postgresql://sentinel:${POSTGRES_PASSWORD:-sentinel}@db:5432/sentinel
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/0
       ENVIRONMENT: ${ENVIRONMENT:-development}

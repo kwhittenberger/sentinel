@@ -6,7 +6,7 @@ endpoint into a reusable service that populates the full extensibility system
 
 import logging
 import uuid
-from datetime import datetime, date as date_type
+from datetime import datetime, date as date_type, timezone
 from typing import Optional, Dict, Any, List
 
 logger = logging.getLogger(__name__)
@@ -305,7 +305,7 @@ class IncidentCreationService:
             custom_fields or {},
             lat,
             lon,
-            datetime.utcnow(),
+            datetime.now(timezone.utc),
         )
 
         # --- actors (full iteration) ---
@@ -646,7 +646,7 @@ class IncidentCreationService:
                 event_id,
                 event_name,
                 event_type,
-                event_date or datetime.utcnow().date(),
+                event_date or datetime.now(timezone.utc).date(),
                 description,
             )
 

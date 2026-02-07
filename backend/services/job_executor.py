@@ -6,10 +6,13 @@ retained for environments that cannot run Redis/Celery.
 """
 import asyncio
 import hashlib
+import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Callable, Dict, Any
 import logging
+
+import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +73,7 @@ class JobExecutor:
                         UPDATE background_jobs
                         SET status = 'running', started_at = $1
                         WHERE id = $2
-                    """, datetime.utcnow(), job_id)
+                    """, datetime.now(timezone.utc), job_id)
 
                     try:
                         # Execute the job
@@ -81,17 +84,19 @@ class JobExecutor:
                             UPDATE background_jobs
                             SET status = 'completed', completed_at = $1, message = $2
                             WHERE id = $3
-                        """, datetime.utcnow(), result.get('message', 'Completed'), job_id)
+                        """, datetime.now(timezone.utc), result.get('message', 'Completed'), job_id)
 
                         logger.info(f"Job {job_id} completed: {result}")
 
                     except Exception as e:
+                        # broad catch: job error boundary — must record failure for any
+                        # exception type (ValueError, LLMError, DB errors, httpx errors)
                         logger.error(f"Job {job_id} failed: {e}")
                         await execute("""
                             UPDATE background_jobs
                             SET status = 'failed', completed_at = $1, error = $2
                             WHERE id = $3
-                        """, datetime.utcnow(), str(e), job_id)
+                        """, datetime.now(timezone.utc), str(e), job_id)
 
                     self._current_job_id = None
 
@@ -102,6 +107,9 @@ class JobExecutor:
             except asyncio.CancelledError:
                 break
             except Exception as e:
+                # broad catch: top-level executor loop must never crash — any
+                # unhandled error (DB unavailable, import failure, etc.) is
+                # logged and the loop retries after a delay
                 logger.error(f"Job executor error: {e}")
                 await asyncio.sleep(10)
 
@@ -137,8 +145,6 @@ class JobExecutor:
         """Fetch articles from RSS feeds."""
         from backend.database import fetch, execute
         import feedparser
-        import httpx
-        from datetime import datetime
 
         # Get active sources
         feeds = await fetch("""
@@ -204,18 +210,31 @@ class JobExecutor:
                         raw_content,
                         content_hash,
                         feed['name'],
-                        datetime.utcnow(),
-                        datetime.utcnow()
+                        datetime.now(timezone.utc),
+                        datetime.now(timezone.utc)
                     )
                     total_fetched += 1
 
                 # Update last_fetched
                 await execute("""
                     UPDATE sources SET last_fetched = $1, last_error = NULL WHERE id = $2
-                """, datetime.utcnow(), feed['id'])
+                """, datetime.now(timezone.utc), feed['id'])
 
-            except Exception as e:
+            except (httpx.HTTPError, httpx.InvalidURL) as e:
                 logger.warning(f"Failed to fetch source {feed['name']}: {e}")
+                await execute(
+                    "UPDATE sources SET last_error = $1 WHERE id = $2",
+                    str(e), feed['id']
+                )
+            except (KeyError, ValueError, TypeError) as e:
+                logger.warning(f"Failed to parse feed {feed['name']}: {e}")
+                await execute(
+                    "UPDATE sources SET last_error = $1 WHERE id = $2",
+                    str(e), feed['id']
+                )
+            except Exception as e:
+                # broad catch: DB errors or unexpected feedparser issues
+                logger.warning(f"Unexpected error fetching source {feed['name']}: {e}")
                 await execute(
                     "UPDATE sources SET last_error = $1 WHERE id = $2",
                     str(e), feed['id']
@@ -272,8 +291,11 @@ class JobExecutor:
                 )
                 processed += 1
 
-            except Exception as e:
+            except (KeyError, TypeError, ValueError) as e:
                 logger.warning(f"Failed to process article {article['id']}: {e}")
+            except Exception as e:
+                # broad catch: DB errors or LLM provider failures
+                logger.warning(f"Unexpected error processing article {article['id']}: {e}")
 
         await self._update_progress(job_id, total, total, "Completed")
         return {"message": f"Processed {processed}/{total} articles", "processed": processed}
@@ -336,9 +358,13 @@ class JobExecutor:
                     errors += 1
                     logger.warning(f"Extraction failed for {article['id']}: {result.get('error')}")
 
-            except Exception as e:
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError) as e:
                 errors += 1
                 logger.warning(f"Failed to extract article {article['id']}: {e}")
+            except Exception as e:
+                # broad catch: DB errors or LLM provider failures (LLMError, etc.)
+                errors += 1
+                logger.warning(f"Unexpected error extracting article {article['id']}: {e}")
 
             # Rate limiting to avoid API limits
             await asyncio.sleep(2)
@@ -354,7 +380,6 @@ class JobExecutor:
     async def _run_batch_enrich_job(self, params: Dict[str, Any], job_id: uuid.UUID) -> Dict[str, Any]:
         """Enrich articles with additional data (fetch full content, etc.)."""
         from backend.database import fetch, execute
-        import httpx
 
         limit = params.get('limit', 50)
 
@@ -392,8 +417,11 @@ class JobExecutor:
                         """, content, article['id'])
                         enriched += 1
 
+                except (httpx.HTTPError, httpx.InvalidURL) as e:
+                    logger.warning(f"HTTP error enriching article {article['id']}: {e}")
                 except Exception as e:
-                    logger.warning(f"Failed to enrich article {article['id']}: {e}")
+                    # broad catch: DB errors or unexpected response parsing issues
+                    logger.warning(f"Unexpected error enriching article {article['id']}: {e}")
 
         await self._update_progress(job_id, total, total, "Completed")
         return {"message": f"Enriched {enriched}/{total} articles", "enriched": enriched}

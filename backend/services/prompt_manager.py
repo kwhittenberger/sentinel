@@ -6,7 +6,7 @@ import logging
 import re
 import random
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, List, Tuple
 from uuid import UUID
 from enum import Enum
@@ -123,7 +123,7 @@ class PromptManager:
     def _is_cache_valid(self, cache_entry: Tuple[Prompt, datetime]) -> bool:
         """Check if a cache entry is still valid."""
         _, loaded_at = cache_entry
-        return datetime.utcnow() - loaded_at < self._cache_ttl
+        return datetime.now(timezone.utc) - loaded_at < self._cache_ttl
 
     async def get_prompt(
         self,
@@ -191,7 +191,7 @@ class PromptManager:
         prompt = self._row_to_prompt(rows[0])
 
         # Cache it
-        self._cache[cache_key] = (prompt, datetime.utcnow())
+        self._cache[cache_key] = (prompt, datetime.now(timezone.utc))
 
         # Handle A/B testing
         if prompt.traffic_percentage < 100 and ab_context:
@@ -412,8 +412,8 @@ class PromptManager:
             traffic_percentage=updates.get("traffic_percentage", 100),
             ab_test_group=updates.get("ab_test_group", current.ab_test_group),
             created_by=created_by,
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
             activated_at=None
         )
 

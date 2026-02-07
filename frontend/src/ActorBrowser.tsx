@@ -705,9 +705,9 @@ export const ActorBrowser: React.FC = () => {
                     </div>
                   </div>
                   <div className="ext-suggestion-meta">
-                    <span className={`ext-match-type ext-match-type-${(suggestion as any).match_type || 'trigram'}`}>
-                      {(suggestion as any).match_type === 'first_last' ? 'Name Match' :
-                       (suggestion as any).match_type === 'containment' ? 'Contains' : 'Similar'}
+                    <span className={`ext-match-type ext-match-type-${suggestion.match_type || 'trigram'}`}>
+                      {suggestion.match_type === 'first_last' ? 'Name Match' :
+                       suggestion.match_type === 'containment' ? 'Contains' : 'Similar'}
                     </span>
                     <span className="ext-similarity">
                       {Math.round(suggestion.similarity * 100)}%

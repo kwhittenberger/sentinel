@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, type CSSProperties } from 'react';
 import { SplitPane } from './SplitPane';
 
 const API_BASE = '';
@@ -418,7 +418,7 @@ function SchemaForm({
     onSubmit(data);
   };
 
-  const inputStyle = { width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border-color)', fontSize: 13, background: 'var(--bg-primary)' };
+  const inputStyle: CSSProperties = { width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border-color)', fontSize: 13, background: 'var(--bg-primary)' };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -433,14 +433,14 @@ function SchemaForm({
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
         <div>
           <label style={{ fontSize: 12, fontWeight: 600, display: 'block', marginBottom: 4 }}>Domain</label>
-          <select value={domainId} onChange={e => handleDomainSelect(e.target.value)} style={inputStyle as any}>
+          <select value={domainId} onChange={e => handleDomainSelect(e.target.value)} style={inputStyle}>
             <option value="">None</option>
             {domains.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
           </select>
         </div>
         <div>
           <label style={{ fontSize: 12, fontWeight: 600, display: 'block', marginBottom: 4 }}>Category</label>
-          <select value={categoryId} onChange={e => setCategoryId(e.target.value)} style={inputStyle as any}>
+          <select value={categoryId} onChange={e => setCategoryId(e.target.value)} style={inputStyle}>
             <option value="">None</option>
             {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>

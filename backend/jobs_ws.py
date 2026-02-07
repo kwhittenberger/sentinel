@@ -8,7 +8,7 @@ Immediate notifications are sent when jobs are created or cancelled via notify_j
 import asyncio
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from fastapi import WebSocket, WebSocketDisconnect
 
@@ -127,7 +127,7 @@ class JobUpdateManager:
         """Return active jobs + most recent 20 completed/failed."""
         from backend.database import fetch
 
-        cutoff = datetime.utcnow() - timedelta(hours=24)
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
         rows = await fetch(f"""
             (SELECT {_JOB_COLS} FROM background_jobs
              WHERE status IN ('pending', 'running')

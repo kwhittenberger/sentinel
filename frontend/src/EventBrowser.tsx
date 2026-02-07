@@ -442,7 +442,7 @@ export function EventBrowser({ onRefresh }: EventBrowserProps) {
           <div className="ext-modal ext-modal-lg" onClick={(e) => e.stopPropagation()}>
             <div className="ext-modal-header">
               <h3>Create Event</h3>
-              <button className="ext-close-btn" onClick={() => setShowCreateForm(false)}>&times;</button>
+              <button className="ext-close-btn" onClick={() => setShowCreateForm(false)} aria-label="Close create event dialog">&times;</button>
             </div>
             <form onSubmit={handleCreateEvent}>
               <div className="ext-modal-body">
@@ -577,7 +577,7 @@ export function EventBrowser({ onRefresh }: EventBrowserProps) {
           <div className="ext-modal ext-modal-wide" onClick={(e) => e.stopPropagation()}>
             <div className="ext-modal-header">
               <h3>Event Cluster Suggestions</h3>
-              <button className="ext-close-btn" onClick={() => setShowSuggestions(false)}>&times;</button>
+              <button className="ext-close-btn" onClick={() => setShowSuggestions(false)} aria-label="Close event suggestions">&times;</button>
             </div>
             <div className="ext-modal-body ext-suggestions-modal-list">
               {suggestions.map((suggestion, idx) => (
@@ -643,7 +643,7 @@ export function EventBrowser({ onRefresh }: EventBrowserProps) {
           <div className="ext-modal ext-modal-wide" onClick={(e) => e.stopPropagation()}>
             <div className="ext-modal-header">
               <h3>Incident Details</h3>
-              <button className="ext-close-btn" onClick={() => setShowIncidentDetail(false)}>&times;</button>
+              <button className="ext-close-btn" onClick={() => setShowIncidentDetail(false)} aria-label="Close incident details">&times;</button>
             </div>
             <div className="ext-modal-body">
               <IncidentDetailView
