@@ -1553,6 +1553,43 @@ async def approve_article(
     }
 
 
+@router.patch("/api/admin/queue/{article_id}/save")
+async def save_article_edits(
+    article_id: str,
+    extracted_data: dict = Body(..., embed=True),
+):
+    """Save edits to an article's extracted_data without approving."""
+    if not USE_DATABASE:
+        return {"success": False, "error": "Database not enabled"}
+
+    from backend.database import fetch, execute
+
+    rows = await fetch(
+        "SELECT id, extracted_data FROM ingested_articles WHERE id = $1",
+        uuid.UUID(article_id),
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="Article not found")
+
+    existing = rows[0].get("extracted_data") or {}
+    if isinstance(existing, str):
+        existing = json.loads(existing)
+
+    # Merge edits into existing data, preserving nested keys like merge_info
+    if isinstance(existing, dict) and "extracted_data" in existing:
+        existing["extracted_data"].update(extracted_data)
+    else:
+        existing.update(extracted_data)
+
+    await execute(
+        "UPDATE ingested_articles SET extracted_data = $1::jsonb WHERE id = $2",
+        json.dumps(existing),
+        uuid.UUID(article_id),
+    )
+
+    return {"success": True}
+
+
 @router.post("/api/admin/queue/{article_id}/reject")
 async def reject_article(
     article_id: str,

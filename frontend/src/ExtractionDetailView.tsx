@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { HighlightedArticle, collectHighlights } from './articleHighlight';
+import { formatFieldValue } from './DynamicExtractionFields';
 import type { UniversalExtractionData, ExtractedActor, ExtractedEvent } from './types';
 import './ExtractionDetailView.css';
 
@@ -31,7 +32,7 @@ function FieldRow({ label, value, confidence, missing }: {
   missing?: boolean;
 }) {
   const isEmpty = value === null || value === undefined || value === '';
-  const displayValue = typeof value === 'boolean' ? (value ? 'Yes' : 'No') : String(value ?? '');
+  const displayValue = formatFieldValue(value);
 
   return (
     <div className={`edv-field-row ${isEmpty && missing ? 'edv-field-missing' : ''}`}>

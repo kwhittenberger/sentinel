@@ -18,6 +18,14 @@ const EXCLUDED_FIELDS = new Set([
   'categories', 'category', 'extraction_type', 'success',
 ]);
 
+export function formatFieldValue(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  if (Array.isArray(value)) return value.map(v => formatFieldValue(v)).join(', ');
+  if (typeof value === 'object') return JSON.stringify(value);
+  return String(value);
+}
+
 export function isExcludedField(key: string): boolean {
   return EXCLUDED_FIELDS.has(key) || key.endsWith('_confidence');
 }
@@ -175,7 +183,7 @@ export function DynamicExtractionFields({ data, onChange }: DynamicExtractionFie
         <label>{label}</label>
         <input
           type="text"
-          value={String(value ?? '')}
+          value={formatFieldValue(value)}
           onChange={e => handleChange(key, e.target.value)}
         />
       </div>

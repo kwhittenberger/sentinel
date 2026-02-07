@@ -1,11 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { PRIORITY_FIELDS, isExcludedField, snakeCaseToLabel } from './DynamicExtractionFields';
+import { PRIORITY_FIELDS, isExcludedField, snakeCaseToLabel, formatFieldValue } from './DynamicExtractionFields';
+import type { CategoryFieldsByDomain } from './api';
 
 interface ArticleContextMenuProps {
   containerRef: React.RefObject<HTMLDivElement | null>;
   editData: Record<string, unknown>;
   onAssignField: (fieldKey: string, value: string) => void;
+  categoryFields?: CategoryFieldsByDomain | null;
 }
 
 interface MenuState {
@@ -14,12 +16,42 @@ interface MenuState {
   selectedText: string;
 }
 
-export function ArticleContextMenu({ containerRef, editData, onAssignField }: ArticleContextMenuProps) {
+function FieldButton({ fieldKey, editData, onAssignField, selectedText, closeMenu, required }: {
+  fieldKey: string;
+  editData: Record<string, unknown>;
+  onAssignField: (fieldKey: string, value: string) => void;
+  selectedText: string;
+  closeMenu: () => void;
+  required?: boolean;
+}) {
+  const currentValue = editData[fieldKey];
+  const hasValue = currentValue !== undefined && currentValue !== null && currentValue !== '';
+  const formatted = hasValue ? formatFieldValue(currentValue) : '';
+
+  return (
+    <button
+      className={`context-menu-item${required ? ' context-menu-field-required' : ''}`}
+      onClick={() => {
+        onAssignField(fieldKey, selectedText);
+        closeMenu();
+      }}
+    >
+      <span className="context-menu-field-name">{snakeCaseToLabel(fieldKey)}</span>
+      {hasValue && (
+        <span className="context-menu-current-value">
+          {formatted.length > 30 ? formatted.substring(0, 30) + '...' : formatted}
+        </span>
+      )}
+    </button>
+  );
+}
+
+export function ArticleContextMenu({ containerRef, editData, onAssignField, categoryFields }: ArticleContextMenuProps) {
   const [menu, setMenu] = useState<MenuState | null>(null);
 
   const closeMenu = useCallback(() => setMenu(null), []);
 
-  // Build ordered field list: priority first, then remaining alphabetically
+  // Build flat ordered field list (fallback when no categoryFields)
   const getFieldList = useCallback((): string[] => {
     const dataKeys = Object.keys(editData).filter(k => !isExcludedField(k));
     const priorityKeys = PRIORITY_FIELDS.filter(k =>
@@ -29,7 +61,6 @@ export function ArticleContextMenu({ containerRef, editData, onAssignField }: Ar
       .filter(k => !PRIORITY_FIELDS.includes(k))
       .sort();
 
-    // Deduplicate while preserving order
     const seen = new Set<string>();
     const result: string[] = [];
     for (const key of [...priorityKeys, ...remainingKeys]) {
@@ -49,7 +80,7 @@ export function ArticleContextMenu({ containerRef, editData, onAssignField }: Ar
     const handleContextMenu = (e: MouseEvent) => {
       const selection = window.getSelection();
       const text = selection?.toString().trim();
-      if (!text) return; // No text selected — let native menu through
+      if (!text) return;
 
       e.preventDefault();
       setMenu({ x: e.clientX, y: e.clientY, selectedText: text });
@@ -82,13 +113,137 @@ export function ArticleContextMenu({ containerRef, editData, onAssignField }: Ar
 
   if (!menu) return null;
 
-  const fields = getFieldList();
-
-  // Clamp menu position so it doesn't go off-screen
-  const menuWidth = 260;
-  const menuMaxHeight = 320;
+  const menuWidth = 280;
+  const menuMaxHeight = 400;
   const x = Math.min(menu.x, window.innerWidth - menuWidth - 8);
   const y = Math.min(menu.y, window.innerHeight - menuMaxHeight - 8);
+
+  // Count how many categories each field appears in to find core (shared) fields
+  const fieldCategoryCount = new Map<string, number>();
+  const schemaFieldSet = new Set<string>();
+  let totalCategories = 0;
+  if (categoryFields) {
+    for (const categories of Object.values(categoryFields)) {
+      for (const { required, optional } of Object.values(categories)) {
+        totalCategories++;
+        for (const f of [...required, ...optional]) {
+          schemaFieldSet.add(f);
+          fieldCategoryCount.set(f, (fieldCategoryCount.get(f) || 0) + 1);
+        }
+      }
+    }
+  }
+
+  // Core fields: appear in 2+ categories (shared across domains/categories)
+  const coreFields = totalCategories >= 2
+    ? [...fieldCategoryCount.entries()]
+        .filter(([, count]) => count >= 2)
+        .map(([field]) => field)
+        .filter(f => !isExcludedField(f))
+    : [];
+  const coreFieldSet = new Set(coreFields);
+
+  // Fields in editData not covered by any schema category
+  const otherFields = categoryFields
+    ? Object.keys(editData)
+        .filter(k => !isExcludedField(k) && !schemaFieldSet.has(k))
+        .sort()
+    : [];
+
+  const renderGrouped = () => (
+    <>
+      {coreFields.length > 0 && (
+        <div className="context-menu-domain-group">
+          <div className="context-menu-domain-header">Core</div>
+          {coreFields.map(fieldKey => (
+            <FieldButton
+              key={fieldKey}
+              fieldKey={fieldKey}
+              editData={editData}
+              onAssignField={onAssignField}
+              selectedText={menu.selectedText}
+              closeMenu={closeMenu}
+            />
+          ))}
+        </div>
+      )}
+      {Object.entries(categoryFields!).map(([domain, categories]) => {
+        // Check if this domain has any non-core fields
+        const hasNonCore = Object.values(categories).some(({ required, optional }) =>
+          [...required, ...optional].some(f => !coreFieldSet.has(f) && !isExcludedField(f))
+        );
+        if (!hasNonCore) return null;
+        return (
+          <div key={domain} className="context-menu-domain-group">
+            <div className="context-menu-domain-header">{snakeCaseToLabel(domain)}</div>
+            {Object.entries(categories).map(([category, { required, optional }]) => {
+              const catRequired = required.filter(f => !isExcludedField(f) && !coreFieldSet.has(f));
+              const catOptional = optional.filter(f => !isExcludedField(f) && !coreFieldSet.has(f));
+              if (catRequired.length === 0 && catOptional.length === 0) return null;
+              return (
+                <div key={category} className="context-menu-category-group">
+                  <div className="context-menu-category-header">{snakeCaseToLabel(category)}</div>
+                  {catRequired.map(fieldKey => (
+                    <FieldButton
+                      key={fieldKey}
+                      fieldKey={fieldKey}
+                      editData={editData}
+                      onAssignField={onAssignField}
+                      selectedText={menu.selectedText}
+                      closeMenu={closeMenu}
+                      required
+                    />
+                  ))}
+                  {catOptional.map(fieldKey => (
+                    <FieldButton
+                      key={fieldKey}
+                      fieldKey={fieldKey}
+                      editData={editData}
+                      onAssignField={onAssignField}
+                      selectedText={menu.selectedText}
+                      closeMenu={closeMenu}
+                    />
+                  ))}
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
+      {otherFields.length > 0 && (
+        <div className="context-menu-domain-group">
+          <div className="context-menu-domain-header">Other</div>
+          {otherFields.map(fieldKey => (
+            <FieldButton
+              key={fieldKey}
+              fieldKey={fieldKey}
+              editData={editData}
+              onAssignField={onAssignField}
+              selectedText={menu.selectedText}
+              closeMenu={closeMenu}
+            />
+          ))}
+        </div>
+      )}
+    </>
+  );
+
+  const renderFlat = () => {
+    const fields = getFieldList();
+    if (fields.length === 0) {
+      return <div className="context-menu-empty">No fields available</div>;
+    }
+    return fields.map(fieldKey => (
+      <FieldButton
+        key={fieldKey}
+        fieldKey={fieldKey}
+        editData={editData}
+        onAssignField={onAssignField}
+        selectedText={menu.selectedText}
+        closeMenu={closeMenu}
+      />
+    ));
+  };
 
   return createPortal(
     <div
@@ -105,33 +260,7 @@ export function ArticleContextMenu({ containerRef, editData, onAssignField }: Ar
           : menu.selectedText}&rdquo;
       </div>
       <div className="context-menu-items">
-        {fields.length === 0 ? (
-          <div className="context-menu-empty">No fields available</div>
-        ) : (
-          fields.map(key => {
-            const currentValue = editData[key];
-            const hasValue = currentValue !== undefined && currentValue !== null && currentValue !== '';
-            return (
-              <button
-                key={key}
-                className="context-menu-item"
-                onClick={() => {
-                  onAssignField(key, menu.selectedText);
-                  closeMenu();
-                }}
-              >
-                <span className="context-menu-field-name">{snakeCaseToLabel(key)}</span>
-                {hasValue && (
-                  <span className="context-menu-current-value">
-                    {String(currentValue).length > 30
-                      ? String(currentValue).substring(0, 30) + '...'
-                      : String(currentValue)}
-                  </span>
-                )}
-              </button>
-            );
-          })
-        )}
+        {categoryFields ? renderGrouped() : renderFlat()}
       </div>
     </div>,
     document.body

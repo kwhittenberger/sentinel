@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { ExtractedIncidentData, UniversalExtractionData } from './types';
-import type { ArticleAuditItem } from './api';
-import { fetchArticleAudit, reExtractArticle, rejectArticle } from './api';
+import type { ArticleAuditItem, CategoryFieldsByDomain } from './api';
+import { fetchArticleAudit, reExtractArticle, rejectArticle, saveArticleEdits, fetchCategoryFields } from './api';
 import { SplitPane } from './SplitPane';
 import { ExtractionDetailView } from './ExtractionDetailView';
 import { HighlightedArticle, collectHighlightsFromRecord } from './articleHighlight';
@@ -47,6 +47,16 @@ interface Suggestion {
   reason: string;
 }
 
+const COMMON_REJECT_REASONS = [
+  'Not relevant to tracked domains',
+  'Duplicate of existing incident',
+  'Insufficient detail for incident creation',
+  'Opinion/editorial — not a news report',
+  'Event outside geographic scope',
+  'Event outside time scope',
+  'Unable to verify core facts',
+];
+
 interface BatchProcessingProps {
   onClose?: () => void;
   onRefresh?: () => void;
@@ -71,6 +81,7 @@ export function BatchProcessing({ onClose, onRefresh, hideOpsBar }: BatchProcess
   const [loadingSuggestions, setLoadingSuggestions] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [categoryFieldsData, setCategoryFieldsData] = useState<CategoryFieldsByDomain | null>(null);
 
   // AbortController for in-flight article/suggestion fetches
   const fetchControllerRef = useRef<AbortController | null>(null);
@@ -101,6 +112,13 @@ export function BatchProcessing({ onClose, onRefresh, hideOpsBar }: BatchProcess
     };
   }, []);
 
+  // Fetch category fields once on mount (for context menu grouping)
+  useEffect(() => {
+    fetchCategoryFields()
+      .then(setCategoryFieldsData)
+      .catch(() => {}); // graceful fallback to flat list
+  }, []);
+
   // Operations bar state - persisted in localStorage
   const [opsExpanded, setOpsExpanded] = useState<boolean>(() => {
     const stored = localStorage.getItem('ops-bar-expanded');
@@ -127,6 +145,19 @@ export function BatchProcessing({ onClose, onRefresh, hideOpsBar }: BatchProcess
     setEditMode(true);
     setEditData(prev => ({ ...prev, [fieldKey]: value }));
   }, []);
+
+  const handleSave = async () => {
+    if (!selectedItem || !editMode) return;
+    setProcessing(true);
+    try {
+      await saveArticleEdits(selectedItem.id, editData);
+      showMessage({ type: 'success', text: 'Changes saved' });
+    } catch (err) {
+      showMessage({ type: 'error', text: `Failed to save: ${err instanceof Error ? err.message : 'Network error'}` });
+    } finally {
+      setProcessing(false);
+    }
+  };
 
   // Duplicate detection dialog state
   const [duplicateInfo, setDuplicateInfo] = useState<{
@@ -251,12 +282,15 @@ export function BatchProcessing({ onClose, onRefresh, hideOpsBar }: BatchProcess
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          ...(overrides || {}),
-          force_create: forceCreate || undefined,
-          link_to_existing_id: linkToExistingId || undefined,
+          overrides: overrides || null,
+          force_create: forceCreate || false,
+          link_to_existing_id: linkToExistingId || null,
         }),
       });
-      const data = await response.json();
+      const data = await response.json().catch(() => {
+        if (!response.ok) return { error: `Server error (HTTP ${response.status})` };
+        return {};
+      });
 
       // Handle duplicate detection
       if (data.error === 'duplicate_detected') {
@@ -963,7 +997,7 @@ export function BatchProcessing({ onClose, onRefresh, hideOpsBar }: BatchProcess
                   {selectedIssueItem.content ? (
                     <HighlightedArticle
                       content={selectedIssueItem.content}
-                      highlights={collectHighlightsFromRecord(selectedIssueItem.extracted_data)}
+                      highlights={collectHighlightsFromRecord(editData)}
                     />
                   ) : (
                     <p className="no-data">No content available</p>
@@ -973,37 +1007,62 @@ export function BatchProcessing({ onClose, onRefresh, hideOpsBar }: BatchProcess
                   containerRef={issuesArticleRef}
                   editData={editData}
                   onAssignField={handleAssignField}
+                  categoryFields={categoryFieldsData}
                 />
               </div>
 
               {/* Actions */}
               <div className="detail-actions">
-                <button
-                  className="action-btn approve"
-                  onClick={() => handleApprove()}
-                  disabled={processing || issueActionLoading}
-                >
-                  {processing ? 'Processing...' : editMode ? 'Save & Approve' : 'Approve & Create Incident'}
-                </button>
-                {(selectedIssueItem.extraction_format !== 'llm' || !selectedIssueItem.has_required_fields) && (
+                <div className="detail-actions-row">
+                  {editMode && (
+                    <button
+                      className="action-btn"
+                      onClick={handleSave}
+                      disabled={processing || issueActionLoading}
+                    >
+                      {processing ? 'Saving...' : 'Save'}
+                    </button>
+                  )}
                   <button
-                    className="action-btn"
-                    disabled={issueActionLoading || processing}
-                    onClick={() => handleIssueReExtract(selectedIssueItem.id)}
+                    className="action-btn approve"
+                    onClick={() => handleApprove()}
+                    disabled={processing || issueActionLoading}
                   >
-                    {issueActionLoading ? 'Processing...' : 'Re-extract'}
+                    {processing ? 'Processing...' : editMode ? 'Save & Approve' : 'Approve & Create Incident'}
                   </button>
-                )}
+                  {(selectedIssueItem.extraction_format !== 'llm' || !selectedIssueItem.has_required_fields) && (
+                    <button
+                      className="action-btn"
+                      disabled={issueActionLoading || processing}
+                      onClick={() => handleIssueReExtract(selectedIssueItem.id)}
+                    >
+                      {issueActionLoading ? 'Processing...' : 'Re-extract'}
+                    </button>
+                  )}
+                </div>
                 {selectedIssueItem.status !== 'rejected' && (
                   <div className="bp-inline-reject">
-                    <input
-                      type="text"
-                      className="bp-reject-input"
-                      value={rejectReason}
-                      onChange={e => setRejectReason(e.target.value)}
-                      placeholder="Rejection reason..."
-                      onKeyDown={e => { if (e.key === 'Enter' && rejectReason.trim()) handleIssueReject(selectedIssueItem.id); }}
-                    />
+                    <select
+                      className="bp-reject-select"
+                      value={COMMON_REJECT_REASONS.includes(rejectReason) ? rejectReason : rejectReason ? '__other__' : ''}
+                      onChange={e => setRejectReason(e.target.value === '__other__' ? '' : e.target.value)}
+                    >
+                      <option value="">Select reason...</option>
+                      {COMMON_REJECT_REASONS.map(r => (
+                        <option key={r} value={r}>{r}</option>
+                      ))}
+                      <option value="__other__">Other...</option>
+                    </select>
+                    {!COMMON_REJECT_REASONS.includes(rejectReason) && (
+                      <input
+                        type="text"
+                        className="bp-reject-input"
+                        value={rejectReason}
+                        onChange={e => setRejectReason(e.target.value)}
+                        placeholder="Enter reason..."
+                        onKeyDown={e => { if (e.key === 'Enter' && rejectReason.trim()) handleIssueReject(selectedIssueItem.id); }}
+                      />
+                    )}
                     <button
                       className="action-btn reject"
                       onClick={() => handleIssueReject(selectedIssueItem.id)}
@@ -1180,13 +1239,14 @@ export function BatchProcessing({ onClose, onRefresh, hideOpsBar }: BatchProcess
                       <div className="article-content" ref={tieredArticleRef}>
                         <HighlightedArticle
                           content={fullArticle.content}
-                          highlights={fullArticle.extracted_data ? collectHighlightsFromRecord(fullArticle.extracted_data as Record<string, unknown>) : []}
+                          highlights={collectHighlightsFromRecord(editData)}
                         />
                       </div>
                       <ArticleContextMenu
                         containerRef={tieredArticleRef}
                         editData={editData}
                         onAssignField={handleAssignField}
+                        categoryFields={categoryFieldsData}
                       />
                     </div>
                   )}
@@ -1194,22 +1254,46 @@ export function BatchProcessing({ onClose, onRefresh, hideOpsBar }: BatchProcess
               )}
 
               <div className="detail-actions">
-                <button
-                  className="action-btn approve"
-                  onClick={() => handleApprove()}
-                  disabled={processing}
-                >
-                  {processing ? 'Processing...' : editMode ? 'Save & Approve' : 'Approve & Create Incident'}
-                </button>
+                <div className="detail-actions-row">
+                  {editMode && (
+                    <button
+                      className="action-btn"
+                      onClick={handleSave}
+                      disabled={processing}
+                    >
+                      {processing ? 'Saving...' : 'Save'}
+                    </button>
+                  )}
+                  <button
+                    className="action-btn approve"
+                    onClick={() => handleApprove()}
+                    disabled={processing}
+                  >
+                    {processing ? 'Processing...' : editMode ? 'Save & Approve' : 'Approve & Create Incident'}
+                  </button>
+                </div>
                 <div className="bp-inline-reject">
-                  <input
-                    type="text"
-                    className="bp-reject-input"
-                    value={rejectReason}
-                    onChange={e => setRejectReason(e.target.value)}
-                    placeholder="Rejection reason..."
-                    onKeyDown={e => { if (e.key === 'Enter' && rejectReason.trim()) handleReject(); }}
-                  />
+                  <select
+                    className="bp-reject-select"
+                    value={COMMON_REJECT_REASONS.includes(rejectReason) ? rejectReason : rejectReason ? '__other__' : ''}
+                    onChange={e => setRejectReason(e.target.value === '__other__' ? '' : e.target.value)}
+                  >
+                    <option value="">Select reason...</option>
+                    {COMMON_REJECT_REASONS.map(r => (
+                      <option key={r} value={r}>{r}</option>
+                    ))}
+                    <option value="__other__">Other...</option>
+                  </select>
+                  {!COMMON_REJECT_REASONS.includes(rejectReason) && (
+                    <input
+                      type="text"
+                      className="bp-reject-input"
+                      value={rejectReason}
+                      onChange={e => setRejectReason(e.target.value)}
+                      placeholder="Enter reason..."
+                      onKeyDown={e => { if (e.key === 'Enter' && rejectReason.trim()) handleReject(); }}
+                    />
+                  )}
                   <button
                     className="action-btn reject"
                     onClick={() => handleReject()}

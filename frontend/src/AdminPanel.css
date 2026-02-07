@@ -2406,6 +2406,29 @@
   border-color: #3b82f6;
 }
 
+.bp-reject-select {
+  padding: 6px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 13px;
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.bp-reject-select:focus {
+  outline: none;
+  border-color: #3b82f6;
+}
+
+.detail-actions-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
 .detail-actions {
   display: flex;
   flex-direction: column;
@@ -3812,8 +3835,8 @@ mark.field-highlight {
   position: fixed;
   z-index: 1100;
   min-width: 220px;
-  max-width: 260px;
-  max-height: 320px;
+  max-width: 280px;
+  max-height: 400px;
   background: var(--bg-card);
   border: 1px solid var(--border-color);
   border-radius: 6px;
@@ -3884,4 +3907,42 @@ mark.field-highlight {
   color: var(--text-muted);
   font-size: 12px;
   font-style: italic;
+}
+
+.context-menu-domain-group {
+  border-bottom: 1px solid var(--border-color);
+}
+
+.context-menu-domain-group:last-child {
+  border-bottom: none;
+}
+
+.context-menu-domain-header {
+  padding: 6px 12px 2px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--accent-blue, #3b82f6);
+  background: rgba(59, 130, 246, 0.06);
+}
+
+.context-menu-category-header {
+  padding: 4px 12px 2px 20px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: var(--text-muted);
+}
+
+.context-menu-category-group .context-menu-item {
+  padding-left: 20px;
+}
+
+.context-menu-field-required .context-menu-field-name::after {
+  content: '*';
+  color: var(--accent-red, #ef4444);
+  margin-left: 2px;
+  font-weight: 700;
 }

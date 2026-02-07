@@ -185,6 +185,14 @@ export async function reExtractArticle(articleId: string): Promise<{ success: bo
   });
 }
 
+export async function saveArticleEdits(articleId: string, extractedData: Record<string, unknown>): Promise<{ success: boolean }> {
+  return fetchJSON(`${API_BASE}/admin/queue/${articleId}/save`, {
+    method: 'PATCH',
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ extracted_data: extractedData }),
+  });
+}
+
 export async function rejectArticle(articleId: string, reason: string): Promise<{ success: boolean }> {
   return fetchJSON(`${API_BASE}/admin/queue/${articleId}/reject`, {
     method: 'POST',
@@ -229,6 +237,14 @@ export async function fetchArticleAudit(params?: {
   if (params?.format) searchParams.set('format', params.format);
   if (params?.issues_only) searchParams.set('issues_only', 'true');
   return fetchJSON(`${API_BASE}/admin/articles/audit?${searchParams}`);
+}
+
+// Category fields grouped by domain
+export interface CategoryFields { required: string[]; optional: string[]; }
+export type CategoryFieldsByDomain = Record<string, Record<string, CategoryFields>>;
+
+export async function fetchCategoryFields(): Promise<CategoryFieldsByDomain> {
+  return fetchJSON<CategoryFieldsByDomain>(`${API_BASE}/admin/category-fields`);
 }
 
 // Analytics API functions

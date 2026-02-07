@@ -105,6 +105,13 @@ async def get_category(category_id: str):
     return category
 
 
+@router.get("/api/admin/category-fields")
+async def get_category_fields():
+    """All category fields grouped by domain, from DB with 60s cache."""
+    from backend.services.extraction_prompts import get_all_category_fields_async
+    return await get_all_category_fields_async()
+
+
 @router.put("/api/admin/categories/{category_id}")
 async def update_category(category_id: str, data: dict = Body(...)):
     """Update a category."""
