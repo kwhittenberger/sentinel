@@ -6,7 +6,7 @@ import type { CategoryFieldsByDomain } from './api';
 interface ArticleContextMenuProps {
   containerRef: React.RefObject<HTMLDivElement | null>;
   editData: Record<string, unknown>;
-  onAssignField: (fieldKey: string, value: string) => void;
+  onAssignField: (fieldKey: string, value: string, append?: boolean) => void;
   categoryFields?: CategoryFieldsByDomain | null;
 }
 
@@ -19,30 +19,57 @@ interface MenuState {
 function FieldButton({ fieldKey, editData, onAssignField, selectedText, closeMenu, required }: {
   fieldKey: string;
   editData: Record<string, unknown>;
-  onAssignField: (fieldKey: string, value: string) => void;
+  onAssignField: (fieldKey: string, value: string, append?: boolean) => void;
   selectedText: string;
   closeMenu: () => void;
   required?: boolean;
 }) {
+  const [expanded, setExpanded] = useState(false);
   const currentValue = editData[fieldKey];
   const hasValue = currentValue !== undefined && currentValue !== null && currentValue !== '';
   const formatted = hasValue ? formatFieldValue(currentValue) : '';
 
+  // Field is empty — single click assigns directly
+  if (!hasValue) {
+    return (
+      <button
+        className={`context-menu-item${required ? ' context-menu-field-required' : ''}`}
+        onClick={() => { onAssignField(fieldKey, selectedText); closeMenu(); }}
+      >
+        <span className="context-menu-field-name">{snakeCaseToLabel(fieldKey)}</span>
+      </button>
+    );
+  }
+
+  // Field has a value — click to expand Replace/Append options
   return (
-    <button
-      className={`context-menu-item${required ? ' context-menu-field-required' : ''}`}
-      onClick={() => {
-        onAssignField(fieldKey, selectedText);
-        closeMenu();
-      }}
-    >
-      <span className="context-menu-field-name">{snakeCaseToLabel(fieldKey)}</span>
-      {hasValue && (
+    <div className={`context-menu-item-group${required ? ' context-menu-field-required' : ''}`}>
+      <button
+        className="context-menu-item"
+        onClick={() => setExpanded(!expanded)}
+      >
+        <span className="context-menu-field-name">{snakeCaseToLabel(fieldKey)}</span>
         <span className="context-menu-current-value">
           {formatted.length > 30 ? formatted.substring(0, 30) + '...' : formatted}
         </span>
+      </button>
+      {expanded && (
+        <div className="context-menu-sub-actions">
+          <button
+            className="context-menu-sub-btn"
+            onClick={() => { onAssignField(fieldKey, selectedText); closeMenu(); }}
+          >
+            Replace
+          </button>
+          <button
+            className="context-menu-sub-btn"
+            onClick={() => { onAssignField(fieldKey, selectedText, true); closeMenu(); }}
+          >
+            Append
+          </button>
+        </div>
       )}
-    </button>
+    </div>
   );
 }
 

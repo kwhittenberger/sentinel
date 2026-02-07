@@ -3940,9 +3940,38 @@ mark.field-highlight {
   padding-left: 20px;
 }
 
-.context-menu-field-required .context-menu-field-name::after {
+.context-menu-field-required .context-menu-field-name::after,
+.context-menu-field-required > .context-menu-item .context-menu-field-name::after {
   content: '*';
   color: var(--accent-red, #ef4444);
   margin-left: 2px;
   font-weight: 700;
+}
+
+.context-menu-item-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.context-menu-sub-actions {
+  display: flex;
+  gap: 4px;
+  padding: 2px 12px 6px;
+  padding-left: 20px;
+}
+
+.context-menu-sub-btn {
+  flex: 1;
+  padding: 3px 8px;
+  font-size: 11px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.context-menu-sub-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent-blue, #3b82f6);
 }

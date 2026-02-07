@@ -141,9 +141,15 @@ export function BatchProcessing({ onClose, onRefresh, hideOpsBar }: BatchProcess
   const tieredArticleRef = useRef<HTMLDivElement>(null);
   const issuesArticleRef = useRef<HTMLDivElement>(null);
 
-  const handleAssignField = useCallback((fieldKey: string, value: string) => {
+  const handleAssignField = useCallback((fieldKey: string, value: string, append?: boolean) => {
     setEditMode(true);
-    setEditData(prev => ({ ...prev, [fieldKey]: value }));
+    setEditData(prev => {
+      if (!append) return { ...prev, [fieldKey]: value };
+      const existing = prev[fieldKey];
+      if (Array.isArray(existing)) return { ...prev, [fieldKey]: [...existing, value] };
+      if (typeof existing === 'string' && existing) return { ...prev, [fieldKey]: `${existing}, ${value}` };
+      return { ...prev, [fieldKey]: value };
+    });
   }, []);
 
   const handleSave = async () => {
