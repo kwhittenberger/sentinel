@@ -75,6 +75,7 @@ app.conf.task_routes = {
     "backend.tasks.scheduled_tasks.scheduled_fetch": {"queue": "fetch"},
     "backend.tasks.scheduled_tasks.cleanup_stale_jobs": {"queue": "default"},
     "backend.tasks.scheduled_tasks.aggregate_metrics": {"queue": "default"},
+    "backend.tasks.scheduled_tasks.refresh_materialized_views": {"queue": "default"},
 }
 
 # ---------------------------------------------------------------------------
@@ -92,6 +93,10 @@ app.conf.beat_schedule = {
     "aggregate-metrics": {
         "task": "backend.tasks.scheduled_tasks.aggregate_metrics",
         "schedule": crontab(minute="*/5"),  # Every 5 minutes
+    },
+    "refresh-materialized-views": {
+        "task": "backend.tasks.scheduled_tasks.refresh_materialized_views",
+        "schedule": crontab(minute=30, hour="*/6"),  # Every 6 hours at :30
     },
 }
 

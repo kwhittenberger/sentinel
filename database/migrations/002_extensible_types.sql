@@ -73,6 +73,7 @@ CREATE TABLE prompts (
     ab_test_group VARCHAR(50),
 
     -- Audit
+    -- NOTE: admin_users has no auth implementation. This FK is a placeholder. See audit D13.
     created_by UUID REFERENCES admin_users(id) ON DELETE SET NULL,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW(),
@@ -360,6 +361,7 @@ ALTER TABLE incident_relations ADD COLUMN IF NOT EXISTS source VARCHAR(20) DEFAU
 ALTER TABLE incident_relations ADD COLUMN IF NOT EXISTS suggested_by_prompt_id UUID REFERENCES prompts(id) ON DELETE SET NULL;
 ALTER TABLE incident_relations ADD COLUMN IF NOT EXISTS verified BOOLEAN DEFAULT FALSE;
 ALTER TABLE incident_relations ADD COLUMN IF NOT EXISTS verified_at TIMESTAMPTZ;
+-- NOTE: admin_users has no auth implementation. This FK is a placeholder. See audit D13.
 ALTER TABLE incident_relations ADD COLUMN IF NOT EXISTS verified_by UUID REFERENCES admin_users(id) ON DELETE SET NULL;
 
 -- ============================================================================

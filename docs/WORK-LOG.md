@@ -195,3 +195,33 @@ Full codebase audit and documentation. No code changes — documentation only.
 ### Files Modified
 - `docs/WORK-LOG.md` — This session entry
 - `CLAUDE.md` — Added audit references and architectural notes
+
+---
+
+## Session: 2026-02-06 (continued)
+
+### Context
+Completing audit items 7.3 (schema drift) and 7.4 (relationship_type FK / case_id FK verification) from Phase 7 database cleanup.
+
+### Work Completed
+
+**7.3 — Resolve schema drift (schema.sql vs migrations):**
+- Read all 31 migration files (001-034, with gaps at 004, 005, 032) and cross-referenced against schema.sql
+- Identified ~40+ missing tables, stale artifacts (rss_feeds, old enum types/columns), outdated functions
+- Rewrote `database/schema.sql` as canonical post-migration schema (~2,300 lines), representing the state after all migrations (001-035) are applied
+- Added comprehensive header documenting the three data model layers and two extraction pipelines
+
+**7.4 — Verify relationship_type FK and case_id FK:**
+- Verified `event_relationships.case_id` FK already exists via migration 034: `FOREIGN KEY (case_id) REFERENCES cases(id) ON DELETE SET NULL`
+- Verified `event_relationships.relationship_type` has a string-based FK: `VARCHAR(50) NOT NULL REFERENCES relationship_types(name)` (migration 011)
+- The `relationship_types` lookup table exists with UUID PK and `name UNIQUE` column
+- Converting to UUID-based FK (`relationship_type_id UUID REFERENCES relationship_types(id)`) deferred — requires coordinated backend changes in `domain_service.py`, `admin_incidents.py`, and the cycle detection trigger
+- Updated todo.md with detailed notes on the migration scope
+
+**Schema.sql update for migration 035:**
+- Added compound indexes from migration 035 (incidents: state+date, type+date, outcome+date, curation+created_at; ingested_articles: source+fetched, status+fetched, curation queue partial index)
+
+### Files Modified
+- `database/schema.sql` — Fully rewritten as canonical post-migration (001-035) schema
+- `tasks/todo.md` — Updated completion status for items resolved across phases 1-7
+- `docs/WORK-LOG.md` — This session entry
