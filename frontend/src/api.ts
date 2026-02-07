@@ -569,11 +569,17 @@ export async function fetchFeeds(): Promise<{ feeds: unknown[] }> {
   return response.json();
 }
 
-export async function createFeed(name: string, url: string, intervalMinutes = 60): Promise<{ success: boolean; feed_id?: string }> {
+export async function createFeed(
+  name: string,
+  url: string,
+  intervalMinutes = 60,
+  sourceType = 'news',
+  tier = 3,
+): Promise<{ success: boolean; feed_id?: string }> {
   const response = await fetch(`${API_BASE}/admin/feeds`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, url, interval_minutes: intervalMinutes }),
+    body: JSON.stringify({ name, url, interval_minutes: intervalMinutes, source_type: sourceType, tier }),
   });
   return response.json();
 }

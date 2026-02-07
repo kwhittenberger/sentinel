@@ -80,10 +80,13 @@ interface Feed {
   id: string;
   name: string;
   url: string;
-  feed_type: string;
+  source_type: string;
+  tier: number;
+  fetcher_class?: string;
   interval_minutes: number;
   active: boolean;
   last_fetched?: string;
+  last_error?: string;
 }
 
 interface SettingsPanelProps {
@@ -361,7 +364,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
             {tab === 'duplicate' && 'Duplicate Detection'}
             {tab === 'pipeline' && 'Pipeline'}
             {tab === 'clustering' && 'Event Clustering'}
-            {tab === 'feeds' && 'RSS Feeds'}
+            {tab === 'feeds' && 'Data Sources'}
             {tab === 'llm' && 'LLM Providers'}
           </button>
         ))}
@@ -1056,16 +1059,16 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
         {activeTab === 'feeds' && (
           <div className="settings-section">
             <div className="section-header">
-              <h3>RSS Feeds</h3>
+              <h3>Data Sources</h3>
               <button className="action-btn" onClick={() => setShowAddFeed(true)}>
-                Add Feed
+                Add Source
               </button>
             </div>
 
             {showAddFeed && (
               <div className="add-feed-form">
                 <div className="settings-group">
-                  <label>Feed Name</label>
+                  <label>Source Name</label>
                   <input
                     type="text"
                     value={newFeed.name}
@@ -1075,7 +1078,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
                   />
                 </div>
                 <div className="settings-group">
-                  <label>Feed URL</label>
+                  <label>URL</label>
                   <input
                     type="url"
                     value={newFeed.url}
@@ -1089,7 +1092,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
                   <input
                     type="number"
                     min="5"
-                    max="1440"
+                    max="10080"
                     value={newFeed.interval_minutes}
                     onChange={e => setNewFeed({ ...newFeed, interval_minutes: parseInt(e.target.value) || 60 })}
                     className="settings-input"
@@ -1097,7 +1100,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
                 </div>
                 <div className="form-actions">
                   <button className="action-btn primary" onClick={addFeed} disabled={saving}>
-                    {saving ? 'Adding...' : 'Add Feed'}
+                    {saving ? 'Adding...' : 'Add Source'}
                   </button>
                   <button className="action-btn" onClick={() => setShowAddFeed(false)}>
                     Cancel
@@ -1108,21 +1111,24 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
 
             <div className="feeds-list">
               {feeds.length === 0 ? (
-                <p className="no-data">No feeds configured</p>
+                <p className="no-data">No sources configured</p>
               ) : (
                 feeds.map(feed => (
                   <div key={feed.id || feed.name} className="feed-item">
                     <div className="feed-info">
                       <div className="feed-name">{feed.name}</div>
                       <div className="feed-url">{feed.url}</div>
+                      <div className="feed-meta">
+                        {feed.source_type || 'news'} &middot; Tier {feed.tier || 3} &middot; {feed.interval_minutes}m interval
+                      </div>
                       {feed.last_fetched && (
                         <div className="feed-meta">
                           Last fetched: {new Date(feed.last_fetched).toLocaleString()}
                         </div>
                       )}
-                      {feed.interval_minutes && (
-                        <div className="feed-meta">
-                          Interval: {feed.interval_minutes} minutes
+                      {feed.last_error && (
+                        <div className="feed-meta" style={{ color: '#e74c3c' }}>
+                          Error: {feed.last_error}
                         </div>
                       )}
                     </div>

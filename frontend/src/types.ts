@@ -484,15 +484,18 @@ export interface AllSettings {
   event_clustering: EventClusteringSettings;
 }
 
-// Feed types
+// Feed / data source types
 export interface Feed {
   id: string;
   name: string;
   url: string;
-  feed_type: string;
+  source_type: string;    // government, news, investigative
+  tier: number;
+  fetcher_class?: string;
   interval_minutes: number;
-  active: boolean;
+  active: boolean;        // maps to is_active
   last_fetched?: string;
+  last_error?: string;
   created_at?: string;
 }
 

@@ -24,13 +24,13 @@ async def _async_fetch_handler(job_id: str, params: dict) -> dict:
     import httpx
 
     feeds = await async_fetch("""
-        SELECT id, name, url, feed_type
-        FROM rss_feeds
-        WHERE active = true
+        SELECT id, name, url, source_type, fetcher_class
+        FROM sources
+        WHERE is_active = true
     """)
 
     if not feeds:
-        return {"message": "No active feeds configured", "fetched": 0}
+        return {"message": "No active sources configured", "fetched": 0}
 
     total_fetched = 0
     total_feeds = len(feeds)
@@ -39,6 +39,11 @@ async def _async_fetch_handler(job_id: str, params: dict) -> dict:
         await async_update_progress(
             job_id, i, total_feeds, f"Fetching {feed['name']}..."
         )
+
+        # Only use feedparser for sources without a custom fetcher_class
+        if feed.get("fetcher_class"):
+            logger.info(f"Skipping {feed['name']} — fetcher {feed['fetcher_class']} not yet integrated")
+            continue
 
         try:
             async with httpx.AsyncClient() as client:
@@ -72,11 +77,12 @@ async def _async_fetch_handler(job_id: str, params: dict) -> dict:
                 await async_execute(
                     """
                     INSERT INTO ingested_articles (
-                        id, source_url, title, content, content_hash, source_name,
+                        id, source_id, source_url, title, content, content_hash, source_name,
                         published_date, fetched_at, status
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending')
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending')
                     """,
                     article_id,
+                    feed["id"],
                     link,
                     entry.get("title", "")[:500],
                     raw_content,
@@ -88,13 +94,18 @@ async def _async_fetch_handler(job_id: str, params: dict) -> dict:
                 total_fetched += 1
 
             await async_execute(
-                "UPDATE rss_feeds SET last_fetched = $1 WHERE id = $2",
+                "UPDATE sources SET last_fetched = $1, last_error = NULL WHERE id = $2",
                 datetime.utcnow(),
                 feed["id"],
             )
 
         except Exception as e:
-            logger.warning(f"Failed to fetch feed {feed['name']}: {e}")
+            logger.warning(f"Failed to fetch source {feed['name']}: {e}")
+            await async_execute(
+                "UPDATE sources SET last_error = $1 WHERE id = $2",
+                str(e),
+                feed["id"],
+            )
 
     await async_update_progress(job_id, total_feeds, total_feeds, "Completed")
     return {
