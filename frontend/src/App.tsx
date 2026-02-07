@@ -4,6 +4,7 @@ import type { Incident } from './types';
 import { fetchIncidents, fetchStats, fetchQueueStats } from './api';
 import { Charts } from './Charts';
 import { AdminPanel } from './AdminPanel';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { useIncidentData } from './hooks/useIncidentData';
 import { useIncidentSelection } from './hooks/useIncidentSelection';
 import { useTimelinePlayback } from './hooks/useTimelinePlayback';
@@ -135,14 +136,16 @@ function App() {
   return (
     <div className="app">
       {adminPanel === 'admin' ? (
-        <AdminPanel
-          onClose={() => setAdminPanel('none')}
-          onRefresh={() => {
-            fetchIncidents(filters).then(data => setIncidents(data.incidents));
-            fetchStats(filters).then(setStats);
-            fetchQueueStats().then(setQueueStats);
-          }}
-        />
+        <ErrorBoundary name="AdminPanel">
+          <AdminPanel
+            onClose={() => setAdminPanel('none')}
+            onRefresh={() => {
+              fetchIncidents(filters).then(data => setIncidents(data.incidents));
+              fetchStats(filters).then(setStats);
+              fetchQueueStats().then(setQueueStats);
+            }}
+          />
+        </ErrorBoundary>
       ) : (
       <>
       {/* Sidebar */}
