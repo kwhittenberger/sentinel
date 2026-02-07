@@ -57,7 +57,7 @@ export function IncidentDetailDrawer({
                     Zoom
                   </button>
                 )}
-                <button className="detail-drawer-close" onClick={onClose}>&times;</button>
+                <button className="detail-drawer-close" onClick={onClose} aria-label="Close detail drawer">&times;</button>
               </div>
             </div>
             <div className="detail-drawer-body">

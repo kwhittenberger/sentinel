@@ -54,6 +54,25 @@ export function SplitPane({
     startWidthRef.current = leftWidth;
   }, [leftWidth]);
 
+  const KEYBOARD_STEP = 20;
+
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    let newWidth = leftWidth;
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+      newWidth = Math.max(minLeftWidth, leftWidth - KEYBOARD_STEP);
+    } else if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+      newWidth = Math.min(maxLeftWidth, leftWidth + KEYBOARD_STEP);
+    } else if (e.key === 'Home') {
+      newWidth = minLeftWidth;
+    } else if (e.key === 'End') {
+      newWidth = maxLeftWidth;
+    } else {
+      return;
+    }
+    e.preventDefault();
+    setLeftWidth(newWidth);
+  }, [leftWidth, minLeftWidth, maxLeftWidth]);
+
   const handleMouseMove = useCallback((e: MouseEvent) => {
     if (!isDragging) return;
 
@@ -90,10 +109,14 @@ export function SplitPane({
       <div
         className="split-pane-divider"
         onMouseDown={handleMouseDown}
+        onKeyDown={handleKeyDown}
         role="separator"
+        tabIndex={0}
+        aria-orientation="vertical"
         aria-valuenow={leftWidth}
         aria-valuemin={minLeftWidth}
         aria-valuemax={maxLeftWidth}
+        aria-label="Resize panes"
       >
         <div className="split-pane-divider-handle" />
       </div>
@@ -135,8 +158,14 @@ export function SplitPane({
         }
 
         .split-pane-divider:hover,
+        .split-pane-divider:focus-visible,
         .split-pane.dragging .split-pane-divider {
           background: rgba(59, 130, 246, 0.1);
+        }
+
+        .split-pane-divider:focus-visible {
+          outline: 2px solid #3b82f6;
+          outline-offset: -2px;
         }
 
         .split-pane-divider-handle {
@@ -148,6 +177,7 @@ export function SplitPane({
         }
 
         .split-pane-divider:hover .split-pane-divider-handle,
+        .split-pane-divider:focus-visible .split-pane-divider-handle,
         .split-pane.dragging .split-pane-divider-handle {
           background: #3b82f6;
           height: 60px;

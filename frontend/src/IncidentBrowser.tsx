@@ -173,7 +173,7 @@ export function IncidentBrowser({ onClose }: IncidentBrowserProps) {
       <div className="browser-header">
         <h2>Incident Browser</h2>
         {onClose && (
-          <button className="admin-close-btn" onClick={onClose}>&times;</button>
+          <button className="admin-close-btn" onClick={onClose} aria-label="Close incident browser">&times;</button>
         )}
       </div>
 

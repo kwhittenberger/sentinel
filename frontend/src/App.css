@@ -925,18 +925,22 @@ body {
   width: 12px;
   height: 12px;
   border-radius: 50%;
+  box-sizing: border-box;
 }
 
 .legend-dot.death {
   background: #dc2626;
+  border: 3px solid #991b1b;
 }
 
 .legend-dot.non-immigrant {
   background: #f97316;
+  border: 2px dashed #c2410c;
 }
 
 .legend-dot.other {
   background: #3b82f6;
+  border: 1px solid #1d4ed8;
 }
 
 .keyboard-hint {

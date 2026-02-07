@@ -349,7 +349,7 @@ export function DomainManager() {
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3>Create Event Domain</h3>
-              <button className="close-btn" onClick={() => setShowCreateDomain(false)}>&times;</button>
+              <button className="close-btn" onClick={() => setShowCreateDomain(false)} aria-label="Close create domain dialog">&times;</button>
             </div>
             <form onSubmit={handleCreateDomain}>
               <div className="modal-body">
@@ -428,7 +428,7 @@ export function DomainManager() {
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3>Create Category in {categoryDomainSlug}</h3>
-              <button className="close-btn" onClick={() => setShowCreateCategory(false)}>&times;</button>
+              <button className="close-btn" onClick={() => setShowCreateCategory(false)} aria-label="Close create category dialog">&times;</button>
             </div>
             <form onSubmit={handleCreateCategory}>
               <div className="modal-body">

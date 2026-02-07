@@ -778,6 +778,7 @@ export interface ActorMergeSuggestion {
   actor2_name: string;
   similarity: number;
   reason: string;
+  match_type?: 'first_last' | 'containment' | 'trigram';
 }
 
 // Pipeline Execution

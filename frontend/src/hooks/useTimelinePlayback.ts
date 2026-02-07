@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import type { Incident } from '../types';
 
 export interface TimelinePlaybackReturn {
@@ -20,14 +20,30 @@ export function useTimelinePlayback(incidents: Incident[]): TimelinePlaybackRetu
   const [isPlaying, setIsPlaying] = useState(false);
   const playIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const sortedDates = [...new Set(incidents.map(i => i.date?.split('T')[0]).filter(Boolean))].sort() as string[];
+  const sortedDates = useMemo(
+    () => [...new Set(incidents.map(i => i.date?.split('T')[0]).filter(Boolean))].sort() as string[],
+    [incidents]
+  );
+
+  // Keep a ref to sortedDates so the interval callback always sees fresh data
+  const sortedDatesRef = useRef(sortedDates);
+  useEffect(() => {
+    sortedDatesRef.current = sortedDates;
+  }, [sortedDates]);
+
+  const clearPlayInterval = useCallback(() => {
+    if (playIntervalRef.current) {
+      clearInterval(playIntervalRef.current);
+      playIntervalRef.current = null;
+    }
+  }, []);
 
   const getTimelineIncidents = useCallback(() => {
     if (!timelineEnabled || !timelineDate) return incidents;
     return incidents.filter(i => i.date && i.date.split('T')[0] <= timelineDate);
   }, [incidents, timelineEnabled, timelineDate]);
 
-  const handleTimelineToggle = () => {
+  const handleTimelineToggle = useCallback(() => {
     if (!timelineEnabled) {
       setTimelineEnabled(true);
       setTimelineDate(sortedDates[0] || null);
@@ -35,44 +51,46 @@ export function useTimelinePlayback(incidents: Incident[]): TimelinePlaybackRetu
       setTimelineEnabled(false);
       setTimelineDate(null);
       setIsPlaying(false);
-      if (playIntervalRef.current) {
-        clearInterval(playIntervalRef.current);
-        playIntervalRef.current = null;
-      }
+      clearPlayInterval();
     }
-  };
+  }, [timelineEnabled, sortedDates, clearPlayInterval]);
 
-  const handlePlayPause = () => {
+  const handlePlayPause = useCallback(() => {
     if (isPlaying) {
       setIsPlaying(false);
-      if (playIntervalRef.current) {
-        clearInterval(playIntervalRef.current);
-        playIntervalRef.current = null;
-      }
+      clearPlayInterval();
     } else {
       setIsPlaying(true);
+      clearPlayInterval(); // Clear any stale interval before starting a new one
       playIntervalRef.current = setInterval(() => {
+        const dates = sortedDatesRef.current;
         setTimelineDate(current => {
-          const currentIdx = sortedDates.indexOf(current || '');
-          if (currentIdx >= sortedDates.length - 1) {
+          const currentIdx = dates.indexOf(current || '');
+          if (currentIdx >= dates.length - 1) {
+            // Reached the end -- stop playback
             setIsPlaying(false);
-            if (playIntervalRef.current) clearInterval(playIntervalRef.current);
+            clearPlayInterval();
             return current;
           }
-          return sortedDates[currentIdx + 1];
+          return dates[currentIdx + 1];
         });
       }, 500);
     }
-  };
+  }, [isPlaying, clearPlayInterval]);
+
+  // Sync interval lifecycle with isPlaying state changes from external callers
+  useEffect(() => {
+    if (!isPlaying) {
+      clearPlayInterval();
+    }
+  }, [isPlaying, clearPlayInterval]);
 
   // Cleanup interval on unmount
   useEffect(() => {
     return () => {
-      if (playIntervalRef.current) {
-        clearInterval(playIntervalRef.current);
-      }
+      clearPlayInterval();
     };
-  }, []);
+  }, [clearPlayInterval]);
 
   return {
     timelineEnabled,

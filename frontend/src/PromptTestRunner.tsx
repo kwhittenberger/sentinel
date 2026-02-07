@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, type CSSProperties } from 'react';
 import { SplitPane } from './SplitPane';
 import {
   Stage1SummaryBar,
@@ -1250,7 +1250,7 @@ function ComparisonDetail({
 function CreateDatasetForm({ onSubmit, onCancel }: { onSubmit: (name: string, desc: string) => void; onCancel: () => void }) {
   const [name, setName] = useState('');
   const [desc, setDesc] = useState('');
-  const inputStyle = { width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border-color)', fontSize: 13, background: 'var(--bg-primary)' };
+  const inputStyle: CSSProperties = { width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border-color)', fontSize: 13, background: 'var(--bg-primary)' };
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <div>
@@ -1274,7 +1274,7 @@ function CreateCaseForm({ onSubmit, onCancel }: { onSubmit: (data: Record<string
   const [expectedJson, setExpectedJson] = useState('{}');
   const [importance, setImportance] = useState('medium');
   const [notes, setNotes] = useState('');
-  const inputStyle = { width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border-color)', fontSize: 13, background: 'var(--bg-primary)' };
+  const inputStyle: CSSProperties = { width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border-color)', fontSize: 13, background: 'var(--bg-primary)' };
 
   const handleSubmit = () => {
     let expected: Record<string, any>;
@@ -1295,7 +1295,7 @@ function CreateCaseForm({ onSubmit, onCancel }: { onSubmit: (data: Record<string
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 12 }}>
         <div>
           <label style={{ fontSize: 12, fontWeight: 600, display: 'block', marginBottom: 4 }}>Importance</label>
-          <select value={importance} onChange={e => setImportance(e.target.value)} style={inputStyle as any}>
+          <select value={importance} onChange={e => setImportance(e.target.value)} style={inputStyle}>
             <option value="critical">Critical</option>
             <option value="high">High</option>
             <option value="medium">Medium</option>
@@ -1326,7 +1326,7 @@ function RunTestForm({ schemas, datasets, providerModels, onSubmit, onCancel }: 
   const [datasetId, setDatasetId] = useState('');
   const [providerName, setProviderName] = useState('');
   const [modelName, setModelName] = useState('');
-  const inputStyle = { width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border-color)', fontSize: 13, background: 'var(--bg-primary)' };
+  const inputStyle: CSSProperties = { width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border-color)', fontSize: 13, background: 'var(--bg-primary)' };
 
   const availableModels = providerName
     ? providerModels.find(p => p.provider === providerName)?.models || []
@@ -1336,14 +1336,14 @@ function RunTestForm({ schemas, datasets, providerModels, onSubmit, onCancel }: 
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <div>
         <label style={{ fontSize: 12, fontWeight: 600, display: 'block', marginBottom: 4 }}>Schema *</label>
-        <select value={schemaId} onChange={e => setSchemaId(e.target.value)} style={inputStyle as any}>
+        <select value={schemaId} onChange={e => setSchemaId(e.target.value)} style={inputStyle}>
           <option value="">Select schema...</option>
           {schemas.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
       </div>
       <div>
         <label style={{ fontSize: 12, fontWeight: 600, display: 'block', marginBottom: 4 }}>Dataset *</label>
-        <select value={datasetId} onChange={e => setDatasetId(e.target.value)} style={inputStyle as any}>
+        <select value={datasetId} onChange={e => setDatasetId(e.target.value)} style={inputStyle}>
           <option value="">Select dataset...</option>
           {datasets.map(d => <option key={d.id} value={d.id}>{d.name} ({d.case_count} cases)</option>)}
         </select>
@@ -1351,7 +1351,7 @@ function RunTestForm({ schemas, datasets, providerModels, onSubmit, onCancel }: 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
         <div>
           <label style={{ fontSize: 12, fontWeight: 600, display: 'block', marginBottom: 4 }}>Provider (optional)</label>
-          <select value={providerName} onChange={e => { setProviderName(e.target.value); setModelName(''); }} style={inputStyle as any}>
+          <select value={providerName} onChange={e => { setProviderName(e.target.value); setModelName(''); }} style={inputStyle}>
             <option value="">Schema default</option>
             {providerModels.map(p => <option key={p.provider} value={p.provider}>{p.provider}</option>)}
           </select>
@@ -1359,7 +1359,7 @@ function RunTestForm({ schemas, datasets, providerModels, onSubmit, onCancel }: 
         <div>
           <label style={{ fontSize: 12, fontWeight: 600, display: 'block', marginBottom: 4 }}>Model (optional)</label>
           {providerName ? (
-            <select value={modelName} onChange={e => setModelName(e.target.value)} style={inputStyle as any}>
+            <select value={modelName} onChange={e => setModelName(e.target.value)} style={inputStyle}>
               <option value="">Schema default</option>
               {availableModels.map(m => <option key={m} value={m}>{m}</option>)}
             </select>
@@ -1404,7 +1404,7 @@ function RunComparisonForm({ schemas, datasets, providerModels, onSubmit, onCanc
   const [aModel, setAModel] = useState('');
   const [bProvider, setBProvider] = useState('');
   const [bModel, setBModel] = useState('');
-  const inputStyle = { width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border-color)', fontSize: 13, background: 'var(--bg-primary)' };
+  const inputStyle: CSSProperties = { width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border-color)', fontSize: 13, background: 'var(--bg-primary)' };
 
   const canSubmit = schemaId && datasetId && aProvider && aModel && bProvider && bModel && iterations >= 1 && iterations <= 10;
 
@@ -1413,14 +1413,14 @@ function RunComparisonForm({ schemas, datasets, providerModels, onSubmit, onCanc
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 120px', gap: 12 }}>
         <div>
           <label style={{ fontSize: 12, fontWeight: 600, display: 'block', marginBottom: 4 }}>Schema *</label>
-          <select value={schemaId} onChange={e => setSchemaId(e.target.value)} style={inputStyle as any}>
+          <select value={schemaId} onChange={e => setSchemaId(e.target.value)} style={inputStyle}>
             <option value="">Select schema...</option>
             {schemas.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
         </div>
         <div>
           <label style={{ fontSize: 12, fontWeight: 600, display: 'block', marginBottom: 4 }}>Dataset *</label>
-          <select value={datasetId} onChange={e => setDatasetId(e.target.value)} style={inputStyle as any}>
+          <select value={datasetId} onChange={e => setDatasetId(e.target.value)} style={inputStyle}>
             <option value="">Select dataset...</option>
             {datasets.map(d => <option key={d.id} value={d.id}>{d.name} ({d.case_count})</option>)}
           </select>
@@ -1484,7 +1484,7 @@ function RunPipelineCalibrationForm({ providerModels, onSubmit, onCancel }: {
   const [aModel, setAModel] = useState('');
   const [bProvider, setBProvider] = useState('');
   const [bModel, setBModel] = useState('');
-  const inputStyle = { width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border-color)', fontSize: 13, background: 'var(--bg-primary)' };
+  const inputStyle: CSSProperties = { width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border-color)', fontSize: 13, background: 'var(--bg-primary)' };
 
   const canSubmit = aProvider && aModel && bProvider && bModel && articleCount >= 1 && articleCount <= 100;
 
@@ -1517,7 +1517,7 @@ function RunPipelineCalibrationForm({ providerModels, onSubmit, onCancel }: {
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
           <div>
             <label style={{ fontSize: 11, fontWeight: 600, display: 'block', marginBottom: 3 }}>Status</label>
-            <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} style={inputStyle as any}>
+            <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} style={inputStyle}>
               <option value="">Any</option>
               <option value="pending">Pending</option>
               <option value="processed">Processed</option>
@@ -1585,7 +1585,7 @@ function RunCalibrationForm({ schemas, providerModels, onSubmit, onCancel }: {
   const [aModel, setAModel] = useState('');
   const [bProvider, setBProvider] = useState('');
   const [bModel, setBModel] = useState('');
-  const inputStyle = { width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border-color)', fontSize: 13, background: 'var(--bg-primary)' };
+  const inputStyle: CSSProperties = { width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border-color)', fontSize: 13, background: 'var(--bg-primary)' };
 
   const canSubmit = schemaId && aProvider && aModel && bProvider && bModel && articleCount >= 1 && articleCount <= 100;
 
@@ -1602,7 +1602,7 @@ function RunCalibrationForm({ schemas, providerModels, onSubmit, onCancel }: {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 120px', gap: 12 }}>
         <div>
           <label style={{ fontSize: 12, fontWeight: 600, display: 'block', marginBottom: 4 }}>Schema *</label>
-          <select value={schemaId} onChange={e => setSchemaId(e.target.value)} style={inputStyle as any}>
+          <select value={schemaId} onChange={e => setSchemaId(e.target.value)} style={inputStyle}>
             <option value="">Select schema...</option>
             {schemas.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
@@ -1622,7 +1622,7 @@ function RunCalibrationForm({ schemas, providerModels, onSubmit, onCancel }: {
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
           <div>
             <label style={{ fontSize: 11, fontWeight: 600, display: 'block', marginBottom: 3 }}>Status</label>
-            <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} style={inputStyle as any}>
+            <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} style={inputStyle}>
               <option value="">Any</option>
               <option value="pending">Pending</option>
               <option value="processed">Processed</option>
@@ -1686,7 +1686,7 @@ function ConfigPairForm({ providerModels, aProvider, aModel, bProvider, bModel, 
         <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8, color: 'var(--text-primary)' }}>Config A</div>
         <div style={{ marginBottom: 8 }}>
           <label style={{ fontSize: 11, fontWeight: 600, display: 'block', marginBottom: 3 }}>Provider *</label>
-          <select value={aProvider} onChange={e => { setAProvider(e.target.value); setAModel(''); }} style={inputStyle as any}>
+          <select value={aProvider} onChange={e => { setAProvider(e.target.value); setAModel(''); }} style={inputStyle}>
             <option value="">Select...</option>
             {providerModels.map(p => <option key={p.provider} value={p.provider}>{p.provider}</option>)}
           </select>
@@ -1694,7 +1694,7 @@ function ConfigPairForm({ providerModels, aProvider, aModel, bProvider, bModel, 
         <div>
           <label style={{ fontSize: 11, fontWeight: 600, display: 'block', marginBottom: 3 }}>Model *</label>
           {aProvider ? (
-            <select value={aModel} onChange={e => setAModel(e.target.value)} style={inputStyle as any}>
+            <select value={aModel} onChange={e => setAModel(e.target.value)} style={inputStyle}>
               <option value="">Select...</option>
               {aModels.map(m => <option key={m} value={m}>{m}</option>)}
             </select>
@@ -1708,7 +1708,7 @@ function ConfigPairForm({ providerModels, aProvider, aModel, bProvider, bModel, 
         <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8, color: 'var(--text-primary)' }}>Config B</div>
         <div style={{ marginBottom: 8 }}>
           <label style={{ fontSize: 11, fontWeight: 600, display: 'block', marginBottom: 3 }}>Provider *</label>
-          <select value={bProvider} onChange={e => { setBProvider(e.target.value); setBModel(''); }} style={inputStyle as any}>
+          <select value={bProvider} onChange={e => { setBProvider(e.target.value); setBModel(''); }} style={inputStyle}>
             <option value="">Select...</option>
             {providerModels.map(p => <option key={p.provider} value={p.provider}>{p.provider}</option>)}
           </select>
@@ -1716,7 +1716,7 @@ function ConfigPairForm({ providerModels, aProvider, aModel, bProvider, bModel, 
         <div>
           <label style={{ fontSize: 11, fontWeight: 600, display: 'block', marginBottom: 3 }}>Model *</label>
           {bProvider ? (
-            <select value={bModel} onChange={e => setBModel(e.target.value)} style={inputStyle as any}>
+            <select value={bModel} onChange={e => setBModel(e.target.value)} style={inputStyle}>
               <option value="">Select...</option>
               {bModels.map(m => <option key={m} value={m}>{m}</option>)}
             </select>
@@ -1848,7 +1848,7 @@ function CalibrationReviewModal({ article, comparison, onSave, onCancel }: {
     }
   };
 
-  const inputStyle = { width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border-color)', fontSize: 13, background: 'var(--bg-primary)' };
+  const inputStyle: CSSProperties = { width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border-color)', fontSize: 13, background: 'var(--bg-primary)' };
 
   const parseJsonbField = (val: unknown): any => {
     if (val == null) return null;
@@ -2079,7 +2079,7 @@ function SaveDatasetModal({ reviewedCount, onSave, onCancel }: {
 }) {
   const [name, setName] = useState('');
   const [desc, setDesc] = useState('');
-  const inputStyle = { width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border-color)', fontSize: 13, background: 'var(--bg-primary)' };
+  const inputStyle: CSSProperties = { width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border-color)', fontSize: 13, background: 'var(--bg-primary)' };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>

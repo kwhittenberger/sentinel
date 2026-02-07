@@ -199,7 +199,7 @@ export function IncidentDetailView({
   return (
     <div className="ext-incident-detail-view">
       {onClose && (
-        <button className="ext-close-btn" onClick={onClose}>&times;</button>
+        <button className="ext-close-btn" onClick={onClose} aria-label="Close incident detail">&times;</button>
       )}
 
       {/* Header with category badge */}
@@ -300,12 +300,12 @@ export function IncidentDetailView({
             />
             <TaggedField
               label="Age"
-              value={(extractedData as any)?.offender_age}
+              value={extractedData?.offender_age}
               type="number"
             />
             <TaggedField
               label="Nationality"
-              value={(extractedData as any)?.offender_nationality || (extractedData as any)?.offender_country_of_origin}
+              value={extractedData?.offender_nationality || extractedData?.offender_country_of_origin}
               type="location"
             />
             <TaggedField
@@ -320,12 +320,12 @@ export function IncidentDetailView({
             />
             <TaggedField
               label="Prior Arrests"
-              value={(extractedData as any)?.prior_arrests}
+              value={extractedData?.prior_arrests}
               type="number"
             />
             <TaggedField
               label="Prior Convictions"
-              value={(extractedData as any)?.prior_convictions}
+              value={extractedData?.prior_convictions}
               type="number"
             />
             <TaggedField
@@ -333,40 +333,40 @@ export function IncidentDetailView({
               value={extractedData?.gang_affiliated ?? incident?.gang_affiliated}
               type="status"
             />
-            {(extractedData as any)?.gang_name && (
+            {extractedData?.gang_name && (
               <TaggedField
                 label="Gang Name"
-                value={(extractedData as any)?.gang_name}
+                value={extractedData?.gang_name}
               />
             )}
-            {(extractedData as any)?.cartel_connection && (
+            {extractedData?.cartel_connection && (
               <TaggedField
                 label="Cartel Connection"
-                value={(extractedData as any)?.cartel_connection}
+                value={extractedData?.cartel_connection}
               />
             )}
           </div>
 
           {/* Policy failures */}
-          {((extractedData as any)?.ice_detainer_ignored ||
-            (extractedData as any)?.was_released_sanctuary ||
-            (extractedData as any)?.was_released_bail) && (
+          {(extractedData?.ice_detainer_ignored ||
+            extractedData?.was_released_sanctuary ||
+            extractedData?.was_released_bail) && (
             <div className="ext-policy-failures">
               <h5>Policy Failures</h5>
               <div className="ext-tagged-fields-grid">
                 <TaggedField
                   label="ICE Detainer Ignored"
-                  value={(extractedData as any)?.ice_detainer_ignored}
+                  value={extractedData?.ice_detainer_ignored}
                   type="status"
                 />
                 <TaggedField
                   label="Released (Sanctuary)"
-                  value={(extractedData as any)?.was_released_sanctuary}
+                  value={extractedData?.was_released_sanctuary}
                   type="status"
                 />
                 <TaggedField
                   label="Released on Bail"
-                  value={(extractedData as any)?.was_released_bail}
+                  value={extractedData?.was_released_bail}
                   type="status"
                 />
               </div>
@@ -376,14 +376,14 @@ export function IncidentDetailView({
       )}
 
       {/* Charges and Sentence */}
-      {((extractedData as any)?.charges || (extractedData as any)?.sentence) && (
+      {(Array.isArray(extractedData?.charges) || extractedData?.sentence) && (
         <div className="ext-detail-section-group">
           <h4>Legal Details</h4>
-          {(extractedData as any)?.charges && (
+          {Array.isArray(extractedData?.charges) && extractedData.charges.length > 0 && (
             <div className="ext-charges-list">
               <span className="ext-field-label">Charges:</span>
               <div className="ext-tag-list">
-                {(extractedData as any).charges.map((charge: string, i: number) => (
+                {extractedData.charges.map((charge: string, i: number) => (
                   <span key={i} className="ext-tag ext-tag-charge">{charge}</span>
                 ))}
               </div>
@@ -391,7 +391,7 @@ export function IncidentDetailView({
           )}
           <TaggedField
             label="Sentence"
-            value={(extractedData as any)?.sentence}
+            value={extractedData?.sentence}
           />
         </div>
       )}
@@ -424,7 +424,7 @@ export function IncidentDetailView({
         <div className="ext-detail-section-group">
           <h4>Sources ({incident?.sources?.length || 1})</h4>
           <div className="ext-sources-list">
-            {incident?.sources && incident.sources.length > 0 ? (
+            {Array.isArray(incident?.sources) && incident.sources.length > 0 ? (
               incident.sources.map((source, idx) => (
                 <div key={source.id || idx} className="ext-source-item">
                   <a
@@ -465,7 +465,7 @@ export function IncidentDetailView({
       )}
 
       {/* Actors */}
-      {incident?.actors && incident.actors.length > 0 && (
+      {Array.isArray(incident?.actors) && incident.actors.length > 0 && (
         <div className="ext-detail-section-group">
           <h4>
             Actors & Entities
@@ -480,7 +480,7 @@ export function IncidentDetailView({
       )}
 
       {/* Events Timeline */}
-      {incident?.linked_events && incident.linked_events.length > 0 && (
+      {Array.isArray(incident?.linked_events) && incident.linked_events.length > 0 && (
         <div className="ext-detail-section-group">
           <h4>
             Related Events
@@ -495,22 +495,22 @@ export function IncidentDetailView({
       )}
 
       {/* Extraction Notes */}
-      {(extractedData as any)?.extraction_notes && (
+      {extractedData?.extraction_notes && (
         <div className="ext-detail-section-group ext-extraction-notes">
           <h4>Extraction Notes</h4>
-          <p>{(extractedData as any).extraction_notes}</p>
+          <p>{String(extractedData.extraction_notes)}</p>
         </div>
       )}
 
       {/* Overall Confidence */}
-      {(extractedData as any)?.overall_confidence !== undefined && (
+      {extractedData?.overall_confidence !== undefined && (
         <div className="ext-overall-confidence">
           <span className="ext-field-label">Overall Confidence:</span>
           <span className={`ext-confidence-badge ${
-            (extractedData as any).overall_confidence >= 0.8 ? 'high' :
-            (extractedData as any).overall_confidence >= 0.5 ? 'medium' : 'low'
+            extractedData.overall_confidence >= 0.8 ? 'high' :
+            extractedData.overall_confidence >= 0.5 ? 'medium' : 'low'
           }`}>
-            {((extractedData as any).overall_confidence * 100).toFixed(0)}%
+            {(extractedData.overall_confidence * 100).toFixed(0)}%
           </span>
         </div>
       )}

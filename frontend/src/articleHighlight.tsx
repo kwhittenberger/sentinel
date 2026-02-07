@@ -114,7 +114,7 @@ export function HighlightedArticle({
   highlights: HighlightEntry[];
 }) {
   return (
-    <ReactMarkdown components={highlightComponents(highlights)}>
+    <ReactMarkdown skipHtml={true} components={highlightComponents(highlights)}>
       {content}
     </ReactMarkdown>
   );

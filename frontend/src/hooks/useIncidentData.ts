@@ -55,12 +55,22 @@ export function useIncidentData(): IncidentDataReturn {
     // Default end date to today
     const today = new Date().toISOString().split('T')[0];
 
+    // Validate date params: must parse to a valid Date in YYYY-MM-DD format
+    const parseValidDate = (value: string | null, fallback: string): string => {
+      if (!value) return fallback;
+      const parsed = new Date(value);
+      if (isNaN(parsed.getTime())) return fallback;
+      // Ensure it's a reasonable YYYY-MM-DD string (not random text that Date() accepts)
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return fallback;
+      return value;
+    };
+
     return {
       tiers: params.get('tiers') ? params.get('tiers')!.split(',').map(Number) : [1, 2, 3, 4],
       states: params.get('states') ? params.get('states')!.split(',') : [],
       categories: params.get('categories') ? params.get('categories')!.split(',') : [],
-      date_start: params.get('date_start') || defaultDateStart,
-      date_end: params.get('date_end') || today,
+      date_start: parseValidDate(params.get('date_start'), defaultDateStart),
+      date_end: parseValidDate(params.get('date_end'), today),
       domain: params.get('domain') || undefined,
       category: params.get('category') || undefined,
       severity: params.get('severity') || undefined,

@@ -32,6 +32,17 @@ function getMarkerColor(incident: Incident): string {
   return '#3b82f6'; // blue
 }
 
+/** Returns marker style props for colorblind accessibility.
+ *  Death: solid thick border (weight 3)
+ *  Non-immigrant: dashed border (weight 2, dashArray "4 3")
+ *  Other: thin solid border (weight 1)
+ */
+function getMarkerStyle(incident: Incident): { weight: number; dashArray?: string } {
+  if (incident.is_death) return { weight: 3 };
+  if (incident.is_non_immigrant) return { weight: 2, dashArray: '4 3' };
+  return { weight: 1 };
+}
+
 interface IncidentMapProps {
   incidents: Incident[];
   selectedIncident: Incident | null;
@@ -103,6 +114,7 @@ export function IncidentMap({
                     color: getMarkerColor(incident),
                     fillColor: getMarkerColor(incident),
                     fillOpacity: 0.7,
+                    ...getMarkerStyle(incident),
                   }}
                   eventHandlers={{
                     click: () => onMarkerClick(incident),
@@ -130,4 +142,4 @@ export function IncidentMap({
   );
 }
 
-export { getJitteredCoords, getMarkerColor };
+export { getJitteredCoords, getMarkerColor, getMarkerStyle };

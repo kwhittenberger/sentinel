@@ -9,7 +9,7 @@ interface StatsBarProps {
 export function StatsBar({ stats, statsCollapsed, toggleStats }: StatsBarProps) {
   return (
     <div className={`stats-section ${statsCollapsed ? 'stats-collapsed' : ''}`}>
-      <button className="stats-toggle-btn" onClick={toggleStats} title={statsCollapsed ? 'Expand stats' : 'Collapse stats'}>
+      <button className="stats-toggle-btn" onClick={toggleStats} title={statsCollapsed ? 'Expand stats' : 'Collapse stats'} aria-label={statsCollapsed ? 'Expand stats' : 'Collapse stats'}>
         {statsCollapsed ? '\u25BC' : '\u25B2'}
       </button>
       {statsCollapsed ? (

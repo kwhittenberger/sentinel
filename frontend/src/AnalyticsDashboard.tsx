@@ -120,7 +120,7 @@ export function AnalyticsDashboard({ onClose }: AnalyticsDashboardProps) {
             </button>
           </div>
           {onClose && (
-            <button className="admin-close-btn" onClick={onClose}>&times;</button>
+            <button className="admin-close-btn" onClick={onClose} aria-label="Close analytics dashboard">&times;</button>
           )}
         </div>
       </div>
