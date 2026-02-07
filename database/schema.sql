@@ -417,7 +417,7 @@ CREATE INDEX idx_incidents_search ON incidents USING gin(
 -- Compound indexes for analytics queries (migration 035)
 CREATE INDEX idx_incidents_state_date ON incidents(state, date);
 CREATE INDEX idx_incidents_type_date ON incidents(incident_type_id, date);
-CREATE INDEX idx_incidents_outcome_date ON incidents(outcome_category, date);
+CREATE INDEX idx_incidents_outcome_date ON incidents(outcome_type_id, date);
 CREATE INDEX idx_incidents_curation_created ON incidents(curation_status, created_at);
 
 -- ============================================================================

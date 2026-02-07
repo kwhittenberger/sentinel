@@ -6,6 +6,7 @@ tiered queue management, batch processing, article approval/rejection,
 and pipeline reset utilities.
 """
 
+import json
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -305,6 +306,11 @@ async def get_article_audit(
     articles = []
     for row in rows:
         extracted_data = row.get("extracted_data") or {}
+        if isinstance(extracted_data, str):
+            try:
+                extracted_data = json.loads(extracted_data)
+            except (json.JSONDecodeError, TypeError):
+                extracted_data = {}
 
         # Determine extraction format
         if not extracted_data:

@@ -15,7 +15,7 @@ CREATE INDEX IF NOT EXISTS idx_incidents_type_date
 
 -- Outcome analysis queries (e.g., "fatalities over time")
 CREATE INDEX IF NOT EXISTS idx_incidents_outcome_date
-    ON incidents(outcome_category, date);
+    ON incidents(outcome_type_id, date);
 
 -- Admin queue filtering (e.g., "pending curation sorted by newest")
 CREATE INDEX IF NOT EXISTS idx_incidents_curation_created

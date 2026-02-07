@@ -111,11 +111,9 @@ start() {
     echo "[2/6] Backend already running (port 8000 in use)"
   else
     echo "[2/6] Starting backend (uvicorn)..."
-    cd "$PROJECT_DIR/backend"
-    nohup uvicorn main:app --host 127.0.0.1 --port 8000 --reload \
+    nohup uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload \
       > "$LOGDIR/backend.log" 2>&1 &
     echo "       PID: $! — log: .logs/backend.log"
-    cd "$PROJECT_DIR"
   fi
 
   # 3. Celery worker: default + enrichment

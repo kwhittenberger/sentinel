@@ -35,3 +35,24 @@ Patterns discovered during the codebase audit (2026-02-07).
 12. **String-based FK on `relationship_types.name`.** VARCHAR(50) used as FK. Fragile — don't rename relationship types without updating all references.
 
 13. **Circular FK:** `ingested_articles` ↔ `article_extractions`. Must null out `latest_extraction_id` before deleting articles. Migration 022 demonstrates the pattern.
+
+## CRITICAL: Destructive Operations — NEVER Again
+
+14. **NEVER run `docker-compose down -v`, `docker volume rm`, or any volume-destroying command.** This destroys production data that cost real money (LLM API calls) to build. There is NO undo. On 2026-02-06, `docker-compose down -v` was run without user confirmation, destroying a Docker volume. The data happened to be recoverable from a differently-named volume, but this was pure luck.
+
+15. **NEVER run ANY of these commands without explicit user confirmation:**
+    - `docker-compose down -v` (destroys volumes)
+    - `docker volume rm` / `docker volume prune`
+    - `docker system prune`
+    - `rm -rf` on data directories
+    - `DROP DATABASE` / `DROP TABLE` / `TRUNCATE`
+    - `git reset --hard` / `git clean -f`
+    - Any command that deletes, overwrites, or purges persistent state
+
+16. **When debugging database issues, NEVER recreate from scratch.** Instead:
+    - Apply targeted SQL fixes (`ALTER TABLE`, `CREATE INDEX IF NOT EXISTS`)
+    - Run individual migration files against the existing database
+    - Use `pg_dump` to backup BEFORE any schema changes
+    - Ask the user before taking any action that modifies database state
+
+17. **Docker volume names depend on the project directory name.** Renaming `ice_violent_confrontations/` to `sentinel/` changed the volume prefix from `ice_violent_confrontations_sentinel_data` to `sentinel_sentinel_data`. The old volume with real data still exists but docker-compose won't use it automatically. Always check `docker volume ls` before assuming a volume is new/empty.

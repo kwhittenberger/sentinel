@@ -164,4 +164,6 @@ services:
 
 volumes:
   sentinel_data:
+    external: true
+    name: ice_violent_confrontations_sentinel_data
   sentinel_redis_data:
