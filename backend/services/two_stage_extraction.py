@@ -160,7 +160,47 @@ class TwoStageExtractionService:
                     retryable=True,
                 )
 
-            extraction_data = self._parse_json(response.text)
+            extraction_data = self._parse_json(response.text, stop_reason=response.stop_reason)
+
+            # If truncated, attempt adaptive retry with higher token limit
+            truncated = False
+            if response.stop_reason in ("max_tokens", "length"):
+                original_max = call_kwargs.get("max_tokens", 8000)
+                retry_max = min(original_max * 2, 16384)
+                logger.warning(
+                    "Stage 1 truncated (stop_reason=%s), retrying with max_tokens=%d and focused prompt",
+                    response.stop_reason, retry_max,
+                )
+                focused_suffix = (
+                    "\n\nIMPORTANT: Extract ONLY the 10 most significant incidents. "
+                    "Prioritize those with named individuals, specific dates, and specific locations."
+                )
+                retry_kwargs = dict(call_kwargs)
+                retry_kwargs["max_tokens"] = retry_max
+                retry_kwargs["user_message"] = call_kwargs["user_message"] + focused_suffix
+                try:
+                    retry_response = await asyncio.wait_for(
+                        asyncio.to_thread(router.call, **retry_kwargs),
+                        timeout=LLM_CALL_TIMEOUT_SECONDS,
+                    )
+                    retry_data = self._parse_json(retry_response.text, stop_reason=retry_response.stop_reason)
+                    # Use retry result if it has more events or entities
+                    retry_events = len(retry_data.get("events", []))
+                    orig_events = len(extraction_data.get("events", []))
+                    if retry_events >= orig_events:
+                        extraction_data = retry_data
+                        response = retry_response
+                        logger.info("Using retry result (%d events vs %d original)", retry_events, orig_events)
+                    else:
+                        truncated = True
+                        logger.info("Keeping repaired original (%d events vs %d retry)", orig_events, retry_events)
+                except Exception as retry_err:
+                    logger.warning("Truncation retry failed, using repaired partial data: %s", retry_err)
+                    truncated = True
+
+                if truncated:
+                    # Still using the repaired partial data from original response
+                    pass
 
             # Compute summary stats
             entities = extraction_data.get("entities", {})
@@ -173,6 +213,8 @@ class TwoStageExtractionService:
             overall_confidence = extraction_data.get("extraction_confidence")
             classification_hints = extraction_data.get("classification_hints", [])
             extraction_notes = extraction_data.get("extraction_notes", "")
+            if truncated:
+                extraction_notes = "[TRUNCATED] " + (extraction_notes or "")
 
             # Update row with results
             updated = await fetchrow(
@@ -390,7 +432,7 @@ class TwoStageExtractionService:
                     retryable=True,
                 )
 
-            extracted_data = self._parse_json(response.text)
+            extracted_data = self._parse_json(response.text, stop_reason=response.stop_reason)
 
             # Validate against schema fields
             from backend.services.generic_extraction import get_generic_extraction_service
@@ -702,8 +744,8 @@ class TwoStageExtractionService:
     # Helpers
     # -----------------------------------------------------------------------
 
-    def _parse_json(self, text: str) -> Dict[str, Any]:
-        """Parse LLM JSON response, handling markdown code blocks."""
+    def _parse_json(self, text: str, stop_reason: Optional[str] = None) -> Dict[str, Any]:
+        """Parse LLM JSON response, handling markdown code blocks and truncation."""
         from .llm_errors import LLMError, ErrorCategory
 
         cleaned = text.strip()
@@ -716,6 +758,12 @@ class TwoStageExtractionService:
         try:
             return json.loads(cleaned)
         except json.JSONDecodeError as e:
+            # If truncated due to max_tokens, attempt JSON repair
+            if stop_reason == "max_tokens" or stop_reason == "length":
+                logger.warning("LLM response truncated (stop_reason=%s), attempting JSON repair", stop_reason)
+                repaired = self._repair_truncated_json(cleaned)
+                if repaired is not None:
+                    return repaired
             logger.warning("Failed to parse LLM JSON: %s", cleaned[:200])
             raise LLMError(
                 category=ErrorCategory.PARTIAL,
@@ -725,6 +773,80 @@ class TwoStageExtractionService:
                 retryable=True,
                 original=e,
             ) from e
+
+    def _repair_truncated_json(self, text: str) -> Optional[Dict[str, Any]]:
+        """Attempt to repair truncated JSON by closing open structures.
+
+        Tracks open braces, brackets, and strings, then appends the necessary
+        closing characters to produce valid JSON. Falls back to truncating at
+        the last comma and retrying recursively (once).
+        """
+        # Strategy 1: close open structures
+        repaired = self._close_json_structures(text)
+        if repaired is not None:
+            try:
+                result = json.loads(repaired)
+                if isinstance(result, dict):
+                    logger.info("JSON repair succeeded by closing open structures")
+                    return result
+            except json.JSONDecodeError:
+                pass
+
+        # Strategy 2: truncate to last comma and retry
+        last_comma = text.rfind(',')
+        if last_comma > 0:
+            truncated = text[:last_comma]
+            repaired = self._close_json_structures(truncated)
+            if repaired is not None:
+                try:
+                    result = json.loads(repaired)
+                    if isinstance(result, dict):
+                        logger.info("JSON repair succeeded after truncating to last comma")
+                        return result
+                except json.JSONDecodeError:
+                    pass
+
+        logger.warning("JSON repair failed")
+        return None
+
+    def _close_json_structures(self, text: str) -> Optional[str]:
+        """Close unclosed JSON structures (braces, brackets, strings)."""
+        in_string = False
+        escape_next = False
+        stack: list[str] = []  # tracks opening chars: { or [
+
+        for ch in text:
+            if escape_next:
+                escape_next = False
+                continue
+            if ch == '\\' and in_string:
+                escape_next = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if ch in ('{', '['):
+                stack.append(ch)
+            elif ch == '}' and stack and stack[-1] == '{':
+                stack.pop()
+            elif ch == ']' and stack and stack[-1] == '[':
+                stack.pop()
+
+        # If we're inside a string, close it
+        suffix = ''
+        if in_string:
+            suffix += '"'
+
+        # Close structures in reverse order
+        for opener in reversed(stack):
+            if opener == '{':
+                suffix += '}'
+            elif opener == '[':
+                suffix += ']'
+
+        return text + suffix if stack or in_string else text
 
     def _serialize(self, row) -> Dict[str, Any]:
         """Serialize a database row to a JSON-safe dict."""
