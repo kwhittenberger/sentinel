@@ -707,7 +707,22 @@ class IncidentCreationService:
         if not date_str:
             return None
         try:
-            return date_type.fromisoformat(date_str)
+            s = date_str.strip()
+            # ISO datetime with T (e.g. "2024-03-15T10:30:00Z")
+            if 'T' in s:
+                s = s.replace('Z', '+00:00')
+                return datetime.fromisoformat(s).date()
+            # YYYY-MM-DD
+            if len(s) == 10 and s[4] == '-' and s[7] == '-':
+                return date_type.fromisoformat(s)
+            # YYYY-MM → pad to 1st of month
+            if len(s) == 7 and s[4] == '-':
+                return date_type.fromisoformat(s + '-01')
+            # YYYY → pad to Jan 1
+            if len(s) == 4 and s.isdigit():
+                return date_type(int(s), 1, 1)
+            # Fallback: try fromisoformat for anything else
+            return date_type.fromisoformat(s)
         except Exception:
             return None
 
