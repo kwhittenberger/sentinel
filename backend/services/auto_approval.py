@@ -142,6 +142,15 @@ CRIME_SEVERITY = {
     'raid': 5,
     'search': 5,
     'warrant': 5,
+    'illegal_reentry': 5,
+    'illegal_entry': 5,
+    'unlawful_entry': 5,
+    'physical_force': 6,
+    'protest_clash': 4,
+    'property_damage': 4,
+    'raid_injury': 6,
+    'identity_fraud': 5,
+    'document_fraud': 5,
     'other': 3,
 }
 
