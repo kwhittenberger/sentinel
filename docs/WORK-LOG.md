@@ -172,3 +172,26 @@ Phase 1 (Foundation) complete, now implementing Phase 2 (Cases & Legal Tracking)
 
 ### Status: ALL PHASES COMPLETE
 Phases 1-4 fully implemented. Phases 5-7 (ML, Cross-Domain, Public API) are future aspirational items.
+
+---
+
+## Session: 2026-02-07
+
+### Context
+Full codebase audit and documentation. No code changes — documentation only.
+
+### Work Completed
+- **Full codebase inventory** — cataloged 62 Python files (~25,500 lines), 40 TypeScript/React files (~21,000 lines), 33 SQL migrations, 6 scripts, 17 data pipeline files
+- **Backend audit** — 19 findings (4 HIGH, 9 MEDIUM, 6 LOW): god file main.py (6,280 lines), pervasive `datetime.utcnow()` usage (45+ occurrences), no LLM call timeouts, dangerous confidence defaults, broad exception catching
+- **Frontend audit** — 22 findings (3 HIGH, 11 MEDIUM, 8 LOW): 61/66 API functions lack error checking, no error boundaries on App/AdminPanel, unhandled Promise.all, 48 `as any` casts, race conditions in BatchProcessing and timeline
+- **Database audit** — 14 findings (3 HIGH, 7 MEDIUM, 4 LOW): three data models in tension (persons/actors/cases), missing FK on event_relationships.case_id, string-based relationship_type FK, schema drift between schema.sql and migrations
+- **Identified functionality gaps** — zero tests, no auth, no rate limiting, no health check, stale materialized views
+
+### Files Created
+- `docs/CODEBASE-AUDIT.md` — Full audit report with all findings
+- `tasks/todo.md` — Prioritized action items from audit
+- `tasks/lessons.md` — Key architectural patterns and gotchas
+
+### Files Modified
+- `docs/WORK-LOG.md` — This session entry
+- `CLAUDE.md` — Added audit references and architectural notes

@@ -78,8 +78,19 @@ database/
 
 ## Session Continuity
 
-**At session start:** Read `docs/active-work/WORK-LOG.md` to understand current state.
+**At session start:** Read `docs/WORK-LOG.md` to understand current state.
 **At session end:** Update it with accomplishments, in-progress work, blockers, and next steps.
+
+## Audit & Known Issues
+
+See [`docs/CODEBASE-AUDIT.md`](docs/CODEBASE-AUDIT.md) for the full codebase audit (2026-02-07).
+Action items tracked in [`tasks/todo.md`](tasks/todo.md).
+
+### Known Architectural Decisions
+
+- **Persons vs Actors:** Two entity models coexist. `persons` (schema.sql) is legacy; `actors` (migration 002) is preferred for new code. Both are in use.
+- **Legacy vs Two-Stage Extraction:** Check `ingested_articles.extraction_pipeline` column. Legacy = one-shot via `extracted_data`. Two-stage = `article_extractions` (Stage 1) + `schema_extraction_results` (Stage 2). Two-stage is preferred for new work.
+- **Three data layers:** Legacy person-centric, event-centric (actors/events), and case-centric (cases/charges/dispositions) all coexist. Code must handle all three.
 
 ## Domain-Specific Rules
 
@@ -101,4 +112,4 @@ database/
 Copy `.env.example` to `.env`. Key vars: `DATABASE_URL`, `ANTHROPIC_API_KEY`.
 Logs go to `.logs/` directory.
 
-Key tables: `incidents`, `articles`, `curation_queue`, `persons`, `jurisdictions`, `background_jobs`
+Key tables: `incidents`, `ingested_articles`, `article_extractions`, `actors`, `events`, `cases`, `charges`, `curation_queue`, `jurisdictions`, `background_jobs`
