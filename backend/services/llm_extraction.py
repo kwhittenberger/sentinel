@@ -22,6 +22,7 @@ from .extraction_prompts import (
     get_triage_prompt,
     get_universal_extraction_prompt,
     get_required_fields,
+    get_required_fields_async,
     IncidentCategory,
 )
 from .prompt_manager import ExecutionResult
@@ -357,16 +358,25 @@ class LLMExtractor:
                 }
 
                 if extracted_category:
-                    required = get_required_fields(extracted_category)
+                    fields_by_domain = await get_required_fields_async(extracted_category)
+                    first_domain = next(iter(fields_by_domain.values()), {"required": [], "optional": []})
+                    required = first_domain["required"]
                     result["required_fields_met"] = all(
                         incident.get(field) is not None
                         for field in required
                     )
                     result["required_fields"] = required
+                    result["fields_by_domain"] = fields_by_domain
                     result["missing_fields"] = [
                         field for field in required
                         if incident.get(field) is None
                     ]
+
+                    # Penalize confidence proportionally for missing required fields
+                    if result.get("missing_fields") and result.get("confidence"):
+                        total = len(required)
+                        present = total - len(result["missing_fields"])
+                        result["confidence"] = result["confidence"] * (present / total) if total > 0 else 0
 
             # Record execution if using database prompts
             if db_prompt and self._prompt_manager:
@@ -486,6 +496,12 @@ class LLMExtractor:
                         field for field in required
                         if incident.get(field) is None
                     ]
+
+                    # Penalize confidence proportionally for missing required fields
+                    if result.get("missing_fields") and result.get("confidence"):
+                        total = len(required)
+                        present = total - len(result["missing_fields"])
+                        result["confidence"] = result["confidence"] * (present / total) if total > 0 else 0
 
             return result
 

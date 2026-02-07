@@ -277,7 +277,9 @@ async def get_article_audit(
     if issues_only:
         where_clauses.append(
             "(status = 'approved' AND incident_id IS NULL) OR "
-            "(status = 'approved' AND extracted_data::text LIKE '%matchedKeywords%')"
+            "(status = 'approved' AND extracted_data::text LIKE '%matchedKeywords%') OR "
+            "(status = 'error') OR "
+            "(status IN ('pending', 'in_review') AND extracted_data IS NOT NULL AND extraction_confidence IS NOT NULL)"
         )
 
     where_sql = " AND ".join(where_clauses) if where_clauses else "TRUE"
@@ -297,11 +299,7 @@ async def get_article_audit(
 
     rows = await fetch(query, *params)
 
-    # Required fields by category
-    REQUIRED_FIELDS = {
-        'enforcement': ['date', 'state', 'incident_type', 'victim_category', 'outcome_category'],
-        'crime': ['date', 'state', 'incident_type', 'immigration_status']
-    }
+    from backend.services.extraction_prompts import get_required_fields_async
 
     articles = []
     for row in rows:
@@ -322,9 +320,11 @@ async def get_article_audit(
         else:
             extraction_format = 'unknown'
 
-        # Check for required fields
+        # Check for required fields (grouped by domain; flatten for validation)
         category = extracted_data.get('category', 'crime')
-        required = REQUIRED_FIELDS.get(category, ['date', 'state', 'incident_type'])
+        fields_by_domain = await get_required_fields_async(category)
+        first_domain = next(iter(fields_by_domain.values()), {"required": [], "optional": []})
+        required = first_domain["required"]
         missing_fields = [f for f in required if not extracted_data.get(f)]
         has_required_fields = len(missing_fields) == 0
 
@@ -344,6 +344,14 @@ async def get_article_audit(
             "extracted_data": extracted_data,
             "content": row.get("content"),
         })
+
+    # When filtering for issues, drop pending/in_review articles that have all required fields
+    # (they're fine — they just haven't been reviewed yet, not actually "issues")
+    if issues_only:
+        articles = [
+            a for a in articles
+            if not (a["status"] in ("pending", "in_review") and a["has_required_fields"])
+        ]
 
     # Calculate stats
     stats_query = """
@@ -451,13 +459,16 @@ async def get_tiered_queue(category: Optional[str] = Query(None)):
     from backend.database import fetch
 
     query = """
-        SELECT id, title, source_name, extraction_confidence, published_date, fetched_at
+        SELECT id, title, source_name, extraction_confidence, published_date, fetched_at, extracted_data
         FROM ingested_articles
         WHERE status IN ('pending', 'in_review')
         ORDER BY extraction_confidence DESC NULLS LAST
         LIMIT 200
     """
     rows = await fetch(query)
+
+    from backend.services.extraction_prompts import get_required_fields_async
+    from backend.services.stage2_selector import resolve_category_from_merge_info
 
     tiers = {"high": [], "medium": [], "low": []}
 
@@ -472,9 +483,32 @@ async def get_tiered_queue(category: Optional[str] = Query(None)):
         }
 
         confidence = item["extraction_confidence"] or 0
+
+        # Check required fields to prevent incomplete articles in high tier
+        missing_fields = []
         if confidence >= AUTO_APPROVE_CONFIDENCE:
+            extracted = row.get("extracted_data") or {}
+            if isinstance(extracted, str):
+                try:
+                    extracted = json.loads(extracted)
+                except (json.JSONDecodeError, TypeError):
+                    extracted = {}
+            # Unwrap nested extracted_data
+            inner = extracted.get("extracted_data") if isinstance(extracted, dict) else None
+            if inner and isinstance(inner, dict):
+                extracted = inner
+            merge_info = extracted.get("merge_info")
+            row_category = resolve_category_from_merge_info(merge_info, extracted, default="crime")
+            fields_by_domain = await get_required_fields_async(row_category)
+            first_domain = next(iter(fields_by_domain.values()), {"required": [], "optional": []})
+            required = first_domain["required"]
+            missing_fields = [f for f in required if not extracted.get(f)]
+
+        if confidence >= AUTO_APPROVE_CONFIDENCE and not missing_fields:
             tiers["high"].append(item)
-        elif confidence >= REVIEW_CONFIDENCE:
+        elif confidence >= REVIEW_CONFIDENCE or (confidence >= AUTO_APPROVE_CONFIDENCE and missing_fields):
+            if missing_fields:
+                item["missing_fields"] = missing_fields
             tiers["medium"].append(item)
         else:
             tiers["low"].append(item)
@@ -536,12 +570,29 @@ async def bulk_approve(
             except (ValueError, TypeError):
                 extracted_data = {}
 
-        # Extract merge_info (persisted in extracted_data by the extraction pipeline)
-        from backend.services.stage2_selector import resolve_category_from_merge_info
-        row_merge_info = extracted_data.pop("merge_info", None)
-        row_category = resolve_category_from_merge_info(row_merge_info, extracted_data, default=category or "crime")
-
         try:
+            # Extract merge_info (persisted in extracted_data by the extraction pipeline)
+            from backend.services.stage2_selector import resolve_category_from_merge_info
+            row_merge_info = extracted_data.pop("merge_info", None)
+            if isinstance(row_merge_info, str):
+                import json as _json2
+                try:
+                    row_merge_info = _json2.loads(row_merge_info)
+                except (ValueError, TypeError):
+                    row_merge_info = None
+            row_category = resolve_category_from_merge_info(row_merge_info, extracted_data, default=category or "crime")
+
+            # Gate: skip articles missing required fields (leave as pending for re-extraction/editing)
+            from backend.services.extraction_prompts import get_required_fields_async
+            fields_by_domain = await get_required_fields_async(row_category)
+            first_domain = next(iter(fields_by_domain.values()), {"required": [], "optional": []})
+            required = first_domain["required"]
+            missing = [f for f in required if not extracted_data.get(f)]
+            if missing:
+                error_details.append(f"{row.get('title', article_id)}: missing {', '.join(missing)}")
+                errors += 1
+                continue
+
             # Dedup check before creating incident
             from backend.services.duplicate_detection import find_duplicate_incident
             source_url = row.get("source_url")
@@ -700,6 +751,12 @@ async def auto_approve_extracted(data: dict = Body(...)):
         # Extract merge_info (persisted in extracted_data by the extraction pipeline)
         from backend.services.stage2_selector import resolve_category_from_merge_info
         row_merge_info = extracted_data.pop("merge_info", None)
+        if isinstance(row_merge_info, str):
+            import json as _json3
+            try:
+                row_merge_info = _json3.loads(row_merge_info)
+            except (ValueError, TypeError):
+                row_merge_info = None
         row_category = resolve_category_from_merge_info(row_merge_info, extracted_data)
 
         article_dict = {
@@ -1383,6 +1440,12 @@ async def approve_article(
     # Determine category from extraction — use merge_info-aware resolver
     from backend.services.stage2_selector import resolve_category_from_merge_info
     merge_info = extracted_data_raw.get("merge_info") or extracted_data.get("merge_info")
+    if isinstance(merge_info, str):
+        import json as _json4
+        try:
+            merge_info = _json4.loads(merge_info)
+        except (ValueError, TypeError):
+            merge_info = None
     category = resolve_category_from_merge_info(merge_info, extracted_data)
 
     # If linking to existing incident, add as additional source

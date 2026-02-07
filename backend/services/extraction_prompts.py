@@ -5,13 +5,16 @@ Also supports two-stage extraction: Stage 1 (comprehensive IR) and Stage 2 (sche
 """
 
 import hashlib
-from typing import Literal
+import json
+import logging
+import time
+from typing import Optional, Literal
 
 IncidentCategory = Literal['enforcement', 'crime']
 
 # Required fields for each category
 ENFORCEMENT_REQUIRED_FIELDS = ['date', 'state', 'incident_type', 'victim_category', 'outcome_category']
-CRIME_REQUIRED_FIELDS = ['date', 'state', 'incident_type', 'offender_immigration_status']
+CRIME_REQUIRED_FIELDS = ['date', 'state', 'incident_type']
 
 # Base output schema for extraction
 EXTRACTION_SCHEMA = {
@@ -678,6 +681,86 @@ def get_required_fields(category: IncidentCategory) -> list:
         return CRIME_REQUIRED_FIELDS
     else:
         return ['date', 'state', 'incident_type']
+
+
+_logger = logging.getLogger(__name__)
+
+# Module-level cache: (nested_dict, expiry_monotonic)
+_all_category_fields_cache: Optional[tuple[dict, float]] = None
+_CATEGORY_FIELDS_CACHE_TTL = 60.0
+
+
+async def get_all_category_fields_async() -> dict:
+    """Load all category fields from event_categories, grouped by domain.
+
+    Returns:
+        { domain_slug: { category_slug: { "required": [...], "optional": [...] } } }
+    """
+    global _all_category_fields_cache
+    now = time.monotonic()
+
+    if _all_category_fields_cache is not None:
+        data, expires_at = _all_category_fields_cache
+        if now < expires_at:
+            return data
+
+    try:
+        from backend.database import fetch
+
+        rows = await fetch("""
+            SELECT ed.slug AS domain_slug,
+                   ec.slug AS category_slug,
+                   ec.required_fields,
+                   ec.optional_fields
+            FROM event_categories ec
+            JOIN event_domains ed ON ec.domain_id = ed.id
+            WHERE ec.is_active = TRUE AND ed.is_active = TRUE
+            ORDER BY ed.display_order, ec.display_order
+        """)
+        result: dict = {}
+        for row in rows:
+            d = row["domain_slug"]
+            c = row["category_slug"]
+            req = row.get("required_fields") or []
+            opt = row.get("optional_fields") or []
+            if isinstance(req, str):
+                req = json.loads(req)
+            if isinstance(opt, str):
+                opt = json.loads(opt)
+            result.setdefault(d, {})[c] = {"required": req, "optional": opt}
+
+        if result:
+            _all_category_fields_cache = (result, now + _CATEGORY_FIELDS_CACHE_TTL)
+            return result
+    except Exception as e:
+        _logger.debug("get_all_category_fields_async DB lookup failed: %s", e)
+
+    # Fallback: build from hardcoded constants
+    fallback = {
+        "immigration": {
+            "enforcement": {"required": list(ENFORCEMENT_REQUIRED_FIELDS), "optional": []},
+            "crime": {"required": list(CRIME_REQUIRED_FIELDS), "optional": []},
+        }
+    }
+    _all_category_fields_cache = (fallback, now + _CATEGORY_FIELDS_CACHE_TTL)
+    return fallback
+
+
+async def get_required_fields_async(category: str) -> dict[str, dict[str, list]]:
+    """Get all fields (required + optional) for a category slug, grouped by domain.
+
+    Returns:
+        { domain_slug: { "required": [...], "optional": [...] } }
+        Falls back to {"_default": {"required": [...], "optional": []}} if not found.
+    """
+    all_fields = await get_all_category_fields_async()
+    result: dict[str, dict[str, list]] = {}
+    for domain_slug, domain_categories in all_fields.items():
+        if category in domain_categories:
+            result[domain_slug] = domain_categories[category]
+    if result:
+        return result
+    return {"_default": {"required": get_required_fields(category), "optional": []}}
 
 
 def get_universal_extraction_prompt(article_text: str) -> str:

@@ -8,6 +8,8 @@ from .extraction_prompts import (
     get_extraction_prompt,
     get_system_prompt,
     get_required_fields,
+    get_required_fields_async,
+    get_all_category_fields_async,
     ENFORCEMENT_REQUIRED_FIELDS,
     CRIME_REQUIRED_FIELDS,
 )
@@ -38,6 +40,8 @@ __all__ = [
     "get_extraction_prompt",
     "get_system_prompt",
     "get_required_fields",
+    "get_required_fields_async",
+    "get_all_category_fields_async",
     "ENFORCEMENT_REQUIRED_FIELDS",
     "CRIME_REQUIRED_FIELDS",
     # Duplicate Detection
