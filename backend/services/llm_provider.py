@@ -26,6 +26,7 @@ class LLMResponse:
     input_tokens: Optional[int] = None
     output_tokens: Optional[int] = None
     latency_ms: Optional[int] = None
+    stop_reason: Optional[str] = None
 
 
 class AnthropicProvider:
@@ -79,6 +80,7 @@ class AnthropicProvider:
             input_tokens=getattr(message.usage, "input_tokens", None),
             output_tokens=getattr(message.usage, "output_tokens", None),
             latency_ms=latency_ms,
+            stop_reason=getattr(message, "stop_reason", None),
         )
 
 
@@ -152,6 +154,7 @@ class OllamaProvider:
             input_tokens=getattr(usage, "prompt_tokens", None) if usage else None,
             output_tokens=getattr(usage, "completion_tokens", None) if usage else None,
             latency_ms=latency_ms,
+            stop_reason=getattr(choice, "finish_reason", None),
         )
 
 
