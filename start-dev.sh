@@ -64,7 +64,7 @@ status() {
   done
 
   # Frontend
-  pid=$(pgrep -f 'vite.*5173' 2>/dev/null | head -1 || true)
+  pid=$(pgrep -f 'node.*vite' 2>/dev/null | head -1 || true)
   if [ -n "$pid" ]; then
     echo "  [UP]   frontend (pid $pid)"
   else

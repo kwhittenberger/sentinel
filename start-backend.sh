@@ -1,5 +1,5 @@
 #!/bin/bash
-cd /home/kwhittenberger/repos/ice_violent_confrontations
+cd /home/kwhittenberger/repos/sentinel
 source .venv/bin/activate
 set -a
 source .env
