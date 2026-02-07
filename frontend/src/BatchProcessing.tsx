@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { ExtractedIncidentData, UniversalExtractionData } from './types';
+import type { ArticleAuditItem } from './api';
+import { fetchArticleAudit, reExtractArticle, rejectArticle } from './api';
 import { SplitPane } from './SplitPane';
 import { ExtractionDetailView } from './ExtractionDetailView';
 import { HighlightedArticle, collectHighlightsFromRecord } from './articleHighlight';
@@ -53,9 +55,16 @@ interface BatchProcessingProps {
 export function BatchProcessing({ onClose, onRefresh, hideOpsBar }: BatchProcessingProps) {
   const [loading, setLoading] = useState(true);
   const [tieredQueue, setTieredQueue] = useState<TieredQueue>({ high: [], medium: [], low: [] });
-  const [selectedTier, setSelectedTier] = useState<'high' | 'medium' | 'low'>('high');
+  const [selectedTier, setSelectedTier] = useState<'high' | 'medium' | 'low' | 'issues'>('high');
   const [selectedItem, setSelectedItem] = useState<TieredItem | null>(null);
   const [fullArticle, setFullArticle] = useState<FullArticle | null>(null);
+
+  // Issues tab state
+  const [issuesItems, setIssuesItems] = useState<ArticleAuditItem[]>([]);
+  const [issuesLoading, setIssuesLoading] = useState(false);
+  const [selectedIssueItem, setSelectedIssueItem] = useState<ArticleAuditItem | null>(null);
+  const [issueActionLoading, setIssueActionLoading] = useState(false);
+  const issuesLoadedRef = useRef(false);
   const [loadingArticle, setLoadingArticle] = useState(false);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [loadingSuggestions, setLoadingSuggestions] = useState(false);
@@ -397,7 +406,7 @@ export function BatchProcessing({ onClose, onRefresh, hideOpsBar }: BatchProcess
     return '#ef4444';
   };
 
-  const getTierDescription = (tier: 'high' | 'medium' | 'low'): string => {
+  const getTierDescription = (tier: 'high' | 'medium' | 'low' | 'issues'): string => {
     switch (tier) {
       case 'high':
         return 'High confidence (85%+) - Auto-approve candidates';
@@ -405,10 +414,95 @@ export function BatchProcessing({ onClose, onRefresh, hideOpsBar }: BatchProcess
         return 'Medium confidence (50-85%) - Quick review needed';
       case 'low':
         return 'Low confidence (<50%) - Full review required';
+      case 'issues':
+        return 'Approved articles with data quality issues';
     }
   };
 
-  const currentItems = tieredQueue[selectedTier];
+  // Issues tab helpers
+  const getIssueDescriptions = (article: ArticleAuditItem): string[] => {
+    const issues: string[] = [];
+    if (article.status === 'approved' && !article.incident_id) {
+      issues.push('Approved but not linked to incident');
+    }
+    if (article.status === 'approved' && article.extraction_format === 'keyword_only') {
+      issues.push('Keyword-only extraction (needs LLM re-extraction)');
+    }
+    if (article.status === 'approved' && !article.has_required_fields) {
+      issues.push(`Missing fields: ${article.missing_fields.join(', ')}`);
+    }
+    return issues;
+  };
+
+  const getFormatBadge = (format: string): { label: string; color: string } => {
+    switch (format) {
+      case 'llm': return { label: 'LLM', color: '#22c55e' };
+      case 'keyword_only': return { label: 'Keywords', color: '#ef4444' };
+      case 'none': return { label: 'No Extraction', color: '#888' };
+      default: return { label: 'Unknown', color: '#888' };
+    }
+  };
+
+  const getStatusColor = (status: string): string => {
+    switch (status) {
+      case 'approved': return '#22c55e';
+      case 'pending': return '#eab308';
+      case 'rejected': return '#ef4444';
+      default: return '#888';
+    }
+  };
+
+  const loadIssues = useCallback(async () => {
+    setIssuesLoading(true);
+    try {
+      const data = await fetchArticleAudit({ issues_only: true });
+      setIssuesItems(data.articles || []);
+    } catch {
+      showMessage({ type: 'error', text: 'Failed to load issues' });
+    } finally {
+      setIssuesLoading(false);
+    }
+  }, [showMessage]);
+
+  // Lazy-load issues on first tab selection
+  useEffect(() => {
+    if (selectedTier === 'issues' && !issuesLoadedRef.current) {
+      issuesLoadedRef.current = true;
+      loadIssues();
+    }
+  }, [selectedTier, loadIssues]);
+
+  const handleIssueReExtract = async (articleId: string) => {
+    setIssueActionLoading(true);
+    try {
+      await reExtractArticle(articleId);
+      showMessage({ type: 'success', text: 'Re-extraction started' });
+      setSelectedIssueItem(null);
+      await loadIssues();
+    } catch (err) {
+      showMessage({ type: 'error', text: err instanceof Error ? err.message : 'Re-extraction failed' });
+    } finally {
+      setIssueActionLoading(false);
+    }
+  };
+
+  const handleIssueReject = async (articleId: string) => {
+    if (!rejectReason.trim()) return;
+    setIssueActionLoading(true);
+    try {
+      await rejectArticle(articleId, rejectReason);
+      showMessage({ type: 'success', text: 'Article rejected' });
+      setSelectedIssueItem(null);
+      setRejectReason('');
+      await loadIssues();
+    } catch (err) {
+      showMessage({ type: 'error', text: err instanceof Error ? err.message : 'Rejection failed' });
+    } finally {
+      setIssueActionLoading(false);
+    }
+  };
+
+  const currentItems = selectedTier !== 'issues' ? tieredQueue[selectedTier] : [];
   const article = fullArticle || selectedItem;
 
   return (
@@ -444,6 +538,7 @@ export function BatchProcessing({ onClose, onRefresh, hideOpsBar }: BatchProcess
             onClick={() => {
               setSelectedTier(tier);
               setSelectedItem(null);
+              setSelectedIssueItem(null);
               setFullArticle(null);
               setEditMode(false);
               setEditData({});
@@ -454,6 +549,21 @@ export function BatchProcessing({ onClose, onRefresh, hideOpsBar }: BatchProcess
             <span className="tier-count">{tieredQueue[tier].length}</span>
           </button>
         ))}
+        <button
+          className={`tier-tab ${selectedTier === 'issues' ? 'active' : ''} tier-issues`}
+          onClick={() => {
+            setSelectedTier('issues');
+            setSelectedItem(null);
+            setSelectedIssueItem(null);
+            setFullArticle(null);
+            setEditMode(false);
+            setEditData({});
+            setSuggestions([]);
+          }}
+        >
+          <span className="tier-name">Issues</span>
+          <span className="tier-count">{issuesItems.length}</span>
+        </button>
       </div>
 
       <div className="tier-info">
@@ -462,26 +572,34 @@ export function BatchProcessing({ onClose, onRefresh, hideOpsBar }: BatchProcess
 
       {/* Bulk Actions */}
       <div className="bulk-actions">
-        <button
-          className="action-btn approve"
-          onClick={() => setConfirmAction({ type: 'bulk-approve', tier: selectedTier, count: currentItems.length })}
-          disabled={processing || currentItems.length === 0 || !!confirmAction}
-        >
-          {processing ? 'Processing...' : `Approve All ${currentItems.length} Items`}
-        </button>
-        <button
-          className="action-btn reject"
-          onClick={() => {
-            setRejectReason('');
-            setConfirmAction({ type: 'bulk-reject', tier: selectedTier, count: currentItems.length });
-          }}
-          disabled={processing || currentItems.length === 0 || !!confirmAction}
-        >
-          Reject All
-        </button>
-        <button className="action-btn" onClick={loadTieredQueue} disabled={loading}>
-          Refresh
-        </button>
+        {selectedTier !== 'issues' ? (
+          <>
+            <button
+              className="action-btn approve"
+              onClick={() => setConfirmAction({ type: 'bulk-approve', tier: selectedTier, count: currentItems.length })}
+              disabled={processing || currentItems.length === 0 || !!confirmAction}
+            >
+              {processing ? 'Processing...' : `Approve All ${currentItems.length} Items`}
+            </button>
+            <button
+              className="action-btn reject"
+              onClick={() => {
+                setRejectReason('');
+                setConfirmAction({ type: 'bulk-reject', tier: selectedTier, count: currentItems.length });
+              }}
+              disabled={processing || currentItems.length === 0 || !!confirmAction}
+            >
+              Reject All
+            </button>
+            <button className="action-btn" onClick={loadTieredQueue} disabled={loading}>
+              Refresh
+            </button>
+          </>
+        ) : (
+          <button className="action-btn" onClick={() => { issuesLoadedRef.current = false; loadIssues(); }} disabled={issuesLoading}>
+            {issuesLoading ? 'Refreshing...' : 'Refresh'}
+          </button>
+        )}
       </div>
 
       {/* Inline Confirmation Dialog */}
@@ -584,205 +702,347 @@ export function BatchProcessing({ onClose, onRefresh, hideOpsBar }: BatchProcess
       )}
 
       {/* Content */}
-      <SplitPane
-        storageKey="batch-processing"
-        defaultLeftWidth={350}
-        minLeftWidth={250}
-        maxLeftWidth={500}
-        left={
-          <div className="batch-list">
-            {loading ? (
-              <div className="loading">Loading queue...</div>
-            ) : currentItems.length === 0 ? (
-              <div className="empty-state">No items in this tier</div>
-            ) : (
-              currentItems.map(item => (
-                <div
-                  key={item.id}
-                  className={`batch-item ${selectedItem?.id === item.id ? 'selected' : ''}`}
-                  onClick={() => handleSelectItem(item)}
-                >
-                  <div className="item-header">
-                    <span className="item-title">{item.title || 'Untitled'}</span>
-                    <span
-                      className="item-confidence"
-                      style={{ color: getConfidenceColor(item.extraction_confidence) }}
+      {selectedTier === 'issues' ? (
+        <SplitPane
+          storageKey="batch-issues"
+          defaultLeftWidth={400}
+          minLeftWidth={300}
+          maxLeftWidth={600}
+          left={
+            <div className="batch-list">
+              {issuesLoading ? (
+                <div className="loading">Loading issues...</div>
+              ) : issuesItems.length === 0 ? (
+                <div className="empty-state">No articles with issues</div>
+              ) : (
+                issuesItems.map(item => {
+                  const formatBadge = getFormatBadge(item.extraction_format);
+                  const issues = getIssueDescriptions(item);
+                  return (
+                    <div
+                      key={item.id}
+                      className={`batch-item warning ${selectedIssueItem?.id === item.id ? 'selected' : ''}`}
+                      onClick={() => { setSelectedIssueItem(item); setRejectReason(''); }}
                     >
-                      {item.extraction_confidence ? `${(item.extraction_confidence * 100).toFixed(0)}%` : '-'}
-                    </span>
-                  </div>
-                  <div className="item-meta">
-                    <span>{item.source_name || 'Unknown source'}</span>
-                    {item.published_date && <span>{item.published_date}</span>}
-                  </div>
+                      <div className="item-header">
+                        <span className="item-title">{item.title || 'Untitled'}</span>
+                        <span className="warning-icon">&#9888;</span>
+                      </div>
+                      <div className="item-meta">
+                        <span className="badge" style={{ background: getStatusColor(item.status) }}>
+                          {item.status}
+                        </span>
+                        <span className="badge" style={{ background: formatBadge.color }}>
+                          {formatBadge.label}
+                        </span>
+                        {item.extraction_confidence !== null && (
+                          <span className="badge" style={{ background: getConfidenceColor(item.extraction_confidence) }}>
+                            {(item.extraction_confidence * 100).toFixed(0)}%
+                          </span>
+                        )}
+                      </div>
+                      {issues.length > 0 && (
+                        <div className="item-issues">
+                          {issues.map((issue, idx) => (
+                            <div key={idx} className="issue-tag">{'\u2022'} {issue}</div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          }
+          right={selectedIssueItem ? (
+            <div className="batch-detail">
+              <div className="detail-header">
+                <h3>{selectedIssueItem.title || 'Untitled Article'}</h3>
+              </div>
+
+              {/* Issues Summary */}
+              {getIssueDescriptions(selectedIssueItem).length > 0 && (
+                <div className="detail-section warning-section">
+                  <h4>Issues Detected</h4>
+                  <ul>
+                    {getIssueDescriptions(selectedIssueItem).map((issue, idx) => (
+                      <li key={idx}>{issue}</li>
+                    ))}
+                  </ul>
                 </div>
-              ))
-            )}
-          </div>
-        }
-        right={selectedItem ? (
-          <div className="batch-detail queue-detail">
-            <div className="detail-header">
-              <h3>{article?.title || 'Untitled Article'}</h3>
-              <div className="header-actions">
-                {editMode ? (
-                  <>
-                    <button className="action-btn small" onClick={() => setEditMode(false)}>
-                      Cancel
-                    </button>
-                  </>
-                ) : (
-                  <button className="action-btn small primary" onClick={() => setEditMode(true)}>
-                    Edit
+              )}
+
+              {/* Source Info */}
+              <div className="detail-section">
+                <h4>Source</h4>
+                <p><strong>Source:</strong> {selectedIssueItem.source_name}</p>
+                <p>
+                  <strong>URL:</strong>{' '}
+                  <a href={selectedIssueItem.source_url} target="_blank" rel="noopener noreferrer">
+                    {selectedIssueItem.source_url}
+                  </a>
+                </p>
+                <p><strong>Published:</strong> {selectedIssueItem.published_date || 'Unknown'}</p>
+                {selectedIssueItem.incident_id && (
+                  <p><strong>Incident ID:</strong> {selectedIssueItem.incident_id}</p>
+                )}
+              </div>
+
+              {/* Extracted Data */}
+              {selectedIssueItem.extracted_data && Object.keys(selectedIssueItem.extracted_data).length > 0 && (
+                <div className="detail-section">
+                  <h4>Extracted Data</h4>
+                  <ExtractionTable data={selectedIssueItem.extracted_data} />
+                </div>
+              )}
+
+              {/* Article Content */}
+              <div className="detail-section">
+                <h4>Article Content</h4>
+                <div className="article-content" style={{ maxHeight: '300px', overflow: 'auto', fontSize: '0.9rem' }}>
+                  {selectedIssueItem.content || 'No content available'}
+                </div>
+              </div>
+
+              {/* Actions */}
+              <div className="detail-actions">
+                {(selectedIssueItem.extraction_format !== 'llm' || !selectedIssueItem.has_required_fields) && (
+                  <button
+                    className="action-btn"
+                    disabled={issueActionLoading}
+                    onClick={() => handleIssueReExtract(selectedIssueItem.id)}
+                  >
+                    {issueActionLoading ? 'Processing...' : 'Re-extract'}
                   </button>
                 )}
-                <span
-                  className="confidence-badge"
-                  style={{ background: getConfidenceColor(fullArticle?.extraction_confidence ?? selectedItem.extraction_confidence) }}
-                >
-                  {(fullArticle?.extraction_confidence ?? selectedItem.extraction_confidence)
-                    ? `${((fullArticle?.extraction_confidence ?? selectedItem.extraction_confidence ?? 0) * 100).toFixed(0)}%`
-                    : 'N/A'}
-                </span>
+                {selectedIssueItem.status !== 'rejected' && (
+                  <div className="bp-inline-reject">
+                    <input
+                      type="text"
+                      className="bp-reject-input"
+                      value={rejectReason}
+                      onChange={e => setRejectReason(e.target.value)}
+                      placeholder="Rejection reason..."
+                      onKeyDown={e => { if (e.key === 'Enter' && rejectReason.trim()) handleIssueReject(selectedIssueItem.id); }}
+                    />
+                    <button
+                      className="action-btn reject"
+                      onClick={() => handleIssueReject(selectedIssueItem.id)}
+                      disabled={issueActionLoading || !rejectReason.trim()}
+                    >
+                      Reject
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
-
-            {loadingArticle ? (
-              <div className="loading">Loading article details...</div>
-            ) : (
-              <>
-                {/* Source Section */}
-                <div className="detail-section">
-                  <h4>Source</h4>
-                  {fullArticle?.source_url ? (
-                    <a href={fullArticle.source_url} target="_blank" rel="noopener noreferrer">
-                      {fullArticle.source_url}
-                    </a>
-                  ) : (
-                    <p>{article?.source_name || 'Unknown'}</p>
-                  )}
-                  {article?.published_date && (
-                    <p>Published: {article.published_date}</p>
-                  )}
-                </div>
-
-                {/* Edit Form or Extracted Data Display */}
-                {editMode ? (
-                  <div className="detail-section">
-                    <h4>Edit Extracted Data</h4>
-                    <DynamicExtractionFields
-                      data={editData}
-                      onChange={setEditData}
-                    />
-                  </div>
-                ) : (
-                  /* Extracted Data Section */
-                  fullArticle?.extracted_data && (
-                    (fullArticle.extracted_data as Record<string, unknown>)?.incident ||
-                    (fullArticle.extracted_data as Record<string, unknown>)?.actors ? (
-                      <ExtractionDetailView
-                        data={fullArticle.extracted_data as unknown as UniversalExtractionData}
-                        articleContent={fullArticle.content}
-                        sourceUrl={fullArticle.source_url}
-                      />
-                    ) : (
-                      <div className="detail-section">
-                        <h4>Extracted Data</h4>
-                        <ExtractionTable data={fullArticle.extracted_data as Record<string, unknown>} />
-                      </div>
-                    )
-                  )
-                )}
-
-                {/* AI Suggestions */}
-                {!editMode && (
-                  <div className="detail-section">
-                    <h4>AI Suggestions</h4>
-                    {loadingSuggestions ? (
-                      <p className="loading-text">Loading suggestions...</p>
-                    ) : suggestions.length === 0 ? (
-                      <p className="no-data">No suggestions - all fields have high confidence</p>
-                    ) : (
-                      <div className="suggestions-list">
-                        {suggestions.map(suggestion => (
-                          <div key={suggestion.field} className="suggestion-item">
-                            <div className="suggestion-header">
-                              <span className="field-name">{suggestion.field}</span>
-                              <span
-                                className="field-confidence"
-                                style={{ color: getConfidenceColor(suggestion.confidence) }}
-                              >
-                                {(suggestion.confidence * 100).toFixed(0)}%
-                              </span>
-                            </div>
-                            <div className="suggestion-content">
-                              <div className="current-value">
-                                <span className="label">Current:</span>
-                                <span className="value">{String(suggestion.current_value) || 'Empty'}</span>
-                              </div>
-                              {suggestion.suggestion != null && (
-                                <div className="suggested-value">
-                                  <span className="label">Suggested:</span>
-                                  <span className="value">{String(suggestion.suggestion)}</span>
-                                </div>
-                              )}
-                              <p className="reason">{suggestion.reason}</p>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* Article Content */}
-                {fullArticle?.content && (
-                  <div className="detail-section">
-                    <h4>Article Content</h4>
-                    <div className="article-content">
-                      <HighlightedArticle
-                        content={fullArticle.content}
-                        highlights={fullArticle.extracted_data ? collectHighlightsFromRecord(fullArticle.extracted_data as Record<string, unknown>) : []}
-                      />
+          ) : (
+            <div className="batch-detail empty">
+              <p>Select an article to view details</p>
+            </div>
+          )}
+        />
+      ) : (
+        <SplitPane
+          storageKey="batch-processing"
+          defaultLeftWidth={350}
+          minLeftWidth={250}
+          maxLeftWidth={500}
+          left={
+            <div className="batch-list">
+              {loading ? (
+                <div className="loading">Loading queue...</div>
+              ) : currentItems.length === 0 ? (
+                <div className="empty-state">No items in this tier</div>
+              ) : (
+                currentItems.map(item => (
+                  <div
+                    key={item.id}
+                    className={`batch-item ${selectedItem?.id === item.id ? 'selected' : ''}`}
+                    onClick={() => handleSelectItem(item)}
+                  >
+                    <div className="item-header">
+                      <span className="item-title">{item.title || 'Untitled'}</span>
+                      <span
+                        className="item-confidence"
+                        style={{ color: getConfidenceColor(item.extraction_confidence) }}
+                      >
+                        {item.extraction_confidence ? `${(item.extraction_confidence * 100).toFixed(0)}%` : '-'}
+                      </span>
+                    </div>
+                    <div className="item-meta">
+                      <span>{item.source_name || 'Unknown source'}</span>
+                      {item.published_date && <span>{item.published_date}</span>}
                     </div>
                   </div>
-                )}
-              </>
-            )}
+                ))
+              )}
+            </div>
+          }
+          right={selectedItem ? (
+            <div className="batch-detail queue-detail">
+              <div className="detail-header">
+                <h3>{article?.title || 'Untitled Article'}</h3>
+                <div className="header-actions">
+                  {editMode ? (
+                    <>
+                      <button className="action-btn small" onClick={() => setEditMode(false)}>
+                        Cancel
+                      </button>
+                    </>
+                  ) : (
+                    <button className="action-btn small primary" onClick={() => setEditMode(true)}>
+                      Edit
+                    </button>
+                  )}
+                  <span
+                    className="confidence-badge"
+                    style={{ background: getConfidenceColor(fullArticle?.extraction_confidence ?? selectedItem.extraction_confidence) }}
+                  >
+                    {(fullArticle?.extraction_confidence ?? selectedItem.extraction_confidence)
+                      ? `${((fullArticle?.extraction_confidence ?? selectedItem.extraction_confidence ?? 0) * 100).toFixed(0)}%`
+                      : 'N/A'}
+                  </span>
+                </div>
+              </div>
 
-            <div className="detail-actions">
-              <button
-                className="action-btn approve"
-                onClick={() => handleApprove()}
-                disabled={processing}
-              >
-                {processing ? 'Processing...' : editMode ? 'Save & Approve' : 'Approve & Create Incident'}
-              </button>
-              <div className="bp-inline-reject">
-                <input
-                  type="text"
-                  className="bp-reject-input"
-                  value={rejectReason}
-                  onChange={e => setRejectReason(e.target.value)}
-                  placeholder="Rejection reason..."
-                  onKeyDown={e => { if (e.key === 'Enter' && rejectReason.trim()) handleReject(); }}
-                />
+              {loadingArticle ? (
+                <div className="loading">Loading article details...</div>
+              ) : (
+                <>
+                  {/* Source Section */}
+                  <div className="detail-section">
+                    <h4>Source</h4>
+                    {fullArticle?.source_url ? (
+                      <a href={fullArticle.source_url} target="_blank" rel="noopener noreferrer">
+                        {fullArticle.source_url}
+                      </a>
+                    ) : (
+                      <p>{article?.source_name || 'Unknown'}</p>
+                    )}
+                    {article?.published_date && (
+                      <p>Published: {article.published_date}</p>
+                    )}
+                  </div>
+
+                  {/* Edit Form or Extracted Data Display */}
+                  {editMode ? (
+                    <div className="detail-section">
+                      <h4>Edit Extracted Data</h4>
+                      <DynamicExtractionFields
+                        data={editData}
+                        onChange={setEditData}
+                      />
+                    </div>
+                  ) : (
+                    /* Extracted Data Section */
+                    fullArticle?.extracted_data && (
+                      (fullArticle.extracted_data as Record<string, unknown>)?.incident ||
+                      (fullArticle.extracted_data as Record<string, unknown>)?.actors ? (
+                        <ExtractionDetailView
+                          data={fullArticle.extracted_data as unknown as UniversalExtractionData}
+                          articleContent={fullArticle.content}
+                          sourceUrl={fullArticle.source_url}
+                        />
+                      ) : (
+                        <div className="detail-section">
+                          <h4>Extracted Data</h4>
+                          <ExtractionTable data={fullArticle.extracted_data as Record<string, unknown>} />
+                        </div>
+                      )
+                    )
+                  )}
+
+                  {/* AI Suggestions */}
+                  {!editMode && (
+                    <div className="detail-section">
+                      <h4>AI Suggestions</h4>
+                      {loadingSuggestions ? (
+                        <p className="loading-text">Loading suggestions...</p>
+                      ) : suggestions.length === 0 ? (
+                        <p className="no-data">No suggestions - all fields have high confidence</p>
+                      ) : (
+                        <div className="suggestions-list">
+                          {suggestions.map(suggestion => (
+                            <div key={suggestion.field} className="suggestion-item">
+                              <div className="suggestion-header">
+                                <span className="field-name">{suggestion.field}</span>
+                                <span
+                                  className="field-confidence"
+                                  style={{ color: getConfidenceColor(suggestion.confidence) }}
+                                >
+                                  {(suggestion.confidence * 100).toFixed(0)}%
+                                </span>
+                              </div>
+                              <div className="suggestion-content">
+                                <div className="current-value">
+                                  <span className="label">Current:</span>
+                                  <span className="value">{String(suggestion.current_value) || 'Empty'}</span>
+                                </div>
+                                {suggestion.suggestion != null && (
+                                  <div className="suggested-value">
+                                    <span className="label">Suggested:</span>
+                                    <span className="value">{String(suggestion.suggestion)}</span>
+                                  </div>
+                                )}
+                                <p className="reason">{suggestion.reason}</p>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Article Content */}
+                  {fullArticle?.content && (
+                    <div className="detail-section">
+                      <h4>Article Content</h4>
+                      <div className="article-content">
+                        <HighlightedArticle
+                          content={fullArticle.content}
+                          highlights={fullArticle.extracted_data ? collectHighlightsFromRecord(fullArticle.extracted_data as Record<string, unknown>) : []}
+                        />
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+
+              <div className="detail-actions">
                 <button
-                  className="action-btn reject"
-                  onClick={() => handleReject()}
-                  disabled={processing || !rejectReason.trim()}
+                  className="action-btn approve"
+                  onClick={() => handleApprove()}
+                  disabled={processing}
                 >
-                  Reject
+                  {processing ? 'Processing...' : editMode ? 'Save & Approve' : 'Approve & Create Incident'}
                 </button>
+                <div className="bp-inline-reject">
+                  <input
+                    type="text"
+                    className="bp-reject-input"
+                    value={rejectReason}
+                    onChange={e => setRejectReason(e.target.value)}
+                    placeholder="Rejection reason..."
+                    onKeyDown={e => { if (e.key === 'Enter' && rejectReason.trim()) handleReject(); }}
+                  />
+                  <button
+                    className="action-btn reject"
+                    onClick={() => handleReject()}
+                    disabled={processing || !rejectReason.trim()}
+                  >
+                    Reject
+                  </button>
+                </div>
               </div>
             </div>
-          </div>
-        ) : (
-          <div className="batch-detail empty">
-            <p>Select an item to view details and AI suggestions</p>
-          </div>
-        )}
-      />
+          ) : (
+            <div className="batch-detail empty">
+              <p>Select an item to view details and AI suggestions</p>
+            </div>
+          )}
+        />
+      )}
     </div>
   );
 }

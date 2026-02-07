@@ -1,14 +1,13 @@
 import { useState, useCallback } from 'react';
 import { OperationsBar } from './OperationsBar';
 import { BatchProcessing } from './BatchProcessing';
-import { ArticleAudit } from './ArticleAudit';
 import { DataSourcesPanel } from './DataSourcesPanel';
 import { EnrichmentPanel } from './EnrichmentPanel';
 import { ExtractionSchemaManager } from './ExtractionSchemaManager';
 import { TwoStageExtractionView } from './TwoStageExtractionView';
 import { DatasetsTab, PipelineTestingTab } from './PromptTestRunner';
 
-type PipelineTab = 'queue' | 'sources' | 'schemas' | 'testing' | 'explorer' | 'datasets' | 'audit' | 'enrichment';
+type PipelineTab = 'queue' | 'sources' | 'schemas' | 'testing' | 'explorer' | 'datasets' | 'enrichment';
 
 const TABS: { key: PipelineTab; label: string }[] = [
   { key: 'queue', label: 'Queue' },
@@ -17,7 +16,6 @@ const TABS: { key: PipelineTab; label: string }[] = [
   { key: 'testing', label: 'Testing' },
   { key: 'explorer', label: 'Explorer' },
   { key: 'datasets', label: 'Datasets' },
-  { key: 'audit', label: 'Audit' },
   { key: 'enrichment', label: 'Enrichment' },
 ];
 
@@ -71,7 +69,6 @@ export function PipelineView({ onRefresh }: PipelineViewProps) {
         {activeTab === 'testing' && <PipelineTestingTab />}
         {activeTab === 'explorer' && <TwoStageExtractionView />}
         {activeTab === 'datasets' && <DatasetsTab />}
-        {activeTab === 'audit' && <ArticleAudit />}
         {activeTab === 'enrichment' && <EnrichmentPanel />}
       </div>
     </div>

@@ -177,12 +177,58 @@ export async function approveArticle(articleId: string, overrides?: Record<strin
   });
 }
 
+export async function reExtractArticle(articleId: string): Promise<{ success: boolean }> {
+  return fetchJSON(`${API_BASE}/admin/queue/${articleId}/extract-universal`, {
+    method: 'POST',
+    headers: JSON_HEADERS,
+    body: JSON.stringify({}),
+  });
+}
+
 export async function rejectArticle(articleId: string, reason: string): Promise<{ success: boolean }> {
   return fetchJSON(`${API_BASE}/admin/queue/${articleId}/reject`, {
     method: 'POST',
     headers: JSON_HEADERS,
     body: JSON.stringify({ reason }),
   });
+}
+
+// Article Audit types and API
+export interface ArticleAuditItem {
+  id: string;
+  title: string;
+  source_name: string;
+  source_url: string;
+  status: 'pending' | 'approved' | 'rejected';
+  extraction_confidence: number | null;
+  extraction_format: 'keyword_only' | 'llm' | 'none';
+  incident_id: string | null;
+  has_required_fields: boolean;
+  missing_fields: string[];
+  published_date: string | null;
+  created_at: string;
+  extracted_data: Record<string, unknown>;
+  content: string;
+}
+
+export interface ArticleAuditStats {
+  total: number;
+  by_status: Record<string, number>;
+  by_format: Record<string, number>;
+  approved_without_incident: number;
+  approved_keyword_only: number;
+}
+
+export async function fetchArticleAudit(params?: {
+  status?: string;
+  format?: string;
+  issues_only?: boolean;
+}): Promise<{ articles: ArticleAuditItem[]; stats: ArticleAuditStats }> {
+  const searchParams = new URLSearchParams();
+  if (params?.status) searchParams.set('status', params.status);
+  if (params?.format) searchParams.set('format', params.format);
+  if (params?.issues_only) searchParams.set('issues_only', 'true');
+  return fetchJSON(`${API_BASE}/admin/articles/audit?${searchParams}`);
 }
 
 // Analytics API functions
