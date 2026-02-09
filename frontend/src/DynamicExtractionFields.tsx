@@ -15,7 +15,7 @@ export const PRIORITY_FIELDS = [
 // Metadata fields excluded from editing
 const EXCLUDED_FIELDS = new Set([
   'confidence', 'overall_confidence', 'extraction_notes', 'is_relevant',
-  'categories', 'category', 'extraction_type', 'success',
+  'categories', 'category', 'extraction_type', 'success', 'source_spans',
 ]);
 
 export function formatFieldValue(value: unknown): string {

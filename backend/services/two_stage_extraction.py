@@ -434,11 +434,18 @@ class TwoStageExtractionService:
 
             extracted_data = self._parse_json(response.text, stop_reason=response.stop_reason)
 
+            # Validate and preserve source spans
+            from backend.utils.span_validation import validate_spans as _validate_spans
+            raw_spans = extracted_data.pop("source_spans", None)
+            validated_spans = _validate_spans(raw_spans, article_text)
+
             # Validate against schema fields
             from backend.services.generic_extraction import get_generic_extraction_service
             svc = get_generic_extraction_service()
             schema_dict = svc._serialize_schema(schema)
             validated = svc._validate_extraction(extracted_data, schema_dict)
+            if validated_spans:
+                validated["source_spans"] = validated_spans
             confidence = svc._calculate_confidence(validated, schema_dict)
 
             # Check for validation errors

@@ -10,6 +10,7 @@ from typing import Optional, Literal
 from uuid import UUID
 
 from backend.utils.llm_parsing import parse_llm_json
+from backend.utils.span_validation import validate_spans
 
 from .extraction_prompts import (
     EXTRACTION_SCHEMA,
@@ -204,6 +205,10 @@ class LLMExtractor:
 
             data = parse_llm_json(response.text)
 
+            # Validate and attach source spans
+            raw_spans = data.pop("source_spans", None)
+            validated_spans = validate_spans(raw_spans, article_text)
+
             result = {
                 "success": True,
                 "is_relevant": data.get("is_relevant", False),
@@ -225,6 +230,9 @@ class LLMExtractor:
 
                 # Determine categories from incident
                 result["categories"] = incident.get("categories", [])
+
+            if validated_spans:
+                result["source_spans"] = validated_spans
 
             # Track provider info for usage recording
             result["_api_usage"] = {
@@ -335,6 +343,13 @@ class LLMExtractor:
             # Parse response
             data = parse_llm_json(llm_response.text)
 
+            # Validate and attach source spans
+            raw_spans = data.pop("source_spans", None)
+            # Also check inside incident object
+            if not raw_spans and isinstance(data.get("incident"), dict):
+                raw_spans = data["incident"].pop("source_spans", None)
+            validated_spans = validate_spans(raw_spans, article_text)
+
             result = {
                 "success": True,
                 "is_relevant": data.get("is_relevant", False),
@@ -344,6 +359,8 @@ class LLMExtractor:
 
             if data.get("is_relevant") and "incident" in data:
                 incident = data["incident"]
+                if validated_spans:
+                    incident["source_spans"] = validated_spans
                 result["extracted_data"] = incident
                 result["confidence"] = incident.get("overall_confidence", 0.5)
 
@@ -461,6 +478,12 @@ class LLMExtractor:
             # Parse response
             data = parse_llm_json(llm_response.text)
 
+            # Validate and attach source spans
+            raw_spans = data.pop("source_spans", None)
+            if not raw_spans and isinstance(data.get("incident"), dict):
+                raw_spans = data["incident"].pop("source_spans", None)
+            validated_spans = validate_spans(raw_spans, article_text)
+
             result = {
                 "success": True,
                 "is_relevant": data.get("is_relevant", False),
@@ -469,6 +492,8 @@ class LLMExtractor:
 
             if data.get("is_relevant") and "incident" in data:
                 incident = data["incident"]
+                if validated_spans:
+                    incident["source_spans"] = validated_spans
                 result["extracted_data"] = incident
                 result["confidence"] = incident.get("overall_confidence", 0.5)
 

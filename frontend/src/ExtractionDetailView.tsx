@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { HighlightedArticle, collectHighlights } from './articleHighlight';
+import { HighlightedArticle, collectHighlights, type SourceSpans } from './articleHighlight';
 import { formatFieldValue } from './DynamicExtractionFields';
 import type { UniversalExtractionData, ExtractedActor, ExtractedEvent } from './types';
 import './ExtractionDetailView.css';
@@ -176,7 +176,8 @@ export function ExtractionDetailView({ data, articleContent, sourceUrl }: Extrac
   const policy = data.policy_context;
 
   // Build highlights from extracted data for article content
-  const highlights = collectHighlights([
+  const sourceSpans = (data as Record<string, unknown>).source_spans as SourceSpans | undefined;
+  const baseHighlights = collectHighlights([
     ['City', incident?.location?.city],
     ['State', incident?.location?.state],
     ['County', incident?.location?.county],
@@ -186,6 +187,31 @@ export function ExtractionDetailView({ data, articleContent, sourceUrl }: Extrac
     ['Outcome Detail', incident?.outcome?.description],
     ...actors.map(a => ['Actor: ' + a.actor_type, a.name] as [string, string | undefined]),
   ]);
+
+  // Attach source spans to matching highlights
+  const spanFieldMap: Record<string, string> = {
+    'City': 'city',
+    'State': 'state',
+    'County': 'county',
+    'Address': 'address',
+    'Title': 'title',
+    'Outcome': 'outcome_severity',
+    'Outcome Detail': 'outcome_description',
+  };
+  const highlights = baseHighlights.map(h => {
+    if (!sourceSpans) return h;
+    const fieldKey = spanFieldMap[h.label];
+    const span = fieldKey ? sourceSpans[fieldKey] : undefined;
+    // Also check actor spans: actors[0], actors[1], etc.
+    if (!span) {
+      for (const [key, val] of Object.entries(sourceSpans)) {
+        if (val.text === h.value) {
+          return { ...h, span: { start: val.start, end: val.end } };
+        }
+      }
+    }
+    return span ? { ...h, span: { start: span.start, end: span.end } } : h;
+  });
 
   const isRelevant = data.is_relevant ?? data.isRelevant;
   const confidence = data.confidence ?? incident?.overall_confidence;

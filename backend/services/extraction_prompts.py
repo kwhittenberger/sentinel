@@ -12,6 +12,11 @@ from typing import Optional, Literal
 
 IncidentCategory = Literal['enforcement', 'crime']
 
+# Instruction appended to extraction prompts for source grounding
+SOURCE_SPAN_INSTRUCTION = """
+
+SOURCE GROUNDING: For each text-derived field you extract, include a top-level "source_spans" object mapping field names to {"start": <char_offset>, "end": <char_offset>, "text": "<exact_text>"} where start/end are 0-based character offsets into the article text provided above. For array fields, use "field[0]", "field[1]" etc. Only include spans for fields whose values appear verbatim in the article text."""
+
 # Required fields for each category
 ENFORCEMENT_REQUIRED_FIELDS = ['date', 'state', 'incident_type', 'victim_category', 'outcome_category']
 CRIME_REQUIRED_FIELDS = ['date', 'state', 'incident_type']
@@ -152,6 +157,10 @@ EXTRACTION_SCHEMA = {
                     "description": "Any notes about ambiguity or uncertainty"
                 }
             }
+        },
+        "source_spans": {
+            "type": "object",
+            "description": "Character-offset spans mapping field names to {start, end, text} in the article"
         }
     },
     "required": ["is_relevant", "relevance_reason"]
@@ -295,7 +304,11 @@ UNIVERSAL_EXTRACTION_SCHEMA = {
             "items": {"type": "string"},
             "description": "Sources quoted in the article: police spokesperson, ICE statement, court records, etc."
         },
-        "extraction_notes": {"type": "string", "description": "Any ambiguity or notes about the extraction"}
+        "extraction_notes": {"type": "string", "description": "Any ambiguity or notes about the extraction"},
+        "source_spans": {
+            "type": "object",
+            "description": "Character-offset spans mapping field names to {start, end, text} in the article"
+        }
     },
     "required": ["is_relevant", "relevance_reason"]
 }
@@ -349,7 +362,7 @@ Extract every actor (person, agency, organization), every event, and all context
 ARTICLE TEXT:
 {article_text}
 
-Return JSON matching the universal extraction schema. Include ALL actors with their roles, not just the primary subject."""
+Return JSON matching the universal extraction schema. Include ALL actors with their roles, not just the primary subject.""" + SOURCE_SPAN_INSTRUCTION
 
 # Category-specific system prompts
 ENFORCEMENT_SYSTEM_PROMPT = """You are extracting data about violent incidents involving ICE/CBP agents.
@@ -452,7 +465,7 @@ For each field you extract, provide a confidence score from 0.0 to 1.0:
 ARTICLE TEXT:
 {article_text}
 
-Extract the incident data and return as JSON following the schema provided.""",
+Extract the incident data and return as JSON following the schema provided.""" + SOURCE_SPAN_INSTRUCTION,
 
     "enforcement": """You are extracting data about an enforcement incident involving ICE/CBP agents.
 
@@ -474,7 +487,7 @@ For each field you extract, provide a confidence score from 0.0 to 1.0:
 ARTICLE TEXT:
 {article_text}
 
-Extract the incident data and return as JSON following the schema provided.""",
+Extract the incident data and return as JSON following the schema provided.""" + SOURCE_SPAN_INSTRUCTION,
 
     "crime": """You are extracting data about a crime committed by an individual with immigration status issues.
 
@@ -520,7 +533,7 @@ CRIME DETAILS:
 ARTICLE TEXT:
 {article_text}
 
-Extract ALL available data. If the offender's name appears anywhere in the article, you MUST extract it.""",
+Extract ALL available data. If the offender's name appears anywhere in the article, you MUST extract it.""" + SOURCE_SPAN_INSTRUCTION,
 
     "ice_release": """You are extracting data from an official ICE/CBP press release or report.
 
@@ -535,7 +548,7 @@ Extract all available incident details. Official sources should have high confid
 DOCUMENT TEXT:
 {article_text}
 
-Extract the incident data and return as JSON following the schema provided.""",
+Extract the incident data and return as JSON following the schema provided.""" + SOURCE_SPAN_INSTRUCTION,
 
     "court_document": """You are extracting incident data from a court document or legal filing.
 
@@ -550,7 +563,7 @@ Note that court documents may describe incidents that occurred months or years b
 DOCUMENT TEXT:
 {article_text}
 
-Extract the incident data and return as JSON following the schema provided.""",
+Extract the incident data and return as JSON following the schema provided.""" + SOURCE_SPAN_INSTRUCTION,
 }
 
 

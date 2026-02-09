@@ -274,6 +274,10 @@ class GenericExtractionService:
         validated = {}
 
         for field, value in data.items():
+            # Pass through source_spans without field-definition filtering
+            if field == "source_spans":
+                validated[field] = value
+                continue
             if field in field_defs:
                 fd = field_defs[field]
                 ftype = fd.get("type", "string")

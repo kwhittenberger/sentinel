@@ -4,7 +4,7 @@ import type { ArticleAuditItem, CategoryFieldsByDomain } from './api';
 import { fetchArticleAudit, reExtractArticle, rejectArticle, saveArticleEdits, fetchCategoryFields } from './api';
 import { SplitPane } from './SplitPane';
 import { ExtractionDetailView } from './ExtractionDetailView';
-import { HighlightedArticle, collectHighlightsFromRecord } from './articleHighlight';
+import { HighlightedArticle, collectHighlightsFromRecord, type SourceSpans } from './articleHighlight';
 import { OperationsBar } from './OperationsBar';
 import { DynamicExtractionFields, buildEditData, parseExtractedData, PRIORITY_FIELDS, isExcludedField, snakeCaseToLabel } from './DynamicExtractionFields';
 import { ArticleContextMenu } from './ArticleContextMenu';
@@ -1000,12 +1000,16 @@ export function BatchProcessing({ onClose, onRefresh, hideOpsBar }: BatchProcess
               <div className="detail-section">
                 <h4>Article Content</h4>
                 <div className="article-content" ref={issuesArticleRef}>
-                  {selectedIssueItem.content ? (
-                    <HighlightedArticle
-                      content={selectedIssueItem.content}
-                      highlights={collectHighlightsFromRecord(editData)}
-                    />
-                  ) : (
+                  {selectedIssueItem.content ? (() => {
+                    const rawData = parseExtractedData(selectedIssueItem.extracted_data);
+                    const spans = rawData?.source_spans as SourceSpans | undefined;
+                    return (
+                      <HighlightedArticle
+                        content={selectedIssueItem.content}
+                        highlights={collectHighlightsFromRecord(editData, spans)}
+                      />
+                    );
+                  })() : (
                     <p className="no-data">No content available</p>
                   )}
                 </div>
@@ -1243,10 +1247,16 @@ export function BatchProcessing({ onClose, onRefresh, hideOpsBar }: BatchProcess
                     <div className="detail-section">
                       <h4>Article Content</h4>
                       <div className="article-content" ref={tieredArticleRef}>
-                        <HighlightedArticle
-                          content={fullArticle.content}
-                          highlights={collectHighlightsFromRecord(editData)}
-                        />
+                        {(() => {
+                          const rawData = fullArticle.extracted_data as Record<string, unknown> | undefined;
+                          const spans = rawData?.source_spans as SourceSpans | undefined;
+                          return (
+                            <HighlightedArticle
+                              content={fullArticle.content}
+                              highlights={collectHighlightsFromRecord(editData, spans)}
+                            />
+                          );
+                        })()}
                       </div>
                       <ArticleContextMenu
                         containerRef={tieredArticleRef}
