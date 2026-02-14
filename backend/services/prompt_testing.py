@@ -1494,6 +1494,9 @@ class PromptTestingService:
             "specific prompt improvements to capture those better extraction patterns."
         )
 
+        system_prompt_section = f"## Current System Prompt\n{current_system_prompt}" if current_system_prompt else ""
+        user_prompt_section = f"## Current User Prompt Template\n{current_user_prompt_template}" if current_user_prompt_template else ""
+
         user_prompt = f"""## Article Content (truncated to 3000 chars)
 {article_content[:3000]}
 
@@ -1508,8 +1511,8 @@ class PromptTestingService:
 ## Fields Where the Other Config Was Preferred
 {divergent_summary}
 
-{f"## Current System Prompt\\n{current_system_prompt}" if current_system_prompt else ""}
-{f"## Current User Prompt Template\\n{current_user_prompt_template}" if current_user_prompt_template else ""}
+{system_prompt_section}
+{user_prompt_section}
 
 ## Task
 Analyze why Config {('B' if overall_preferred == 'A' else 'A')} extracted the divergent fields better, and suggest specific prompt additions or modifications.
