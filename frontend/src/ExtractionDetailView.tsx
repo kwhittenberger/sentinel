@@ -204,7 +204,7 @@ export function ExtractionDetailView({ data, articleContent, sourceUrl }: Extrac
     const span = fieldKey ? sourceSpans[fieldKey] : undefined;
     // Also check actor spans: actors[0], actors[1], etc.
     if (!span) {
-      for (const [key, val] of Object.entries(sourceSpans)) {
+      for (const [, val] of Object.entries(sourceSpans)) {
         if (val.text === h.value) {
           return { ...h, span: { start: val.start, end: val.end } };
         }

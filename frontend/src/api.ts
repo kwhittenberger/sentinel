@@ -13,14 +13,20 @@ import type {
   IncidentConnections,
   QueueMetrics,
   ExtractionStatus,
+  Feed,
 } from './types';
 
 const API_BASE = '/api';
 
 export class ApiError extends Error {
-  constructor(message: string, public status: number, public detail?: string) {
+  status: number;
+  detail?: string;
+
+  constructor(message: string, status: number, detail?: string) {
     super(message);
     this.name = 'ApiError';
+    this.status = status;
+    this.detail = detail;
   }
 }
 
@@ -584,7 +590,7 @@ export async function fetchGeographicAnalytics(dateStart?: string, dateEnd?: str
 }
 
 // Feed Management API functions
-export async function fetchFeeds(): Promise<{ feeds: unknown[] }> {
+export async function fetchFeeds(): Promise<{ feeds: Feed[] }> {
   return fetchJSON(`${API_BASE}/admin/feeds`);
 }
 
