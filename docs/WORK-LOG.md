@@ -1,5 +1,46 @@
 # Work Log - Sentinel
 
+## Session: 2026-03-12 — Production Deployment to Dev-Server
+
+### Summary
+Deployed Sentinel to dev-server at `https://sentinel.appliedaccountability.com` behind existing Cloudflare tunnel (shared with Huly). All 9 containers running, DB migrated (235 incidents, 1048 articles, 124 actors).
+
+### Files Created/Modified
+| File | Action |
+|------|--------|
+| `backend/main.py` | Added `CORS_ORIGINS` env var for configurable CORS |
+| `frontend/src/api.ts` | Fixed `ApiError` class for `erasableSyntaxOnly`, typed `fetchFeeds` return |
+| `frontend/src/ExtractionDetailView.tsx` | Removed unused destructured variable |
+| `.gitignore` | Added `.env.prod` and plaintext secrets exclusions |
+| `docker-compose.prod.yml` | **New** — 9-service production compose on `sentinel_net` |
+| `frontend/Dockerfile.prod` | **New** — Multi-stage build (node builder → nginx runtime) |
+| `nginx/sentinel.conf` | **New** — SPA fallback, API/WebSocket reverse proxy |
+| `scripts/deploy-dev-server.sh` | **New** — Deploy orchestrator (decrypt, build, restore, verify) |
+| `secrets/secrets.prod.enc.env` | **New** — SOPS-encrypted secrets (PG password, Anthropic key, tunnel token) |
+
+### Commits
+| Commit | Summary |
+|--------|---------|
+| `fee2ec7` | feat(deploy): production deployment infra (compose, nginx, Dockerfile, deploy script, secrets) |
+| `07c79ef` | fix(frontend): TS build errors for production build |
+
+### Architecture
+```
+Internet → CF Edge (TLS + Access email gate) → appliedaccountability tunnel
+  → sentinel-cloudflared → sentinel-nginx:80
+    ├── /api/* → sentinel-backend:8000 (FastAPI, 2 workers)
+    ├── /ws/*  → sentinel-backend:8000 (WebSocket)
+    └── /*     → static files (React prod build)
+```
+
+### Verification
+- 9/9 containers running (db, redis healthy)
+- Health: `{"status":"healthy","database":"connected"}`
+- Cloudflared: 4 QUIC connections, config updated with sentinel hostname
+- Public URL: CF Access gate active, dashboard loads after auth
+
+---
+
 ## Session: 2026-02-06 — Fix Everything Plan (All 10 Phases Complete)
 
 ### Summary
